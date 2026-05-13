@@ -331,6 +331,18 @@
   font-style: italic;
 }
 
+.streaming-placeholder--inline {
+  justify-content: flex-start;
+  margin: 8px 12px 0;
+  padding: 14px 16px;
+  border-radius: 12px;
+  background: var(--bg-secondary, rgba(128, 128, 128, 0.08));
+}
+
+.streaming-placeholder--inline:last-child {
+  margin-bottom: 8px;
+}
+
 .streaming-placeholder .streaming-dots {
   display: flex;
   gap: 3px;

@@ -106,7 +106,7 @@ export function StreamingTurnsView({ sessionId, client, onSelectSession, onScrol
   // useSessionData now gets the clientId directly from client.clientId when connected
   // refreshKey forces re-subscription when incremented (e.g., after archive)
   // historyLoadMode determines which history layer to use: 'history', 'history_reverse', or 'history_lazy'
-  const { turns, isLoading, isLoadingHistory, isStreaming, streamError, error, streamingProgress, totalHistoryTurns, loadHistoryRange } = useSessionData(client, sessionId, refreshKey, historyLoadMode);
+  const { turns, pendingAssistantTurns, isLoading, isLoadingHistory, isStreaming, streamError, error, streamingProgress, totalHistoryTurns, loadHistoryRange } = useSessionData(client, sessionId, refreshKey, historyLoadMode);
 
   // Get autoscroll settings from preferences, keep in refs for access in callbacks
   const { autoscrollSpeed, autoscrollInstant } = usePreferences();
@@ -1056,25 +1056,25 @@ export function StreamingTurnsView({ sessionId, client, onSelectSession, onScrol
     return () => { cancelled = true; };
   }, [isLoading, isLoadingHistory, scrollContainerElement, turnsOrGroups.length, isInitialLoadComplete, historyLoadMode]);
 
-  // Auto-scroll when NEW content arrives and we're following (after initial load)
-  // Use ref to check following state to avoid race conditions with setState
-  const prevTurnsLengthRef = useRef(turnsOrGroups.length);
+  // Auto-scroll when NEW transcript content arrives and we're following (after initial load)
+  // Pending assistant placeholders should not affect following state or scroll behavior.
+  const prevRenderedTurnCountRef = useRef(turnsOrGroups.length);
   const prevSessionIdForScrollRef = useRef(sessionId);
   useEffect(() => {
-    // Reset prevTurnsLength when session changes
+    // Reset previous counts when session changes
     if (prevSessionIdForScrollRef.current !== sessionId) {
       prevSessionIdForScrollRef.current = sessionId;
-      prevTurnsLengthRef.current = 0;
+      prevRenderedTurnCountRef.current = 0;
       return; // Skip scroll on session change
     }
 
-    const prevLength = prevTurnsLengthRef.current;
-    const currentLength = turnsOrGroups.length;
-    prevTurnsLengthRef.current = currentLength;
+    const prevCount = prevRenderedTurnCountRef.current;
+    const currentCount = turnsOrGroups.length;
+    prevRenderedTurnCountRef.current = currentCount;
 
-    // Only scroll if content was ADDED (not removals)
+    // Only scroll if actual rendered transcript content was ADDED (not removals)
     // and user is following (check ref to avoid race conditions)
-    if (currentLength <= prevLength || currentLength === 0) return;
+    if (currentCount <= prevCount || currentCount === 0) return;
     if (!isFollowingRef.current) return;
 
     // Don't fight with user - if they're actively scrolling, skip this update
@@ -1315,15 +1315,15 @@ export function StreamingTurnsView({ sessionId, client, onSelectSession, onScrol
             </div>
           )}
 
-          {/* Streaming placeholder when no turns yet */}
-          {isStreaming && turns.length === 0 && (
-            <div className="streaming-placeholder">
+          {/* Streaming placeholder for pending in-flight assistant work before any content arrives */}
+          {isStreaming && pendingAssistantTurns.length > 0 && (
+            <div className="streaming-placeholder streaming-placeholder--inline">
               <span className="streaming-dots">
                 <span className="dot">●</span>
                 <span className="dot">●</span>
                 <span className="dot">●</span>
               </span>
-              <span>Waiting for response...</span>
+              <span>Streaming...</span>
             </div>
           )}
         </div>

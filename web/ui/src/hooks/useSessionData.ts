@@ -137,11 +137,30 @@ export interface StreamingProgress {
   durationSeconds: number;
 }
 
+export interface PendingAssistantTurn {
+  /** Stable UUID for the pending assistant turn */
+  turnId: string;
+  /** Intended insertion/display order */
+  order: number;
+  /** Turn role, usually assistant */
+  role: string;
+  /** Optional exchange ID for grouping */
+  exchangeId?: string;
+  /** Optional parallel group ID */
+  parallelGroupId?: string;
+  /** ISO 8601 timestamp when turn was announced */
+  timestamp?: string;
+  /** True if this assistant turn follows a steering message (optimistic) */
+  respondsToSteering?: boolean;
+}
+
 export interface UseSessionDataState {
   /** Map of turn_id -> turn data */
   turnsById: Map<string, SessionDataTurn>;
   /** Sorted array of turns (by order) */
   turns: SessionDataTurn[];
+  /** Pending assistant turns announced but not yet materialized into transcript content */
+  pendingAssistantTurns: PendingAssistantTurn[];
   /** Whether initial snapshot is loading */
   isLoading: boolean;
   /** Whether we're subscribed to the session */
@@ -308,10 +327,45 @@ export function useSessionData(
   // This handles the race condition where reorder events arrive before turn creation
   const pendingOrdersRef = useRef<Map<string, number>>(new Map());
 
+  // Pending assistant turns announced by turnCreated but not yet materialized into transcript content.
+  const pendingAssistantTurnsRef = useRef<Map<string, PendingAssistantTurn>>(new Map());
+  const [pendingAssistantTurnsVersion, setPendingAssistantTurnsVersion] = useState(0);
+  const bumpPendingAssistantTurnsVersion = useCallback(() => {
+    setPendingAssistantTurnsVersion((v) => v + 1);
+  }, []);
+
+  const upsertPendingAssistantTurn = useCallback((turn: PendingAssistantTurn) => {
+    const existing = pendingAssistantTurnsRef.current.get(turn.turnId);
+    if (
+      existing &&
+      existing.order === turn.order &&
+      existing.role === turn.role &&
+      existing.exchangeId === turn.exchangeId &&
+      existing.parallelGroupId === turn.parallelGroupId &&
+      existing.timestamp === turn.timestamp &&
+      existing.respondsToSteering === turn.respondsToSteering
+    ) {
+      return;
+    }
+    pendingAssistantTurnsRef.current.set(turn.turnId, turn);
+    bumpPendingAssistantTurnsVersion();
+  }, [bumpPendingAssistantTurnsVersion]);
+
+  const removePendingAssistantTurn = useCallback((turnId: string) => {
+    if (pendingAssistantTurnsRef.current.delete(turnId)) {
+      bumpPendingAssistantTurnsVersion();
+    }
+  }, [bumpPendingAssistantTurnsVersion]);
+
   // Derive sorted turns array from map (sorted by insertion order)
   const turns = useMemo(() => {
     return Array.from(turnsById.values()).sort((a, b) => a.order - b.order);
   }, [turnsById]);
+
+  const pendingAssistantTurns = useMemo(() => {
+    void pendingAssistantTurnsVersion;
+    return Array.from(pendingAssistantTurnsRef.current.values()).sort((a, b) => a.order - b.order);
+  }, [pendingAssistantTurnsVersion]);
 
   // Get a turn by ID
   const getTurn = useCallback(
@@ -337,20 +391,25 @@ export function useSessionData(
       for (const [turnId, accumulatedDelta] of deltas) {
         const existing = next.get(turnId);
         if (!existing) {
-          // Turn not found - create it with text block
+          // Turn not found - create it with text block, preferring pending transport metadata.
           debugLog(`[useSessionData] batched delta for unknown turn ${turnId}, creating`);
+          const pendingTurn = pendingAssistantTurnsRef.current.get(turnId);
           const maxOrder = Math.max(-1, ...Array.from(next.values()).map((t) => t.order));
           next.set(turnId, {
             turnId,
-            order: maxOrder + 1,
-            role: 'assistant',
+            order: pendingTurn?.order ?? maxOrder + 1,
+            role: pendingTurn?.role ?? 'assistant',
             contentBlock: { type: 'text', text: accumulatedDelta } as TextBlock,
             streaming: true,
             viewed: false,
             tokens: 0,
             contextMode: 'copy',
-            timestamp: new Date().toISOString(),
+            exchangeId: pendingTurn?.exchangeId,
+            parallelGroupId: pendingTurn?.parallelGroupId,
+            timestamp: pendingTurn?.timestamp ?? new Date().toISOString(),
+            respondsToSteering: pendingTurn?.respondsToSteering ?? false,
           });
+          pendingAssistantTurnsRef.current.delete(turnId);
           hasChanges = true;
         } else {
           // Only append to turns that are still streaming
@@ -371,13 +430,18 @@ export function useSessionData(
 
       return hasChanges ? next : prev;
     });
-  }, []);
+
+    if (deltas.size > 0) {
+      bumpPendingAssistantTurnsVersion();
+    }
+  }, [bumpPendingAssistantTurnsVersion]);
 
   // Clear all state
   const clear = useCallback(() => {
     // Clear pending deltas and stop flush interval
     pendingDeltasRef.current.clear();
     pendingOrdersRef.current.clear();
+    pendingAssistantTurnsRef.current.clear();
     if (flushIntervalRef.current !== null) {
       window.clearInterval(flushIntervalRef.current);
       flushIntervalRef.current = null;
@@ -394,6 +458,7 @@ export function useSessionData(
     setError(null);
     setSessionId(null);
     setStreamingProgress(null);
+    setPendingAssistantTurnsVersion(0);
     currentSessionRef.current = null;
   }, []);
 
@@ -497,7 +562,7 @@ export function useSessionData(
         // subscribe call returns. If handlers aren't registered, events are lost.
         const handlers: Unsubscribe[] = [];
 
-        // Turn created - add new turn
+        // Turn created - materialize non-assistant turns immediately, but keep assistant turns pending until content arrives.
         handlers.push(
           client.sessionData.sessionDataTurnCreated((event: SessionTurnCreatedEvent) => {
             const tStart = performance.now();
@@ -515,29 +580,50 @@ export function useSessionData(
               return;
             }
 
+            // Check if we have a pending order from a reorder event that arrived first
+            const pendingOrder = pendingOrdersRef.current.get(turnId);
+            const serverOrder = pendingOrder ?? event.order ?? 0;
+            if (pendingOrder !== undefined) {
+              pendingOrdersRef.current.delete(turnId);
+              debugLog('[TURN_ORDER] Applied pending order to new turn', {
+                turnId: turnId.substring(0, 8),
+                pendingOrder,
+                eventOrder: event.order,
+              });
+            }
+
+            const role = event.role ?? 'assistant';
+            const contentBlockType = event.contentBlockType ?? 'text';
+            const timestamp = new Date().toISOString();
+
+            if (role === 'assistant') {
+              upsertPendingAssistantTurn({
+                turnId,
+                order: serverOrder,
+                role,
+                exchangeId: event.exchangeId ?? undefined,
+                parallelGroupId: event.parallelGroupId ?? undefined,
+                timestamp,
+                respondsToSteering: false,
+              });
+
+              const elapsed = performance.now() - tStart;
+              if (elapsed > 1) {
+                rawDebugLog('perf', `[ws:turnCreated] pending assistant ${elapsed.toFixed(1)}ms`, {});
+              }
+              return;
+            }
+
             setTurnsById((prev) => {
               if (prev.has(turnId)) {
                 return prev;
               }
 
               const next = new Map(prev);
-              // Check if we have a pending order from a reorder event that arrived first
-              const pendingOrder = pendingOrdersRef.current.get(turnId);
-              const serverOrder = pendingOrder ?? event.order ?? 0;
-              if (pendingOrder !== undefined) {
-                pendingOrdersRef.current.delete(turnId);
-                debugLog('[TURN_ORDER] Applied pending order to new turn', {
-                  turnId: turnId.substring(0, 8),
-                  pendingOrder,
-                  eventOrder: event.order,
-                });
-              }
-              const contentBlockType = event.contentBlockType ?? 'text';
-
               next.set(turnId, {
                 turnId,
                 order: serverOrder,
-                role: event.role ?? 'assistant',
+                role,
                 contentBlock: createInitialBlock(contentBlockType),
                 streaming: true,
                 viewed: false,
@@ -545,7 +631,7 @@ export function useSessionData(
                 contextMode: 'copy',
                 exchangeId: event.exchangeId ?? undefined,
                 parallelGroupId: event.parallelGroupId ?? undefined,
-                timestamp: new Date().toISOString(),
+                timestamp,
                 isSteering: event.isSteering ?? false,
               });
 
@@ -602,24 +688,28 @@ export function useSessionData(
                     streaming: true,
                   });
                 } else {
+                  const pendingTurn = pendingAssistantTurnsRef.current.get(turnId);
+                  const maxOrder = Math.max(-1, ...Array.from(prev.values()).map((t) => t.order));
                   next.set(turnId, {
                     turnId,
-                    order: 0,
-                    role: 'assistant',
+                    order: pendingTurn?.order ?? maxOrder + 1,
+                    role: pendingTurn?.role ?? 'assistant',
                     contentBlock: { type: 'thinking', text: delta } as ContentBlock,
                     streaming: true,
                     viewed: false,
                     tokens: 0,
                     contextMode: 'copy',
-                    exchangeId: undefined,
-                    parallelGroupId: undefined,
-                    timestamp: undefined,
+                    exchangeId: pendingTurn?.exchangeId,
+                    parallelGroupId: pendingTurn?.parallelGroupId,
+                    timestamp: pendingTurn?.timestamp,
                     isSteering: false,
-                    respondsToSteering: false,
+                    respondsToSteering: pendingTurn?.respondsToSteering ?? false,
                   });
+                  pendingAssistantTurnsRef.current.delete(turnId);
                 }
                 return next;
               });
+              removePendingAssistantTurn(turnId);
               return;
             }
 
@@ -662,6 +752,8 @@ export function useSessionData(
               }
 
               if (!existing) {
+                const pendingTurn = pendingAssistantTurnsRef.current.get(turnId);
+
                 // Check for pending order from reorder event that arrived first
                 const pendingOrder = pendingOrdersRef.current.get(turnId);
                 if (pendingOrder !== undefined) {
@@ -672,8 +764,8 @@ export function useSessionData(
                     eventOrder: event.order,
                   });
                 }
-                // Use pending order, then event order, then fall back to maxOrder + 1
-                const serverOrder = pendingOrder ?? event.order;
+                // Use pending order, pending turn order, then event order, then fall back to maxOrder + 1
+                const serverOrder = pendingOrder ?? pendingTurn?.order ?? event.order;
                 const effectiveOrder = serverOrder !== undefined && serverOrder !== null
                   ? serverOrder
                   : Math.max(-1, ...Array.from(prev.values()).map((t) => t.order)) + 1;
@@ -682,14 +774,18 @@ export function useSessionData(
                 next.set(turnId, {
                   turnId,
                   order: effectiveOrder,
-                  role: event.role ?? 'assistant',
+                  role: pendingTurn?.role ?? event.role ?? 'assistant',
                   contentBlock: finalContentBlock,
                   streaming: false,
                   viewed: false,
                   tokens: event.tokens ?? 0,
                   contextMode: 'copy',
-                  timestamp: new Date().toISOString(),
+                  exchangeId: pendingTurn?.exchangeId,
+                  parallelGroupId: pendingTurn?.parallelGroupId,
+                  timestamp: pendingTurn?.timestamp ?? new Date().toISOString(),
+                  respondsToSteering: pendingTurn?.respondsToSteering ?? false,
                 });
+                pendingAssistantTurnsRef.current.delete(turnId);
                 const elapsed = performance.now() - tStart;
                 if (elapsed > 1) {
                   rawDebugLog('perf', `[ws:turnFinished] new turn ${elapsed.toFixed(1)}ms, mapSize=${next.size}`, {});
@@ -710,6 +806,7 @@ export function useSessionData(
                 tokens: event.tokens ?? 0,
                 streaming: false,
               });
+              pendingAssistantTurnsRef.current.delete(turnId);
               const elapsed = performance.now() - tStart;
               if (elapsed > 1) {
                 rawDebugLog('perf', `[ws:turnFinished] update ${elapsed.toFixed(1)}ms, mapSize=${next.size}`, {});
@@ -734,6 +831,8 @@ export function useSessionData(
           client.sessionData.sessionDataStreamDone((event: SessionStreamDoneEvent) => {
             if (event.sessionId !== newSessionId) return;
             setIsStreaming(false);
+            pendingAssistantTurnsRef.current.clear();
+            bumpPendingAssistantTurnsVersion();
             // Clear progress when stream ends
             setStreamingProgress(null);
           })
@@ -759,6 +858,8 @@ export function useSessionData(
           client.sessionData.sessionDataStreamError((event: SessionStreamErrorEvent) => {
             if (event.sessionId !== newSessionId) return;
             setIsStreaming(false);
+            pendingAssistantTurnsRef.current.clear();
+            bumpPendingAssistantTurnsVersion();
             const errorWithDump = event.dumpFile
               ? `${event.error}\n\nDebug dump: ${event.dumpFile}`
               : event.error;
@@ -1023,10 +1124,12 @@ export function useSessionData(
               const next = new Map(prev);
               for (const turnId of event.turnIds) {
                 next.delete(turnId);
+                pendingAssistantTurnsRef.current.delete(turnId);
               }
               debugLog('Removed turns from state', { removedCount: event.turnIds.length, remaining: next.size });
               return next;
             });
+            bumpPendingAssistantTurnsVersion();
           })
         );
 
@@ -1144,7 +1247,7 @@ export function useSessionData(
         currentSessionRef.current = null;
       }
     },
-    [client, isSubscribed, unsubscribe, historyLoadMode]
+    [client, isSubscribed, unsubscribe, historyLoadMode, removePendingAssistantTurn, upsertPendingAssistantTurn, bumpPendingAssistantTurnsVersion]
   );
 
   // Auto-subscribe when autoSubscribe changes and client is ready
@@ -1298,6 +1401,7 @@ export function useSessionData(
   return {
     turnsById,
     turns,
+    pendingAssistantTurns,
     isLoading,
     isSubscribed,
     isStreaming,

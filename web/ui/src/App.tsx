@@ -2535,15 +2535,14 @@ function AppContent() {
 
     try {
       if (isStreaming) {
-        // Session is streaming - only steer if the backend accepts it, otherwise fail visibly
+        // Session is streaming - use submitMessage with queue enabled (server handles steering semantics)
         if (hasImages) {
           setError('Cannot send images while streaming. Please wait.');
           messageInputRef.current?.setValue(content);
           setImageAttachments(currentImages);
           return;
         }
-        // Backend does not expose steerSession on this client; fall back to normal submit while streaming
-        await client.sessions.submitMessage(selectedSessionId, content);
+        await client.sessions.submitMessage(selectedSessionId, content, undefined, true);
         localStorage.removeItem(`balloons:draft:${selectedSessionId}`);
       } else if (hasImages) {
         // Submit with images - need to upload images first

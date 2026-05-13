@@ -122,7 +122,7 @@ export function SendActionButton({
     // Concluded session: only reopen is available
     filteredActions = ['reopen'];
   } else if (isStreaming) {
-    // Streaming: send and BTW are both steering-style actions
+    // Streaming: send and BTW are steering-style actions
     filteredActions = ['send', 'btw'];
   } else {
     // Normal session

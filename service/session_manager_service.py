@@ -6324,9 +6324,21 @@ Summary:""")
                     f"Session {session_id} is already streaming. "
                     "Use queue=True to queue this message."
                 )
-            # TODO: Implement actual message queueing
-            # For now, just reject - full queue support is a future enhancement
-            raise ValueError("Message queueing not yet implemented")
+            if not self._queue_state:
+                raise ValueError("Message queueing unavailable")
+            self._queue_state.add_message(session_id, content, source="user")
+            debug_log.info(
+                f"Queued message for steering while session is streaming",
+                category=Category.RUNNER,
+                session_id=session_id,
+                details={"content_len": len(content)},
+            )
+            return SubmitMessageResult(
+                session_id=session_id,
+                exchange_id="",
+                turn_index=-1,
+                status="queued",
+            )
 
         # Generate exchange ID for this user prompt + assistant response
         exchange_id = str(uuid.uuid4())
@@ -6511,7 +6523,7 @@ Summary:""")
                     f"Session {session_id} is already streaming. "
                     "Use queue=True to queue this message."
                 )
-            raise ValueError("Message queueing not yet implemented")
+            raise ValueError("Cannot queue image messages while streaming yet")
 
         # Generate exchange ID for this user prompt + assistant response
         exchange_id = str(uuid.uuid4())
@@ -6720,7 +6732,21 @@ Summary:""")
                     f"Session {session_id} is already streaming. "
                     "Use queue=True to queue this message."
                 )
-            raise ValueError("Message queueing not yet implemented")
+            if not self._queue_state:
+                raise ValueError("Message queueing unavailable")
+            self._queue_state.add_message(session_id, content, source="user")
+            debug_log.info(
+                f"Queued markdown message for steering while session is streaming",
+                category=Category.RUNNER,
+                session_id=session_id,
+                details={"content_len": len(content)},
+            )
+            return SubmitMessageResult(
+                session_id=session_id,
+                exchange_id="",
+                turn_index=-1,
+                status="queued",
+            )
 
         # Generate exchange ID for this user prompt + assistant response
         exchange_id = str(uuid.uuid4())
