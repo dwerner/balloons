@@ -1,7 +1,7 @@
 // AUTO-GENERATED CODE - DO NOT EDIT
 //
 // Generated from Python @ws_expose and @ws_event decorators.
-// Generated: 2026-04-29T09:55:23.301746
+// Generated: 2026-05-13T17:53:45.410653
 //
 // To regenerate:
 //     python -m codegen.generate_typescript
@@ -689,6 +689,11 @@ export interface SessionManagerService {
    * Dict with 'prompt' (the generated prompt text) and 'length' (char count)
    */
   getPromptPreview(sessionId?: string | null, enabledTools?: string[] | null): Promise<Record<string, unknown>>;
+
+  /**
+   * Get a structured preview of the effective runner context for a session.
+   */
+  getRunnerContextPreview(sessionId: string, enabledTools?: string[] | null): Promise<Types.RunnerContextPreviewResult>;
 
   /**
    * Get information about a specific session.
@@ -1406,6 +1411,10 @@ export class SessionManagerServiceClient implements SessionManagerService {
 
   async getPromptPreview(sessionId?: string | null, enabledTools?: string[] | null): Promise<Record<string, unknown>> {
     return this.call('getPromptPreview', { sessionId: sessionId, enabledTools: enabledTools });
+  }
+
+  async getRunnerContextPreview(sessionId: string, enabledTools?: string[] | null): Promise<Types.RunnerContextPreviewResult> {
+    return this.call('getRunnerContextPreview', { sessionId: sessionId, enabledTools: enabledTools });
   }
 
   async getSession(sessionId: string): Promise<Types.ManagedSessionInfo | null> {

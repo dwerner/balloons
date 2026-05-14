@@ -18,6 +18,7 @@ import { TurnCard } from '../StreamingTurnsView/cards';
 import { ClientContext } from '../StreamingTurnsView/cards/ClientContext';
 import { SystemPromptView } from './SystemPromptView';
 import { EnabledToolsView } from './EnabledToolsView';
+import { RunnerContextPreview } from './RunnerContextPreview';
 import { ExchangesV2 } from '../ExchangesV2';
 import { createLogger } from '../../utils/debugLog';
 import './ContextTabView.css';
@@ -998,6 +999,8 @@ const ExchangeNode = memo(function ExchangeNode({
 interface ContextTabViewProps {
   sessionId: string | null;
   sessionName?: string;
+  backendName?: string | null;
+  enabledTools?: string[];
   turns: TurnInfo[];
   /** Raw SessionDataTurns for hover preview with full TurnCard rendering */
   rawTurns?: SessionDataTurn[];
@@ -1022,11 +1025,13 @@ interface ContextTabViewProps {
 }
 
 // Sub-tab type for context view
-type ContextSubTab = 'exchanges' | 'exchangesv2' | 'system' | 'tools';
+type ContextSubTab = 'exchanges' | 'exchangesv2' | 'system' | 'tools' | 'runnerContext';
 
 export const ContextTabView = memo(function ContextTabView({
   sessionId,
   sessionName,
+  backendName,
+  enabledTools,
   turns,
   rawTurns,
   client,
@@ -1049,8 +1054,38 @@ export const ContextTabView = memo(function ContextTabView({
   // Active sub-tab
   const [activeSubTab, setActiveSubTab] = useState<ContextSubTab>('exchanges');
 
+  const [sessionEnabledTools, setSessionEnabledTools] = useState<string[]>(enabledTools ?? []);
+
   // Track which exchanges are expanded
   const [expandedExchanges, setExpandedExchanges] = useState<Set<string>>(new Set());
+
+  useEffect(() => {
+    if (enabledTools) {
+      setSessionEnabledTools(enabledTools);
+    }
+  }, [enabledTools]);
+
+  useEffect(() => {
+    if (!client || !sessionId) return;
+
+    let cancelled = false;
+    client.sessions.getSessionEnabledTools(sessionId)
+      .then((tools) => {
+        if (!cancelled) {
+          setSessionEnabledTools(tools);
+        }
+      })
+      .catch((err) => {
+        debugLog('Failed to load session enabled tools for runner context preview', {
+          sessionId,
+          error: String(err),
+        });
+      });
+
+    return () => {
+      cancelled = true;
+    };
+  }, [client, sessionId]);
 
   // Track the selected turn for persistent preview in bottom pane
   const [selectedTurnIdx, setSelectedTurnIdx] = useState<number | null>(null);
@@ -1222,6 +1257,12 @@ export const ContextTabView = memo(function ContextTabView({
           >
             Tools
           </button>
+          <button
+            className={`ctx-tab-view__subtab ${activeSubTab === 'runnerContext' ? 'ctx-tab-view__subtab--active' : ''}`}
+            onClick={() => setActiveSubTab('runnerContext')}
+          >
+            Runner Context
+          </button>
         </div>
 
         {/* Stats - only show on exchanges tab */}
@@ -1270,6 +1311,18 @@ export const ContextTabView = memo(function ContextTabView({
           isLoading={isLoading}
           archivingTurnIds={archivingTurnIds}
           isLoadingHistory={isLoadingHistory}
+        />
+      )}
+
+      {/* Runner Context Preview */}
+      {activeSubTab === 'runnerContext' && (
+        <RunnerContextPreview
+          sessionId={sessionId}
+          client={client ?? null}
+          enabledTools={sessionEnabledTools}
+          backendName={backendName}
+          refreshKey={`${backendName ?? ''}:${sessionEnabledTools.slice().sort((a, b) => a.localeCompare(b)).join(',')}`}
+          isLoading={isLoading}
         />
       )}
 

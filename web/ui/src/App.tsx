@@ -3437,6 +3437,7 @@ function AppContent() {
                 <ContextTabView
                   sessionId={selectedSessionId}
                   sessionName={selectedSession?.forkName || selectedSession?.title || undefined}
+                  backendName={selectedSession?.backendName || null}
                   turns={turns}
                   rawTurns={rawTurns}
                   client={clientRef.current}

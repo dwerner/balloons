@@ -1,7 +1,7 @@
 // AUTO-GENERATED CODE - DO NOT EDIT
 //
 // Generated from Python @ws_expose and @ws_type decorators.
-// Generated: 2026-04-29T09:55:23.295876
+// Generated: 2026-05-13T17:53:45.405247
 //
 // To regenerate:
 //     python -m codegen.generate_typescript
@@ -401,6 +401,22 @@ export interface SwitchTargetResult {
   targetSessionId?: string;
   availableForks?: Record<string, unknown>[];
   error?: string;
+}
+
+export interface RunnerContextPreviewResult {
+  backendName?: string;
+  backendType?: string;
+  systemPrompt?: string;
+  systemPromptLength?: number;
+  rawText?: string;
+  rawLength?: number;
+  packagedMessagesJson?: string;
+  packagedMessagesLength?: number;
+  packagedFormat?: string;
+  tree?: Record<string, unknown>[];
+  turnCount?: number;
+  messageCount?: number;
+  effectiveEnabledTools?: string[];
 }
 
 export interface ContextModeItem {

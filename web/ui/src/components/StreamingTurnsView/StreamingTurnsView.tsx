@@ -67,6 +67,8 @@ interface ExchangeGroup {
   items: TurnOrGroup[];
   /** Color index for visual distinction */
   colorIndex: number;
+  /** Stable key derived from the group's contents */
+  key: string;
 }
 
 interface StreamingTurnsViewProps {
@@ -299,32 +301,36 @@ export function StreamingTurnsView({ sessionId, client, onSelectSession, onScrol
     let currentGroup: SessionDataTurn[] = [];
     let currentGroupId: string | undefined;
 
+    const flushGroup = () => {
+      if (currentGroup.length === 0) return;
+      if (currentGroup.length > 1) {
+        const firstId = currentGroup[0]?.turnId ?? 'unknown';
+        const lastId = currentGroup[currentGroup.length - 1]?.turnId ?? firstId;
+        result.push({
+          type: 'parallel',
+          turns: currentGroup,
+          parallelGroupId: currentGroupId,
+          key: `parallel-${currentGroupId ?? 'none'}-${firstId}-${lastId}`,
+        });
+      } else {
+        const turn = currentGroup[0]!;
+        result.push({
+          type: 'single',
+          turns: currentGroup,
+          key: `single-${turn.turnId}`,
+        });
+      }
+      currentGroup = [];
+      currentGroupId = undefined;
+    };
+
     for (const turn of filteredTurns) {
       const groupId = turn.parallelGroupId;
 
       if (groupId && groupId === currentGroupId) {
-        // Continue the current parallel group
         currentGroup.push(turn);
       } else {
-        // Flush the previous group if any
-        if (currentGroup.length > 0) {
-          if (currentGroup.length > 1) {
-            result.push({
-              type: 'parallel',
-              turns: currentGroup,
-              parallelGroupId: currentGroupId,
-              key: `parallel-${currentGroupId}-${result.length}`,
-            });
-          } else {
-            result.push({
-              type: 'single',
-              turns: currentGroup,
-              key: `${currentGroup[0]?.turnId || 'single'}-${result.length}`,
-            });
-          }
-        }
-
-        // Start a new group or single turn
+        flushGroup();
         if (groupId) {
           currentGroup = [turn];
           currentGroupId = groupId;
@@ -332,31 +338,13 @@ export function StreamingTurnsView({ sessionId, client, onSelectSession, onScrol
           result.push({
             type: 'single',
             turns: [turn],
-            key: `${turn.turnId}-${result.length}`,
+            key: `single-${turn.turnId}`,
           });
-          currentGroup = [];
-          currentGroupId = undefined;
         }
       }
     }
 
-    // Flush any remaining group
-    if (currentGroup.length > 0) {
-      if (currentGroup.length > 1) {
-        result.push({
-          type: 'parallel',
-          turns: currentGroup,
-          parallelGroupId: currentGroupId,
-          key: `parallel-${currentGroupId}`,
-        });
-      } else {
-        result.push({
-          type: 'single',
-          turns: currentGroup,
-          key: `${currentGroup[0]?.turnId || 'single'}-flush-${result.length}`,
-        });
-      }
-    }
+    flushGroup();
 
     return result;
   }, [filteredTurns]);
@@ -369,23 +357,28 @@ export function StreamingTurnsView({ sessionId, client, onSelectSession, onScrol
     let colorIndex = 0;
     const exchangeColorMap = new Map<string, number>();
 
+    const flushGroup = () => {
+      if (currentGroup.length === 0) return;
+      const exchangeId = currentExchangeId ?? '';
+      const firstItemKey = currentGroup[0]?.key ?? 'start';
+      const lastItemKey = currentGroup[currentGroup.length - 1]?.key ?? firstItemKey;
+      groups.push({
+        exchangeId,
+        items: currentGroup,
+        colorIndex: exchangeId ? (exchangeColorMap.get(exchangeId) ?? 0) : 0,
+        key: `exchange-${exchangeId || 'no-exchange'}-${firstItemKey}-${lastItemKey}`,
+      });
+      currentGroup = [];
+      currentExchangeId = undefined;
+    };
+
     for (const item of turnsOrGroups) {
-      // Get exchangeId from first turn in the item
       const exchangeId = item.turns[0]?.exchangeId;
 
       if (exchangeId && exchangeId === currentExchangeId) {
-        // Continue current exchange group
         currentGroup.push(item);
       } else {
-        // Flush previous group
-        if (currentGroup.length > 0 && currentExchangeId) {
-          groups.push({
-            exchangeId: currentExchangeId,
-            items: currentGroup,
-            colorIndex: exchangeColorMap.get(currentExchangeId) ?? 0,
-          });
-        }
-        // Start new group
+        flushGroup();
         currentGroup = [item];
         currentExchangeId = exchangeId;
         if (exchangeId && !exchangeColorMap.has(exchangeId)) {
@@ -394,22 +387,7 @@ export function StreamingTurnsView({ sessionId, client, onSelectSession, onScrol
       }
     }
 
-    // Flush remaining
-    if (currentGroup.length > 0 && currentExchangeId) {
-      groups.push({
-        exchangeId: currentExchangeId,
-        items: currentGroup,
-        colorIndex: exchangeColorMap.get(currentExchangeId) ?? 0,
-      });
-    } else if (currentGroup.length > 0) {
-      // Turns without exchangeId - create group with empty exchangeId
-      groups.push({
-        exchangeId: '',
-        items: currentGroup,
-        colorIndex: 0,
-      });
-    }
-
+    flushGroup();
     return groups;
   }, [turnsOrGroups]);
 
@@ -1197,7 +1175,7 @@ export function StreamingTurnsView({ sessionId, client, onSelectSession, onScrol
         <div className="streaming-turns-view" ref={contentWrapperRef}>
           {/* Direct rendering of all turns grouped by exchange */}
           <div className="streaming-turns-list">
-            {exchangeGroups.map((exchangeGroup, groupIndex) => {
+            {exchangeGroups.map((exchangeGroup) => {
               // Compute exchange stats for header/footer
               const allTurnsInExchange = exchangeGroup.items.flatMap(item => item.turns);
               const firstTurn = allTurnsInExchange[0];
@@ -1216,7 +1194,7 @@ export function StreamingTurnsView({ sessionId, client, onSelectSession, onScrol
 
               return (
                 <div
-                  key={`${exchangeGroup.exchangeId || 'no-exchange'}-${groupIndex}`}
+                  key={exchangeGroup.key}
                   ref={(el) => {
                     const id = exchangeGroup.exchangeId;
                     if (id) {

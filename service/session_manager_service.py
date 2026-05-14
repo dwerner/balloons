@@ -37,7 +37,7 @@ Frontend Interaction:
 
 import asyncio
 import uuid
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, asdict
 from datetime import datetime
 from enum import Enum
 from typing import Callable, Any, TYPE_CHECKING
@@ -58,7 +58,7 @@ from core.stream_state import (
 )
 # TreeState removed in Phase 8 - events go directly to SessionDataService
 from core.queue_state import QueueState, QueueEvent, QueueSnapshot
-from models import TextBlock, MarkdownBlock, ImageBlock, ToolUseBlock, ToolResultBlock, InterruptionBlock, ErrorBlock, Turn, SessionSummaryBlock
+from models import TextBlock, MarkdownBlock, ImageBlock, ToolUseBlock, ToolResultBlock, InterruptionBlock, ErrorBlock, Turn, SessionSummaryBlock, Message
 from service.session_events import (
     SessionEventObserver,
     TurnCreatedEvent,
@@ -249,6 +249,26 @@ class SwitchTargetResult:
     target_session_id: str = ""
     available_forks: list[dict] = field(default_factory=list)
     error: str = ""
+
+
+@ws_type
+@dataclass
+class RunnerContextPreviewResult:
+    """Structured runner context preview for debugging."""
+
+    backend_name: str = ""
+    backend_type: str = ""
+    system_prompt: str = ""
+    system_prompt_length: int = 0
+    raw_text: str = ""
+    raw_length: int = 0
+    packaged_messages_json: str = ""
+    packaged_messages_length: int = 0
+    packaged_format: str = ""
+    tree: list[dict] = field(default_factory=list)
+    turn_count: int = 0
+    message_count: int = 0
+    effective_enabled_tools: list[str] = field(default_factory=list)
 
 
 @ws_type
@@ -7148,6 +7168,294 @@ Summary:""")
             "prompt": prompt,
             "length": len(prompt),
         }
+
+    def _turns_to_messages(self, turns: list[Turn]) -> list[Message]:
+        """Convert stored turns to Message objects for context/runners."""
+        messages: list[Message] = []
+        for turn in turns:
+            messages.append(
+                Message(
+                    role=turn.role,
+                    content=turn.content,
+                    content_blocks=turn.content_blocks,
+                    tokens=turn.tokens,
+                    timestamp=turn.timestamp,
+                    context_mode=turn.context_mode,
+                    summary=turn.summary,
+                    exchange_id=turn.exchange_id,
+                )
+            )
+        return messages
+
+    def _serialize_content_block_preview(self, block: Any) -> dict:
+        data = asdict(block)
+        data["type"] = getattr(block, "type", data.get("type", "unknown"))
+        return data
+
+    def _context_mode_value(self, context_mode: Any) -> str:
+        if hasattr(context_mode, "value"):
+            return str(context_mode.value)
+        return str(context_mode)
+
+    def _summarize_block(self, block_data: dict) -> str:
+        block_type = str(block_data.get("type", "unknown"))
+        if block_type in {"text", "markdown", "thinking"}:
+            return str(block_data.get("text") or "")[:160]
+        if block_type == "tool_use":
+            return str(block_data.get("name") or "tool call")
+        if block_type == "tool_result":
+            return str(block_data.get("content") or "")[:160]
+        if block_type in {"archive", "link", "merge", "merged_to", "fork", "forked_from", "review", "fork_proposal", "merge_proposal", "watch_summary", "watch_start", "watch_stop", "session_summary", "error", "interruption"}:
+            return str(
+                block_data.get("summary")
+                or block_data.get("message")
+                or block_data.get("reason")
+                or block_data.get("prompt")
+                or block_data.get("name")
+                or block_data.get("proposed_title")
+                or block_data.get("target_session_name")
+                or ""
+            )[:160]
+        if block_type == "image":
+            return str(block_data.get("filename") or block_data.get("file_path") or "image")[:160]
+        return str(block_data.get("text") or block_data.get("content") or block_data.get("name") or "")[:160]
+
+    def _block_label(self, block_data: dict) -> str:
+        block_type = str(block_data.get("type", "unknown"))
+        if block_type == "tool_use":
+            return f"Tool Use · {block_data.get('name') or 'unknown'}"
+        if block_type == "tool_result":
+            return f"Tool Result · {block_data.get('tool_use_id') or 'unknown'}"
+        return block_type.replace("_", " ").title()
+
+    def _build_runner_context_tree(self, turns: list[Turn], messages: list[Message], system_prompt: str) -> list[dict]:
+        tree: list[dict] = []
+
+        tree.append({
+            "id": "system-prompt",
+            "kind": "system_prompt",
+            "label": "System Prompt",
+            "summary": f"{len(system_prompt)} chars",
+            "text": system_prompt,
+            "data": {
+                "length": len(system_prompt),
+            },
+        })
+
+        exchange_order: list[str] = []
+        exchange_children: dict[str, list[dict]] = {}
+        exchange_labels: dict[str, str] = {}
+        exchange_meta: dict[str, dict] = {}
+
+        for index, turn in enumerate(turns):
+            message = messages[index] if index < len(messages) else None
+            block = turn.content_block
+            block_data = self._serialize_content_block_preview(block)
+            block_type = block_data.get("type", "unknown")
+            context_mode = self._context_mode_value(turn.context_mode)
+            turn_summary = turn.summary or self._summarize_block(block_data) or turn.content
+            exchange_id = turn.exchange_id or f"turn:{turn.id}"
+
+            if exchange_id not in exchange_children:
+                exchange_order.append(exchange_id)
+                exchange_children[exchange_id] = []
+                exchange_labels[exchange_id] = f"Exchange {len(exchange_order) - 1}"
+                exchange_meta[exchange_id] = {
+                    "exchangeId": turn.exchange_id,
+                    "syntheticExchangeId": exchange_id if not turn.exchange_id else None,
+                    "turnCount": 0,
+                    "roles": [],
+                }
+
+            block_children = [{
+                "id": f"turn-{turn.id}-block-0",
+                "kind": "block",
+                "blockType": block_type,
+                "label": self._block_label(block_data),
+                "summary": self._summarize_block(block_data),
+                "text": block_data.get("text") or block_data.get("content") or "",
+                "data": block_data,
+            }]
+
+            exchange_meta[exchange_id]["turnCount"] += 1
+            if turn.role not in exchange_meta[exchange_id]["roles"]:
+                exchange_meta[exchange_id]["roles"].append(turn.role)
+
+            exchange_children[exchange_id].append({
+                "id": f"turn-{turn.id}",
+                "kind": "turn",
+                "role": turn.role,
+                "label": f"Turn {index} · {turn.role}",
+                "summary": (turn_summary or "")[:160],
+                "contextMode": context_mode,
+                "blockType": block_type,
+                "text": turn.content,
+                "data": {
+                    "turnId": turn.id,
+                    "turnIndex": index,
+                    "exchangeId": turn.exchange_id,
+                    "parallelGroupId": turn.parallel_group_id,
+                    "isSteering": turn.is_steering,
+                    "respondsToSteering": turn.responds_to_steering,
+                    "timestamp": turn.timestamp,
+                    "startedAt": turn.started_at,
+                    "endedAt": turn.ended_at,
+                    "tokens": turn.tokens,
+                    "messageRole": message.role if message else None,
+                },
+                "children": block_children,
+            })
+
+        history_children: list[dict] = []
+        for exchange_index, exchange_id in enumerate(exchange_order):
+            turns_in_exchange = exchange_children[exchange_id]
+            meta = exchange_meta[exchange_id]
+            first_turn = turns_in_exchange[0] if turns_in_exchange else None
+            role_summary = ", ".join(meta["roles"])
+            exchange_summary = first_turn.get("summary") if first_turn else ""
+            if role_summary:
+                exchange_summary = f"{meta['turnCount']} turns · {role_summary}" + (f" · {exchange_summary}" if exchange_summary else "")
+
+            history_children.append({
+                "id": f"exchange-{exchange_index}-{exchange_id}",
+                "kind": "exchange",
+                "label": exchange_labels[exchange_id],
+                "summary": exchange_summary[:160],
+                "data": meta,
+                "children": turns_in_exchange,
+            })
+
+        tree.append({
+            "id": "conversation-history",
+            "kind": "conversation_history",
+            "label": "Conversation History",
+            "summary": f"{len(history_children)} exchanges",
+            "data": {
+                "exchangeCount": len(history_children),
+                "turnCount": len(turns),
+                "messageCount": len(messages),
+            },
+            "children": history_children,
+        })
+
+        return tree
+
+    def _make_preview_session(self, session: Any, enabled_tools: list[str] | None) -> Any:
+        if enabled_tools is None:
+            return session
+
+        class _PreviewSession:
+            def __init__(self, base_session: Any, tools_override: list[str]):
+                self._base_session = base_session
+                self.enabled_tools = list(tools_override)
+
+            def get_enabled_tools_list(self) -> list[str]:
+                return list(self.enabled_tools)
+
+            def get_enabled_tools_set(self) -> set[str]:
+                return set(self.enabled_tools)
+
+            def __getattr__(self, name: str) -> Any:
+                return getattr(self._base_session, name)
+
+        return _PreviewSession(session, enabled_tools)
+
+    @ws_expose
+    async def get_runner_context_preview(
+        self, session_id: str, enabled_tools: list[str] | None = None
+    ) -> RunnerContextPreviewResult:
+        """Get a structured preview of the effective runner context for a session."""
+        import json
+        from config import get_config
+        from core.prompt_builder import build_system_prompt
+        from core.openai_runner import OpenAICompatibleRunner
+        from core.strict_openai_runner import StrictOpenAICompatibleRunner
+        from core.gemini_runner import GeminiRunner
+        from claude_runner import ClaudeRunner
+
+        session = self._manager.get_session(session_id)
+        if not session:
+            session = await self._manager.load_session(session_id)
+        if not session:
+            raise ValueError(f"Session {session_id} not found")
+
+        config = get_config()
+        backend_config = self._get_backend_for_session(session)
+        backend_name = backend_config.name or session.backend_name or config.default_backend
+        backend_type = backend_config.type or "claude"
+        preview_session = self._make_preview_session(session, enabled_tools)
+        effective_enabled_tools = preview_session.get_enabled_tools_list()
+
+        messages = self._turns_to_messages(session.turns)
+        system_prompt = build_system_prompt(
+            backend_type=backend_type,
+            user_prompt=backend_config.user_prompt,
+            session=preview_session,
+            enabled_tools=effective_enabled_tools,
+        ) or ""
+
+        raw_text = ClaudeRunner.build_context(messages, "")
+        packaged_messages_json = ""
+        packaged_format = "text"
+
+        if backend_type == "claude":
+            packaged_format = "claude_content_blocks"
+            builder = ContextBuilder()
+            packaged = builder.build_message_content(messages, "")
+            packaged_messages_json = json.dumps(packaged, indent=2, default=str)
+        elif backend_type == "openai":
+            packaged_format = "openai_messages"
+            runner = OpenAICompatibleRunner(
+                base_url=backend_config.base_url or "http://localhost",
+                api_key=backend_config.api_key or "debug-preview",
+                model=backend_config.model,
+                user_prompt=backend_config.user_prompt,
+                context_window=backend_config.context_window or 128000,
+            )
+            runner.set_session(preview_session)
+            packaged = runner.build_messages(messages, "")
+            packaged_messages_json = json.dumps(packaged, indent=2, default=str)
+        elif backend_type == "openai_strict":
+            packaged_format = "openai_strict_messages"
+            runner = StrictOpenAICompatibleRunner(
+                base_url=backend_config.base_url or "http://localhost",
+                api_key=backend_config.api_key or "debug-preview",
+                model=backend_config.model,
+                user_prompt=backend_config.user_prompt,
+                context_window=backend_config.context_window or 128000,
+            )
+            runner.set_session(preview_session)
+            packaged = runner.build_messages(messages, "")
+            packaged_messages_json = json.dumps(packaged, indent=2, default=str)
+        elif backend_type == "gemini":
+            packaged_format = "gemini_contents"
+            runner = GeminiRunner(
+                api_key=backend_config.api_key or "debug-preview",
+                model=backend_config.model,
+                user_prompt=backend_config.user_prompt,
+                context_window=backend_config.context_window or 200000,
+            )
+            runner.set_session(preview_session)
+            packaged = runner.build_contents(messages, "")
+            packaged_messages_json = json.dumps(packaged, indent=2, default=str)
+
+        tree = self._build_runner_context_tree(session.turns, messages, system_prompt)
+
+        return RunnerContextPreviewResult(
+            backend_name=backend_name,
+            backend_type=backend_type,
+            system_prompt=system_prompt,
+            system_prompt_length=len(system_prompt),
+            raw_text=raw_text,
+            raw_length=len(raw_text),
+            packaged_messages_json=packaged_messages_json,
+            packaged_messages_length=len(packaged_messages_json),
+            packaged_format=packaged_format,
+            tree=tree,
+            turn_count=len(session.turns),
+            message_count=len(messages),
+            effective_enabled_tools=effective_enabled_tools,
+        )
 
     @ws_expose
     async def get_tool_schemas_preview(
