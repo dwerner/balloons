@@ -1,0 +1,6 @@
+/target
+/runs
+Cargo.lock
+cargo-*.log
+*.pem
+commit-changes.sh

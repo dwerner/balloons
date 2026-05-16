@@ -1,0 +1,54 @@
+[package]
+name = "surfer-rs"
+version = "0.1.0"
+edition = "2024"
+license = "MIT"
+description = "Async browser automation crate with runtime agnosticism"
+repository = "https://github.com/danjenson/surfer-rs"
+keywords = ["browser", "automation", "webdriver", "selenium", "testing"]
+categories = ["web-programming", "development-tools::testing"]
+
+[lib]
+name = "surfer_rs"
+path = "src/lib.rs"
+
+[features]
+default = ["smol-runtime"]
+smol-runtime = ["smol", "async-process", "smol-timeout"]
+
+[dependencies]
+async-trait = "0.1"
+futures = "0.3"
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+thiserror = "2.0"
+url = "2.5"
+tracing = "0.1"
+base64 = "0.22"
+chrono = { version = "0.4", features = ["serde"] }
+libc = "0.2"
+webdriver = { version = "0.53", default-features = false }
+futures-util = { version = "0.3", default-features = false, features = [
+    "alloc",
+] }
+futures-channel = "0.3"
+futures-lite = "2"
+async-channel = "2"
+async-lock = "3"
+cookie = { version = "0.18.0", features = ["percent-encode"] }
+mime = "0.3.9"
+time = "0.3"
+isahc = "1.8.1"
+http = "0.2"
+
+smol = { version = "2.0", optional = true }
+async-process = { version = "2.0", optional = true }
+smol-timeout = { version = "0.6", optional = true }
+
+which = "7.0"
+
+
+[dev-dependencies]
+mockall = "0.13"
+tempfile = "3.14"
+anyhow = "1.0"
