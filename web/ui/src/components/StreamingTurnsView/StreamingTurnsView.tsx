@@ -610,117 +610,27 @@ export function StreamingTurnsView({ sessionId, client, onSelectSession, onScrol
   }, []);
 
   /**
-   * Animate scroll to a target position with easing.
-   * Animation can be interrupted by user input (wheel/touch/manual scroll).
+   * Keep the transcript pinned to the absolute bottom while following.
+   * We intentionally avoid animated catch-up here because the desired behavior
+   * is to remain at the true bottom as content grows.
    */
-  const animateScrollTo = useCallback((targetPos: number, options?: { instant?: boolean }) => {
+  const animateScrollTo = useCallback((targetPos: number, _options?: { instant?: boolean }) => {
     const element = scrollContainerRef.current;
     if (!element) return;
 
-    // Cancel any existing animation
     cancelScrollAnimation();
-
-    const currentPos = element.scrollTop;
-    const distance = targetPos - currentPos;
-
-    // Check if instant mode is enabled
-    const isInstant = autoscrollInstantRef.current;
-
-    // If instant requested, instant setting enabled, or distance is small, just jump
-    if (options?.instant || isInstant || Math.abs(distance) < 10) {
-      programmaticScrollCountRef.current++;
-      element.scrollTop = targetPos;
-      setTimeout(() => {
-        programmaticScrollCountRef.current = Math.max(0, programmaticScrollCountRef.current - 1);
-      }, 50);
-      return;
-    }
-
-    // Calculate duration based on distance and configured speed (px/s)
-    // Duration = distance / speed - configured speed is the MAX speed
-    const speed = autoscrollSpeedRef.current;
-    const duration = Math.max(50, (Math.abs(distance) / speed) * 1000);
-
     programmaticScrollCountRef.current++;
+    element.scrollTop = targetPos;
 
-    const startTime = performance.now();
-    scrollAnimationStartRef.current = {
-      startTime,
-      startPos: currentPos,
-      targetPos,
-      duration,
-    };
+    setScrollMetrics({
+      scrollTop: element.scrollTop,
+      scrollHeight: element.scrollHeight,
+      clientHeight: element.clientHeight,
+    });
 
-    const animate = (now: number) => {
-      const animState = scrollAnimationStartRef.current;
-      if (!animState || !scrollContainerRef.current) {
-        programmaticScrollCountRef.current = Math.max(0, programmaticScrollCountRef.current - 1);
-        return;
-      }
-
-      // Check if user is scrolling - cancel animation
-      if (userScrollingRef.current) {
-        cancelScrollAnimation();
-        programmaticScrollCountRef.current = Math.max(0, programmaticScrollCountRef.current - 1);
-        return;
-      }
-
-      const elapsed = now - animState.startTime;
-      const progress = Math.min(1, elapsed / animState.duration);
-
-      const newPos = animState.startPos + (animState.targetPos - animState.startPos) * linearEasing(progress);
-      scrollContainerRef.current.scrollTop = newPos;
-
-      // Update scroll metrics for minimap during animation
-      setScrollMetrics({
-        scrollTop: scrollContainerRef.current.scrollTop,
-        scrollHeight: scrollContainerRef.current.scrollHeight,
-        clientHeight: scrollContainerRef.current.clientHeight,
-      });
-
-      if (progress < 1) {
-        scrollAnimationRef.current = requestAnimationFrame(animate);
-      } else {
-        // Animation complete - check if we should continue
-        const element = scrollContainerRef.current;
-        const currentBottom = element.scrollHeight - element.clientHeight;
-
-        // If we're still following and there's more content below, keep going
-        if (isFollowingRef.current && !userScrollingRef.current && currentBottom > element.scrollTop + 5) {
-          // If instant mode is now enabled, jump directly
-          if (autoscrollInstantRef.current) {
-            element.scrollTop = currentBottom;
-            scrollAnimationRef.current = null;
-            scrollAnimationStartRef.current = null;
-            setTimeout(() => {
-              programmaticScrollCountRef.current = Math.max(0, programmaticScrollCountRef.current - 1);
-            }, 50);
-          } else {
-            // Restart animation to new target
-            const currentSpeed = autoscrollSpeedRef.current;
-            const remainingDistance = Math.abs(currentBottom - element.scrollTop);
-            scrollAnimationStartRef.current = {
-              startTime: performance.now(),
-              startPos: element.scrollTop,
-              targetPos: currentBottom,
-              duration: Math.max(50, (remainingDistance / currentSpeed) * 1000),
-            };
-            scrollAnimationRef.current = requestAnimationFrame(animate);
-          }
-        } else {
-          // Actually done - at bottom or not following
-          scrollAnimationRef.current = null;
-          scrollAnimationStartRef.current = null;
-          // Ensure we're exactly at target
-          element.scrollTop = animState.targetPos;
-          setTimeout(() => {
-            programmaticScrollCountRef.current = Math.max(0, programmaticScrollCountRef.current - 1);
-          }, 50);
-        }
-      }
-    };
-
-    scrollAnimationRef.current = requestAnimationFrame(animate);
+    setTimeout(() => {
+      programmaticScrollCountRef.current = Math.max(0, programmaticScrollCountRef.current - 1);
+    }, 50);
   }, [cancelScrollAnimation]);
 
   // Scroll to bottom and resume following (instant, not animated)
@@ -909,30 +819,8 @@ export function StreamingTurnsView({ sessionId, client, onSelectSession, onScrol
         }
 
         if (newScrollHeight > lastScrollHeight && isFollowingRef.current && !userScrollingRef.current) {
-          // Content grew while following - if there's already an animation running,
-          // restart it with new target and recalculated duration to maintain constant speed.
-          // Otherwise start a new animation.
           const newTarget = newScrollHeight - el.clientHeight;
-
-          // If instant mode, just jump to bottom
-          if (autoscrollInstantRef.current) {
-            cancelScrollAnimation();
-            el.scrollTop = newTarget;
-          } else if (scrollAnimationStartRef.current && scrollAnimationRef.current) {
-            // Recalculate from current position to new target at configured speed
-            const currentSpeed = autoscrollSpeedRef.current;
-            const currentPos = el.scrollTop;
-            const remainingDistance = Math.abs(newTarget - currentPos);
-            scrollAnimationStartRef.current = {
-              startTime: performance.now(),
-              startPos: currentPos,
-              targetPos: newTarget,
-              duration: Math.max(50, (remainingDistance / currentSpeed) * 1000),
-            };
-          } else {
-            // Start new animated scroll to bottom
-            animateScrollTo(newTarget);
-          }
+          animateScrollTo(newTarget);
         }
         lastScrollHeight = newScrollHeight;
       });
@@ -1032,59 +920,75 @@ export function StreamingTurnsView({ sessionId, client, onSelectSession, onScrol
     requestAnimationFrame(frame);
 
     return () => { cancelled = true; };
-  }, [isLoading, isLoadingHistory, scrollContainerElement, turnsOrGroups.length, isInitialLoadComplete, historyLoadMode]);
-
+  }, [isLoading, isLoadingHistory, scrollContainerElement, isInitialLoadComplete, historyLoadMode, turnsOrGroups.length]);
   // Auto-scroll when NEW transcript content arrives and we're following (after initial load)
-  // Pending assistant placeholders should not affect following state or scroll behavior.
+  // Also: if a new user turn arrives while we're already at the bottom, re-enter follow mode
+  // so we don't incorrectly show the "scroll to bottom" affordance.
   const prevRenderedTurnCountRef = useRef(turnsOrGroups.length);
+  const prevLastTurnRoleRef = useRef<string | undefined>(turnsOrGroups[turnsOrGroups.length - 1]?.turns[turnsOrGroups[turnsOrGroups.length - 1]?.turns.length - 1]?.role);
   const prevSessionIdForScrollRef = useRef(sessionId);
   useEffect(() => {
     // Reset previous counts when session changes
     if (prevSessionIdForScrollRef.current !== sessionId) {
       prevSessionIdForScrollRef.current = sessionId;
       prevRenderedTurnCountRef.current = 0;
+      prevLastTurnRoleRef.current = undefined;
       return; // Skip scroll on session change
     }
 
     const prevCount = prevRenderedTurnCountRef.current;
     const currentCount = turnsOrGroups.length;
+    const lastGroup = turnsOrGroups[turnsOrGroups.length - 1];
+    const lastTurn = lastGroup?.turns[lastGroup.turns.length - 1];
+    const lastTurnRole = lastTurn?.role;
     prevRenderedTurnCountRef.current = currentCount;
+    const prevLastTurnRole = prevLastTurnRoleRef.current;
+    prevLastTurnRoleRef.current = lastTurnRole;
 
-    // Only scroll if actual rendered transcript content was ADDED (not removals)
-    // and user is following (check ref to avoid race conditions)
+    // Only react when actual rendered transcript content was ADDED (not removals)
     if (currentCount <= prevCount || currentCount === 0) return;
-    if (!isFollowingRef.current) return;
 
-    // Don't fight with user - if they're actively scrolling, skip this update
+    // If a user turn was added while we're already at bottom, resume following.
+    // This prevents stale paused state from showing the scroll-to-bottom button
+    // even though the viewport is already pinned at the bottom.
+    const atBottomNow = checkAtBottom();
+    if (lastTurnRole === 'user' && prevLastTurnRole !== 'user' && atBottomNow && !userScrollingRef.current) {
+      setIsFollowing(true);
+      isFollowingRef.current = true;
+      setIsAtBottom(true);
+    }
+
+    // Don't fight with user - if they're actively scrolling, skip auto-follow update
     if (userScrollingRef.current) return;
 
     // Skip during initial load or settling period
     if (!isInitialLoadComplete || !allowAnimatedScrollRef.current) return;
+
+    // If we're not currently following, but we are at the bottom, treat that as intent to follow.
+    if (!isFollowingRef.current && atBottomNow) {
+      setIsFollowing(true);
+      isFollowingRef.current = true;
+      setIsAtBottom(true);
+    }
+
+    if (!isFollowingRef.current) return;
 
     // Use double requestAnimationFrame to ensure DOM has fully laid out
     // First RAF: browser schedules layout
     // Second RAF: layout is complete, scrollHeight is accurate
     requestAnimationFrame(() => {
       requestAnimationFrame(() => {
-        // Double-check we're still following and user isn't scrolling
-        // Also check that animated scroll is allowed (not in settling period)
-        if (!isFollowingRef.current || userScrollingRef.current || !scrollContainerRef.current || !allowAnimatedScrollRef.current) {
+        if (userScrollingRef.current || !scrollContainerRef.current || !allowAnimatedScrollRef.current) {
           return;
         }
 
         const element = scrollContainerRef.current;
         const targetPos = element.scrollHeight - element.clientHeight;
 
-        if (scrollAnimationStartRef.current && scrollAnimationRef.current) {
-          // Ongoing animation: update its target
-          scrollAnimationStartRef.current.targetPos = targetPos;
-        } else {
-          // Start new animated scroll to bottom
-          animateScrollTo(targetPos);
-        }
+        animateScrollTo(targetPos);
       });
     });
-  }, [turnsOrGroups.length, animateScrollTo, isInitialLoadComplete, sessionId]);
+  }, [turnsOrGroups, animateScrollTo, isInitialLoadComplete, sessionId, checkAtBottom]);
 
   // Early returns AFTER all hooks have been called
   if (!sessionId) {
@@ -1110,8 +1014,10 @@ export function StreamingTurnsView({ sessionId, client, onSelectSession, onScrol
     return <div className="streaming-turns-view error">{error}</div>;
   }
 
-  // Show scroll-to-bottom button when user has scrolled away
-  const showScrollIndicator = !isFollowing;
+  // Show scroll-to-bottom button only when paused and actually away from bottom.
+  // This avoids showing it when state briefly says "not following" even though the
+  // viewport is already at the bottom.
+  const showScrollIndicator = !isFollowing && !isAtBottom;
 
   // During initial load, we render the content hidden (for layout/scroll calculation)
   // but show a spinner overlay. Once scroll position is set, we reveal.
