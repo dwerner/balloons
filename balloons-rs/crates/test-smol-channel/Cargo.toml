@@ -12,4 +12,7 @@ crate-type = ["cdylib"]
 smol = "2"
 async-channel = "2"
 pyo3 = { version = "0.28", features = ["extension-module"] }
-pyo3-async-runtimes = { path = "../../../../pyo3-async-runtimes", features = ["smol-runtime", "attributes"] }
+pyo3-async-runtimes = { workspace = true, features = [
+    "smol-runtime",
+    "attributes",
+] }

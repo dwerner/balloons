@@ -8,7 +8,7 @@ description = "Browser automation for Balloons using surfer-rs with smol runtime
 
 [dependencies]
 # Browser automation - using local smol-based fantoccini fork
-surfer-rs = { path = "../../../../forks/surfer-rs", features = ["smol-runtime"], default-features = false }
+surfer-rs = { workspace = true }
 
 # Async runtime (smol for core-executor compatibility)
 smol = "2"

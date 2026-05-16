@@ -11,13 +11,17 @@ repository = "https://github.com/dwerner/balloons"
 
 [workspace.dependencies]
 # Async runtime
-core-executor = { path = "../../core-executor" }
+#core-executor = { path = "../../core-executor" }
+core-executor = { git = "https://github.com/dwerner/core-executor" }
 
 # Tokenization
 tiktoken-rs = "0.6"
 
 # Process management
-procstream = { path = "../../procstream", features = ["macros"] }
+#procstream = { path = "../../procstream", features = ["macros"] }
+procstream = { git = "https://github.com/dwerner/procstream", branch = "main", features = [
+    "macros",
+] }
 
 # Storage
 heed = "0.21"
@@ -54,7 +58,10 @@ tempfile = "3"
 pyo3 = { version = "0.28", features = ["extension-module"] }
 
 # Async Python bindings
-pyo3-async-runtimes = { path = "../../pyo3-async-runtimes", features = ["smol-runtime"] }
+#pyo3-async-runtimes = { path = "../../pyo3-async-runtimes", features = ["smol-runtime"] }
+pyo3-async-runtimes = { git = "https://github.com/dwerner/pyo3-async-runtimes", branch = "add-smol-runtime", features = [
+    "smol-runtime",
+] }
 
 # Git operations
 git2 = "0.20"
@@ -68,4 +75,7 @@ balloons-core = { path = "crates/balloons-core" }
 balloons-supervisor = { path = "crates/balloons-supervisor" }
 balloons-browser = { path = "crates/balloons-browser" }
 balloons-git = { path = "crates/balloons-git" }
+surfer-rs = { path = "crates/surfer-rs" }
 lsp-framing = { path = "crates/lsp-framing" }
+
+#

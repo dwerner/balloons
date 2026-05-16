@@ -27,6 +27,12 @@ dependencies = [
 ]
 
 [[package]]
+name = "anstyle"
+version = "1.0.14"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "940b3a0ca603d1eade50a4846a2afffd5ef57a9feac2c0e2ec2e14f9ead76000"
+
+[[package]]
 name = "anyhow"
 version = "1.0.101"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -537,6 +543,7 @@ dependencies = [
 [[package]]
 name = "core-executor"
 version = "0.1.0"
+source = "git+https://github.com/dwerner/core-executor#dd69571382354c0a482177512afff6083b050734"
 dependencies = [
  "async-channel 1.9.0",
  "async-executor",
@@ -646,7 +653,7 @@ dependencies = [
  "openssl-sys",
  "pkg-config",
  "vcpkg",
- "windows-sys 0.60.2",
+ "windows-sys 0.61.2",
 ]
 
 [[package]]
@@ -701,6 +708,12 @@ dependencies = [
  "quote",
  "syn 2.0.114",
 ]
+
+[[package]]
+name = "downcast"
+version = "0.11.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "1435fa1053d8b2fbbe9be7e97eca7f33d37b28409959813daefc1446a14247f1"
 
 [[package]]
 name = "doxygen-rs"
@@ -781,29 +794,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "fantoccini"
-version = "0.22.0"
-dependencies = [
- "async-channel 2.5.0",
- "async-lock 3.4.2",
- "base64 0.22.1",
- "cookie 0.18.1",
- "futures-channel",
- "futures-lite 2.6.1",
- "futures-util",
- "http 0.2.12",
- "isahc",
- "mime",
- "serde",
- "serde_json",
- "smol",
- "smol-timeout",
- "time",
- "url",
- "webdriver",
-]
-
-[[package]]
 name = "fastrand"
 version = "1.9.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -858,6 +848,15 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "cb4cb245038516f5f85277875cdaa4f7d2c9a0fa0468de06ed190163b1581fcf"
 dependencies = [
  "percent-encoding",
+]
+
+[[package]]
+name = "fragile"
+version = "2.1.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "8878864ba14bb86e818a412bfd6f18f9eabd4ec0f008a28e8f7eb61db532fcf9"
+dependencies = [
+ "futures-core",
 ]
 
 [[package]]
@@ -1112,16 +1111,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "http-body"
-version = "1.0.1"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "1efedce1fb8e6913f23e0c92de8e62cd5b772a67e7b3946df930a62566c93184"
-dependencies = [
- "bytes",
- "http 1.4.0",
-]
-
-[[package]]
 name = "httparse"
 version = "1.10.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1159,18 +1148,6 @@ dependencies = [
  "tar",
  "ureq",
  "windows-sys 0.61.2",
-]
-
-[[package]]
-name = "hyper"
-version = "1.8.1"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "2ab2d4f250c3d7b1c9fcdff1cece94ea4e2dfbec68614f7b87cb205f24ca9d11"
-dependencies = [
- "bytes",
- "http 1.4.0",
- "http-body",
- "tokio",
 ]
 
 [[package]]
@@ -1399,14 +1376,14 @@ version = "1.8.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "036cdb58c0a12db9e7162af193785bf9b6797f7b52035ff03f91c591619fde67"
 dependencies = [
- "async-channel 1.9.0",
+ "async-channel 2.5.0",
  "castaway",
  "crossbeam-utils",
  "curl",
  "curl-sys",
  "encoding_rs",
  "event-listener 5.4.1",
- "futures-lite 1.13.0",
+ "futures-lite 2.6.1",
  "http 0.2.12",
  "log",
  "mime",
@@ -1613,6 +1590,32 @@ checksum = "1fa76a2c86f704bdb222d66965fb3d63269ce38518b83cb0575fca855ebb6316"
 dependencies = [
  "adler2",
  "simd-adler32",
+]
+
+[[package]]
+name = "mockall"
+version = "0.13.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "39a6bfcc6c8c7eed5ee98b9c3e33adc726054389233e201c95dab2d41a3839d2"
+dependencies = [
+ "cfg-if",
+ "downcast",
+ "fragile",
+ "mockall_derive",
+ "predicates",
+ "predicates-tree",
+]
+
+[[package]]
+name = "mockall_derive"
+version = "0.13.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "25ca3004c2efe9011bd4e461bd8256445052b9615405b4f7ea43fc8ca5c20898"
+dependencies = [
+ "cfg-if",
+ "proc-macro2",
+ "quote",
+ "syn 2.0.114",
 ]
 
 [[package]]
@@ -1882,6 +1885,32 @@ dependencies = [
 ]
 
 [[package]]
+name = "predicates"
+version = "3.1.4"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "ada8f2932f28a27ee7b70dd6c1c39ea0675c55a36879ab92f3a715eaa1e63cfe"
+dependencies = [
+ "anstyle",
+ "predicates-core",
+]
+
+[[package]]
+name = "predicates-core"
+version = "1.0.10"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "cad38746f3166b4031b1a0d39ad9f954dd291e7854fcc0eed52ee41a0b50d144"
+
+[[package]]
+name = "predicates-tree"
+version = "1.0.13"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "d0de1b847b39c8131db0467e9df1ff60e6d0562ab8e9a16e568ad0fdb372e2f2"
+dependencies = [
+ "predicates-core",
+ "termtree",
+]
+
+[[package]]
 name = "proc-macro2"
 version = "1.0.106"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1893,6 +1922,7 @@ dependencies = [
 [[package]]
 name = "procstream"
 version = "0.1.0"
+source = "git+https://github.com/dwerner/procstream?branch=main#525b083a4b36426ed1f6ae15ae4d158717bb2105"
 dependencies = [
  "async-channel 2.5.0",
  "async-process",
@@ -1912,6 +1942,7 @@ dependencies = [
 [[package]]
 name = "procstream-macros"
 version = "0.1.0"
+source = "git+https://github.com/dwerner/procstream?branch=main#525b083a4b36426ed1f6ae15ae4d158717bb2105"
 dependencies = [
  "proc-macro2",
  "quote",
@@ -1954,6 +1985,7 @@ dependencies = [
 [[package]]
 name = "pyo3-async-runtimes"
 version = "0.28.0"
+source = "git+https://github.com/dwerner/pyo3-async-runtimes?branch=add-smol-runtime#0975804f0b3fe5c46e75018b421aa1d00909e387"
 dependencies = [
  "futures-channel",
  "futures-util",
@@ -1967,6 +1999,7 @@ dependencies = [
 [[package]]
 name = "pyo3-async-runtimes-macros"
 version = "0.28.0"
+source = "git+https://github.com/dwerner/pyo3-async-runtimes?branch=add-smol-runtime#0975804f0b3fe5c46e75018b421aa1d00909e387"
 dependencies = [
  "proc-macro2",
  "quote",
@@ -2390,19 +2423,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "smol-hyper"
-version = "0.1.1"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "7428a49d323867702cd12b97b08a6b0104f39ec13b49117911f101271321bc1a"
-dependencies = [
- "async-executor",
- "async-io 2.6.0",
- "futures-io",
- "hyper",
- "pin-project-lite",
-]
-
-[[package]]
 name = "smol-potat"
 version = "1.1.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -2490,21 +2510,33 @@ checksum = "13c2bddecc57b384dee18652358fb23172facb8a2c51ccc10d74c157bdea3292"
 name = "surfer-rs"
 version = "0.1.0"
 dependencies = [
+ "anyhow",
+ "async-channel 2.5.0",
+ "async-lock 3.4.2",
  "async-process",
  "async-trait",
  "base64 0.22.1",
  "chrono",
- "fantoccini",
+ "cookie 0.18.1",
  "futures",
+ "futures-channel",
+ "futures-lite 2.6.1",
+ "futures-util",
+ "http 0.2.12",
+ "isahc",
  "libc",
+ "mime",
+ "mockall",
  "serde",
  "serde_json",
  "smol",
- "smol-hyper",
  "smol-timeout",
+ "tempfile",
  "thiserror 2.0.18",
+ "time",
  "tracing",
  "url",
+ "webdriver",
  "which",
 ]
 
@@ -2579,6 +2611,12 @@ dependencies = [
  "rustix 1.1.3",
  "windows-sys 0.61.2",
 ]
+
+[[package]]
+name = "termtree"
+version = "0.5.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "8f50febec83f5ee1df3015341d8bd429f2d1cc62bcba7ea2076759d315084683"
 
 [[package]]
 name = "test-smol-channel"
@@ -2694,15 +2732,6 @@ checksum = "42d3e9c45c09de15d06dd8acf5f4e0e399e85927b7f00711024eb7ae10fa4869"
 dependencies = [
  "displaydoc",
  "zerovec 0.11.5",
-]
-
-[[package]]
-name = "tokio"
-version = "1.49.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "72a2903cd7736441aac9df9d7688bd0ce48edccaadf181c3b90be801e81d3d86"
-dependencies = [
- "pin-project-lite",
 ]
 
 [[package]]
@@ -2937,6 +2966,7 @@ dependencies = [
 [[package]]
 name = "wat-cpu"
 version = "0.1.0"
+source = "git+https://github.com/dwerner/core-executor#dd69571382354c0a482177512afff6083b050734"
 dependencies = [
  "libc",
  "winapi",

@@ -82,7 +82,7 @@ maturin develop  # Install to current venv
 ### Storage Usage
 
 ```python
-from balloons_storage import Storage
+from balloons_py import Storage
 
 # Open/create a database
 storage = Storage("/path/to/balloons.lmdb")
@@ -113,7 +113,7 @@ This is designed for LLM tool use - allowing an AI assistant to start, monitor, 
 background processes without blocking on completion.
 
 ```python
-from balloons_storage import Supervisor
+from balloons_py import Supervisor
 import json
 
 # Create a supervisor

@@ -221,8 +221,16 @@ class SoundService:
         if not path.exists() or not path.is_file():
             return None
 
-        # Read and encode
-        data = await asyncio.to_thread(path.read_bytes)
+        # Read and encode. Avoid asyncio.to_thread(path.read_bytes) here because
+        # repeated concurrent calls can briefly consume many file descriptors
+        # (pathlib.open() in a thread keeps the file open until the read completes).
+        # Reading via a context manager in the worker ensures descriptors close
+        # immediately even under heavy concurrency.
+        def _read_file() -> bytes:
+            with path.open("rb") as f:
+                return f.read()
+
+        data = await asyncio.to_thread(_read_file)
         data_base64 = base64.b64encode(data).decode("ascii")
 
         return SoundData(

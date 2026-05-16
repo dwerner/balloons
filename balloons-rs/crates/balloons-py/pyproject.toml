@@ -3,7 +3,7 @@ requires = ["maturin>=1.0,<2.0"]
 build-backend = "maturin"
 
 [project]
-name = "balloons-storage"
+name = "balloons-py"
 version = "0.1.0"
 description = "ACID storage backend for Balloons"
 requires-python = ">=3.11"
@@ -14,4 +14,4 @@ classifiers = [
 
 [tool.maturin]
 features = ["pyo3/extension-module"]
-module-name = "balloons_storage"
+module-name = "balloons_py"

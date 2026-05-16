@@ -3553,7 +3553,7 @@ fn git_staged_files(py: Python<'_>, repo_path: &str) -> PyResult<String> {
 
 /// Python module definition
 #[pymodule]
-fn balloons_storage(m: &Bound<'_, PyModule>) -> PyResult<()> {
+fn balloons_py(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_class::<Storage>()?;
     m.add_class::<Supervisor>()?;
     m.add_class::<Tokenizer>()?;
