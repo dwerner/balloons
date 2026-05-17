@@ -2,7 +2,7 @@
 //!
 //! Generated from Python domain entities marked with @rust_schema.
 //! Source: models.py and other domain modules
-//! Generated: 2026-05-17T13:43:38.178839
+//! Generated: 2026-05-17T14:06:53.216987
 //!
 //! To regenerate:
 //!     python -m codegen.generate_rust
@@ -10,6 +10,7 @@
 //! To add new types, add @rust_schema decorator to dataclasses in your domain modules.
 
 use serde::{Deserialize, Serialize};
+
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ForkChildData {
