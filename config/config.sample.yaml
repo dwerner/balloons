@@ -48,12 +48,23 @@ backends:
     # Optional: Add additional context to Claude's built-in system prompt
     # system_prompt: ~/.balloons/prompts/additional-context.md
 
+  # OpenAI API - GPT models
+  # openai:
+  #   type: openai
+  #   base_url: https://api.openai.com/v1
+  #   api_key: ${OPENAI_API_KEY}  # env var reference
+  #   model: gpt-4o  # or gpt-4o-mini, gpt-4-turbo, o1, etc.
+  #   context_window: 128000
+  #   # Custom system prompt (required for non-Claude backends)
+  #   system_prompt: ~/.balloons/prompts/coding-assistant.md
+
   # OpenRouter - access many models via OpenAI-compatible API
   # openrouter:
   #   type: openai
   #   base_url: https://openrouter.ai/api/v1
   #   api_key: ${OPENROUTER_API_KEY}  # env var reference
   #   model: anthropic/claude-sonnet-4  # or any model on OpenRouter
+  #   context_window: 200000
   #   # Custom system prompt (required for non-Claude backends)
   #   system_prompt: ~/.balloons/prompts/coding-assistant.md
 
@@ -91,19 +102,25 @@ backends:
 # WebSocket server for web UI and external integrations
 # Enables the React web UI (web/ui/) to connect to the running TUI
 # websocket:
-#   enabled: false        # Set to true to start WebSocket server
-#   host: localhost       # Bind address (use 0.0.0.0 for LAN access)
-#   port: 8765            # WebSocket port
-#   # TLS configuration (optional, for wss://)
-#   # tls:
-#   #   enabled: false
-#   #   cert_file: ~/.balloons/certs/cert.pem
-#   #   key_file: ~/.balloons/certs/key.pem
-#   # JWT authentication (optional)
-#   # jwt:
-#   #   enabled: false
-#   #   secret: your-secret-key
-#   #   expiration_seconds: 86400
+#   enabled: true         # Set to true to start WebSocket server
+#   host: 0.0.0.0         # Bind address (use 0.0.0.0 for LAN access)
+#   port: 8700            # WebSocket port (auth server runs on port+1)
+#   # TLS configuration (required for HTTPS web UI)
+#   tls:
+#     enabled: true
+#     cert_path: ~/.balloons/certs/dev.crt
+#     key_path: ~/.balloons/certs/dev.key
+#   # JWT authentication
+#   jwt:
+#     enabled: true
+#     secret: your-secret-key  # Generate with: openssl rand -base64 32
+#     expiration_seconds: 86400
+
+# Bootstrap admin user (created on first run if no users exist)
+# auth:
+#   admin:
+#     username: admin
+#     password: changeme  # Change this!
 
 # Voice input configuration (speech-to-text)
 # Uses RealtimeSTT server for transcription

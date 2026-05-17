@@ -22,6 +22,7 @@ if TYPE_CHECKING:
 
 # Browser tool names for routing in tool_executor
 BROWSER_TOOL_NAMES = {
+    "browser_list",
     "browser_start",
     "browser_stop",
     "browser_goto",
@@ -61,6 +62,7 @@ def get_browser_tools() -> list[dict]:
     """
     # Core browser tools (have JSON schemas)
     core_tools = [
+        "browser_list",
         "browser_start",
         "browser_stop",
         "browser_goto",
@@ -123,7 +125,9 @@ async def execute_browser_tool(
         # Get browser instance (from registry or session)
         browser = await _get_browser(session, browser_name)
 
-        if name == "browser_start":
+        if name == "browser_list":
+            return await _browser_list(session), False
+        elif name == "browser_start":
             return await _browser_start(args, session, browser_name)
         elif name == "browser_stop":
             return await _browser_stop(session, browser_name)
@@ -395,6 +399,78 @@ async def _get_browser(session: "Session", browser_name: Optional[str] = None):
         return getattr(session, "_browser", None)
 
     return None
+
+
+async def _browser_list(session: "Session") -> str:
+    """List all browser sessions from the global registry, with legacy fallback."""
+    try:
+        from service.browser_state_service import _service_instance
+
+        if _service_instance is not None:
+            result = _service_instance.list_browsers()
+            payload = {
+                "default_browser": result.default_browser,
+                "browsers": [
+                    {
+                        "name": b.name,
+                        "browser_id": b.browser_id,
+                        "browser_type": b.browser_type,
+                        "headless": b.headless,
+                        "status": b.status,
+                        "current_url": b.current_url,
+                        "current_title": b.current_title,
+                        "created_at": b.created_at,
+                        "error": b.error,
+                        "is_default": b.name == result.default_browser,
+                    }
+                    for b in result.browsers
+                ],
+            }
+            return json.dumps(payload, indent=2, ensure_ascii=False)
+    except ImportError:
+        pass
+
+    browser = getattr(session, "_browser", None)
+    if browser is None:
+        return json.dumps({"default_browser": None, "browsers": []}, indent=2, ensure_ascii=False)
+
+    browser_id = ""
+    current_url = None
+    current_title = None
+
+    try:
+        browser_id = await browser.id()
+    except Exception:
+        pass
+
+    try:
+        current_url = await browser.url()
+    except Exception:
+        pass
+
+    try:
+        current_title = await browser.title()
+    except Exception:
+        pass
+
+    payload = {
+        "default_browser": "default",
+        "browsers": [
+            {
+                "name": "default",
+                "browser_id": browser_id,
+                "browser_type": None,
+                "headless": None,
+                "status": "connected",
+                "current_url": current_url,
+                "current_title": current_title,
+                "created_at": None,
+                "error": None,
+                "is_default": True,
+            }
+        ],
+    }
+    return json.dumps(payload, indent=2, ensure_ascii=False)
 
 
 async def _browser_start(

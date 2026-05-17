@@ -525,7 +525,7 @@ BALLOON_TOOL_NAMES = {
     # Watcher mode tools
     "send_to_target",
     # Browser automation tools
-    "browser_start", "browser_stop", "browser_goto", "browser_see",
+    "browser_list", "browser_start", "browser_stop", "browser_goto", "browser_see",
     "browser_inputs", "browser_buttons", "browser_links",
     "browser_click", "browser_click_button", "browser_fill", "browser_set_input",
     "browser_screenshot", "browser_execute_js",

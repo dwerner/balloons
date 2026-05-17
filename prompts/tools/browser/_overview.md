@@ -17,10 +17,11 @@ These tools provide programmatic access to a real web browser (Firefox or Chrome
 
 ### Browser Lifecycle
 
-1. **Start**: Call `browser_start` to launch a browser session
-2. **Navigate**: Use `browser_goto` to visit URLs
-3. **Interact**: Use `browser_see`, `browser_click`, `browser_fill`, etc.
-4. **Stop**: Call `browser_stop` when done (important to free resources)
+1. **Check first**: Call `browser_list` to see whether a usable browser session already exists
+2. **Start only if needed**: Call `browser_start` only if no usable session is available
+3. **Navigate**: Use `browser_goto` to visit URLs
+4. **Interact**: Use `browser_see`, `browser_click`, `browser_fill`, etc.
+5. **Stop**: Call `browser_stop` when done (important to free resources)
 
 ### Recommended Workflow
 

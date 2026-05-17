@@ -1,0 +1,12 @@
+{
+  "type": "function",
+  "function": {
+    "name": "browser_list",
+    "description": "List all currently open browser sessions, including their names, IDs, status, and current URL/title. Use this before starting a new browser so you can reuse an existing one.",
+    "parameters": {
+      "type": "object",
+      "properties": {},
+      "required": []
+    }
+  }
+}
