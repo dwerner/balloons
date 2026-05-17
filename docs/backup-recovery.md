@@ -148,40 +148,40 @@ Sessions that already exist in the target are skipped.
 
 ## Python API
 
-All functions are available via the `balloons_storage` module:
+All functions are available via the `balloons_py` module:
 
 ```python
-import balloons_storage
+import balloons_py
 
 # Health check
-report = balloons_storage.health_check("/path/to/db")
+report = balloons_py.health_check("/path/to/db")
 print(f"Healthy: {report['is_healthy']}, Sessions: {report['session_count']}")
 
 # Create backup
-result = balloons_storage.create_backup("/path/to/db")
+result = balloons_py.create_backup("/path/to/db")
 print(f"Backup created at: {result['backup_path']}")
 
 # Create backup to specific directory
-result = balloons_storage.create_backup("/path/to/db", "/path/to/backup")
+result = balloons_py.create_backup("/path/to/db", "/path/to/backup")
 
 # List backups
-backups = balloons_storage.list_backups("/path/to/db")
+backups = balloons_py.list_backups("/path/to/db")
 for b in backups:
     print(f"{b['timestamp']}: {b['backup_path']}")
 
 # Restore from backup
-result = balloons_storage.restore_from_backup("/path/to/backup", "/path/to/target")
+result = balloons_py.restore_from_backup("/path/to/backup", "/path/to/target")
 
 # Export to JSON
-result = balloons_storage.export_to_json("/path/to/db", "/path/to/export")
+result = balloons_py.export_to_json("/path/to/db", "/path/to/export")
 print(f"Exported {result['sessions_exported']} sessions")
 
 # Import from JSON
-result = balloons_storage.import_from_json("/path/to/export", "/path/to/db")
+result = balloons_py.import_from_json("/path/to/export", "/path/to/db")
 print(f"Imported {result['sessions_imported']}, skipped {result['sessions_skipped']}")
 
 # Recover between databases
-result = balloons_storage.recover_database("/path/to/source", "/path/to/target")
+result = balloons_py.recover_database("/path/to/source", "/path/to/target")
 ```
 
 ## Backup Strategies
@@ -298,10 +298,10 @@ Create daily backups with cron:
 In your own scripts:
 
 ```python
-import balloons_storage
+import balloons_py
 
 def backup_before_operation():
-    result = balloons_storage.create_backup("~/.balloons/sessions.lmdb")
+    result = balloons_py.create_backup("~/.balloons/sessions.lmdb")
     print(f"Backup created: {result['backup_path']}")
     return result['backup_path']
 
@@ -310,6 +310,6 @@ backup_path = backup_before_operation()
 try:
     do_risky_operation()
 except Exception:
-    balloons_storage.restore_from_backup(backup_path, "~/.balloons/sessions.lmdb")
+    balloons_py.restore_from_backup(backup_path, "~/.balloons/sessions.lmdb")
     raise
 ```

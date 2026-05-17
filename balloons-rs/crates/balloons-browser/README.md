@@ -9,10 +9,10 @@ wrapping surfer-rs with the smol async runtime for compatibility with core-execu
 
 ## Python Usage
 
-The browser classes are exposed via the `balloons_storage` Python module:
+The browser classes are exposed via the `balloons_py` Python module:
 
 ```python
-from balloons_storage import Browser, BrowserConfig
+from balloons_py import Browser, BrowserConfig
 
 # Create a config
 config = BrowserConfig.firefox()  # or BrowserConfig.chrome()
@@ -66,7 +66,7 @@ browser.disconnect()
 ## Architecture
 
 ```
-Python (balloons_storage)
+Python (balloons_py)
     ↓
 PyO3 bindings (balloons-py)
     ↓

@@ -53,7 +53,7 @@ The old Textual-TUI-specific material below should be treated as superseded impl
 ┌───────────▼─────────────────────────────────────────────────────────────────┐
 │                           PERSISTENCE LAYER                                  │
 │  ┌──────────────────┐  ┌──────────────────┐                                 │
-│  │ Session          │  │ balloons_storage │                                 │
+│  │ Session          │  │ balloons_py      │                                 │
 │  │ (session.py)     │  │ (Rust, via PyO3) │                                 │
 │  └──────────────────┘  └──────────────────┘                                 │
 └─────────────────────────────────────────────────────────────────────────────┘

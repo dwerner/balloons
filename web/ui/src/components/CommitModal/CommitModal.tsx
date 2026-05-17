@@ -213,7 +213,7 @@ export const CommitModal = memo(function CommitModal({
         generationInProgressRef.current = false;
         stopTimer();
         cleanupRef.current = null;
-        // Don't show error - just leave message empty or with partial content
+        setError(`Failed to generate commit message: ${error}`);
       },
     });
 

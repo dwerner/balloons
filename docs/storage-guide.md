@@ -836,5 +836,5 @@ After making changes:
 3. [ ] Verify Rust compiles: `cd balloons-rs && cargo check`
 4. [ ] Run Rust tests: `cargo test --package balloons-core`
 5. [ ] Build Python bindings: `cd balloons-rs && maturin develop`
-6. [ ] Test Python import: `python -c "import balloons_storage; print('OK')"`
+6. [ ] Test Python import: `python -c "import balloons_py; print('OK')"`
 7. [ ] Run integration tests: `pytest tests/test_storage.py`
