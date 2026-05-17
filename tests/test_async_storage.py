@@ -714,6 +714,3 @@ async def test_mark_saved_clean_only_affects_saved_turns(temp_db):
 
     # _saved_turn_order should only include saved turns
     assert session._saved_turn_order == [turn1.id, turn2.id]
-
-
-# GoalStorage tests are in test_goal_storage.py (file-based, no Rust required)

@@ -5,12 +5,10 @@ use heed::{Database, Env, EnvOpenOptions};
 use std::path::Path;
 use std::sync::Arc;
 
-use crate::generated::{
-    BoardData, ColumnData, EdgeData, GoalData, PlanData, SessionBinding, SessionBoardAssociation,
-    SessionData, SessionMetadata, TaskData, TodoData, TodoDependency, TodoPlanLink, TurnData,
-    TurnOrder, UserData, UserPrefs, WatcherRelation,
-};
 use super::traits::{Error, Result, StorageEngine};
+use crate::generated::{
+    SessionData, SessionMetadata, TurnData, TurnOrder, UserData, UserPrefs, WatcherRelation,
+};
 
 /// Parse an ISO 8601 timestamp string to Unix timestamp (seconds).
 /// Returns 0 if parsing fails (graceful fallback for legacy data).
@@ -29,7 +27,10 @@ fn parse_iso_to_unix(iso_str: &str) -> i64 {
     }
     // Try parsing date-only format (e.g., "2024-01-01")
     if let Ok(dt) = chrono::NaiveDate::parse_from_str(iso_str, "%Y-%m-%d") {
-        return dt.and_hms_opt(0, 0, 0).map(|dt| dt.and_utc().timestamp()).unwrap_or(0);
+        return dt
+            .and_hms_opt(0, 0, 0)
+            .map(|dt| dt.and_utc().timestamp())
+            .unwrap_or(0);
     }
     0 // Fallback for unparseable timestamps
 }
@@ -50,7 +51,8 @@ const SCHEMA_VERSION_KEY: &str = "__schema_version__";
 ///
 /// Version history:
 /// - 1: Initial schema with goal system tables
-const CURRENT_SCHEMA_VERSION: u32 = 1;
+/// - 2: Schema with goals and kanban removed
+const CURRENT_SCHEMA_VERSION: u32 = 2;
 
 /// Result of checking the database schema version against the application's expected version.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -66,66 +68,6 @@ pub enum SchemaStatus {
 }
 
 /// LMDB-backed storage engine using heed
-///
-/// ## Database Schema
-///
-/// ### Session Management
-/// - `sessions`: session_id → JSON-encoded SessionData
-/// - `turns`: turn_id → JSON-encoded TurnData
-/// - `turn_order`: session_id → JSON-encoded TurnOrder (ordered list of turn_ids)
-/// - `metadata`: key → value (for app-level metadata like session_history)
-///
-/// ### Goal System
-///
-/// Primary entity tables (key = entity id):
-/// - `goals`: goal_id → JSON-encoded GoalData
-/// - `plans`: plan_id → JSON-encoded PlanData
-/// - `todos`: todo_id → JSON-encoded TodoData
-///
-/// Index tables for efficient lookups:
-/// - `plans_by_goal`: goal_id → JSON-encoded Vec<plan_id>
-///   Enables: "get all plans for a goal"
-///
-/// - `todos_by_plan`: plan_id → JSON-encoded Vec<todo_id>
-///   Enables: "get all todos for a plan"
-///   Note: A todo can belong to multiple plans (many-to-many via TodoPlanLink)
-///
-/// - `plans_by_todo`: todo_id → JSON-encoded Vec<plan_id>
-///   Enables: "get all plans a todo belongs to" (reverse lookup)
-///
-/// - `todo_dependencies`: todo_id → JSON-encoded Vec<TodoDependency>
-///   Enables: "get todos this todo depends on"
-///
-/// - `todo_dependents`: todo_id → JSON-encoded Vec<todo_id>
-///   Enables: "get todos that depend on this todo" (reverse lookup)
-///
-/// Session binding tables:
-/// - `session_bindings`: binding_id → JSON-encoded SessionBinding
-///   Primary storage for all bindings
-///
-/// - `bindings_by_session`: session_id → JSON-encoded Vec<binding_id>
-///   Enables: "get all bindings for a session"
-///
-/// - `bindings_by_entity`: "entity_type:entity_id" → JSON-encoded Vec<binding_id>
-///   Enables: "get all sessions bound to a goal/plan/todo"
-///
-/// ## Key Design Decisions
-///
-/// 1. **Separate index tables vs composite keys**: Using index tables (like turn_order)
-///    rather than composite keys because:
-///    - Simpler key structure (just IDs)
-///    - Easier to maintain ordering
-///    - Consistent with existing session/turn pattern
-///
-/// 2. **Bidirectional indexes for many-to-many**: Both `todos_by_plan` and `plans_by_todo`
-///    exist because we need efficient lookups in both directions.
-///
-/// 3. **Entity key format for bindings_by_entity**: Using "type:id" composite key
-///    (e.g., "goal:abc123") to enable lookups by entity without scanning.
-///
-/// 4. **TodoPlanLink stored in indexes, not as separate table**: The link data is
-///    simple enough that we store it implicitly in the index tables. The created_at
-///    timestamp is stored in the Vec entries if needed.
 pub struct LmdbEngine {
     env: Arc<Env>,
 
@@ -135,47 +77,14 @@ pub struct LmdbEngine {
     turn_order: Database<Str, Bytes>,
     metadata: Database<Str, Bytes>,
 
-    // Goal system - primary entity tables
-    goals: Database<Str, Bytes>,
-    plans: Database<Str, Bytes>,
-    todos: Database<Str, Bytes>,
-
-    // Goal system - index tables for relationships
-    plans_by_goal: Database<Str, Bytes>,   // goal_id → [plan_id]
-    todos_by_plan: Database<Str, Bytes>,   // plan_id → [todo_id]
-    plans_by_todo: Database<Str, Bytes>,   // todo_id → [plan_id] (reverse index)
-
-    // Todo dependency tracking
-    todo_dependencies: Database<Str, Bytes>, // todo_id → [TodoDependency]
-    todo_dependents: Database<Str, Bytes>,   // todo_id → [todo_id] (reverse index)
-
-    // Session bindings
-    session_bindings: Database<Str, Bytes>,    // binding_id → SessionBinding
-    bindings_by_session: Database<Str, Bytes>, // session_id → [binding_id]
-    bindings_by_entity: Database<Str, Bytes>,  // "entity_type:entity_id" → [binding_id]
-
     // Watcher relationships
-    watchers: Database<Str, Bytes>,             // watcher_id → WatcherRelation
-    watchers_by_target: Database<Str, Bytes>,   // target_session_id → [watcher_id]
-    watchers_by_watcher: Database<Str, Bytes>,  // watcher_session_id → [watcher_id]
+    watchers: Database<Str, Bytes>, // watcher_id → WatcherRelation
+    watchers_by_target: Database<Str, Bytes>, // target_session_id → [watcher_id]
+    watchers_by_watcher: Database<Str, Bytes>, // watcher_session_id → [watcher_id]
 
     // User management
-    users: Database<Str, Bytes>,              // user_id → UserData
-    users_by_username: Database<Str, Bytes>,  // lowercase_username → user_id
-
-    // Kanban system - entity tables
-    tasks: Database<Str, Bytes>,              // task_id → TaskData
-    boards: Database<Str, Bytes>,             // board_id → BoardData
-    columns: Database<Str, Bytes>,            // column_id → ColumnData
-
-    // Graph system - edges and indexes
-    edges: Database<Str, Bytes>,              // edge_id → EdgeData
-    edges_by_source: Database<Str, Bytes>,    // "source_type:source_id" → [edge_id]
-    edges_by_target: Database<Str, Bytes>,    // "target_type:target_id" → [edge_id]
-
-    // Session-board associations
-    session_board_associations: Database<Str, Bytes>,  // assoc_id → SessionBoardAssociation
-    boards_by_session: Database<Str, Bytes>,           // session_id → [assoc_id]
+    users: Database<Str, Bytes>,             // user_id → UserData
+    users_by_username: Database<Str, Bytes>, // lowercase_username → user_id
 }
 
 /// Key used for session history in the metadata table
@@ -210,7 +119,9 @@ impl LmdbEngine {
         };
 
         // Create databases (tables)
-        let mut wtxn = env.write_txn().map_err(|e| Error::Database(e.to_string()))?;
+        let mut wtxn = env
+            .write_txn()
+            .map_err(|e| Error::Database(e.to_string()))?;
 
         // Session management tables
         let sessions = env
@@ -224,47 +135,6 @@ impl LmdbEngine {
             .map_err(|e| Error::Database(e.to_string()))?;
         let metadata = env
             .create_database(&mut wtxn, Some("metadata"))
-            .map_err(|e| Error::Database(e.to_string()))?;
-
-        // Goal system - primary entity tables
-        let goals = env
-            .create_database(&mut wtxn, Some("goals"))
-            .map_err(|e| Error::Database(e.to_string()))?;
-        let plans = env
-            .create_database(&mut wtxn, Some("plans"))
-            .map_err(|e| Error::Database(e.to_string()))?;
-        let todos = env
-            .create_database(&mut wtxn, Some("todos"))
-            .map_err(|e| Error::Database(e.to_string()))?;
-
-        // Goal system - relationship indexes
-        let plans_by_goal = env
-            .create_database(&mut wtxn, Some("plans_by_goal"))
-            .map_err(|e| Error::Database(e.to_string()))?;
-        let todos_by_plan = env
-            .create_database(&mut wtxn, Some("todos_by_plan"))
-            .map_err(|e| Error::Database(e.to_string()))?;
-        let plans_by_todo = env
-            .create_database(&mut wtxn, Some("plans_by_todo"))
-            .map_err(|e| Error::Database(e.to_string()))?;
-
-        // Todo dependency indexes
-        let todo_dependencies = env
-            .create_database(&mut wtxn, Some("todo_dependencies"))
-            .map_err(|e| Error::Database(e.to_string()))?;
-        let todo_dependents = env
-            .create_database(&mut wtxn, Some("todo_dependents"))
-            .map_err(|e| Error::Database(e.to_string()))?;
-
-        // Session binding tables
-        let session_bindings = env
-            .create_database(&mut wtxn, Some("session_bindings"))
-            .map_err(|e| Error::Database(e.to_string()))?;
-        let bindings_by_session = env
-            .create_database(&mut wtxn, Some("bindings_by_session"))
-            .map_err(|e| Error::Database(e.to_string()))?;
-        let bindings_by_entity = env
-            .create_database(&mut wtxn, Some("bindings_by_entity"))
             .map_err(|e| Error::Database(e.to_string()))?;
 
         // Watcher relationship tables
@@ -286,36 +156,6 @@ impl LmdbEngine {
             .create_database(&mut wtxn, Some("users_by_username"))
             .map_err(|e| Error::Database(e.to_string()))?;
 
-        // Kanban system - entity tables
-        let tasks = env
-            .create_database(&mut wtxn, Some("tasks"))
-            .map_err(|e| Error::Database(e.to_string()))?;
-        let boards = env
-            .create_database(&mut wtxn, Some("boards"))
-            .map_err(|e| Error::Database(e.to_string()))?;
-        let columns = env
-            .create_database(&mut wtxn, Some("columns"))
-            .map_err(|e| Error::Database(e.to_string()))?;
-
-        // Graph system - edges and indexes
-        let edges = env
-            .create_database(&mut wtxn, Some("edges"))
-            .map_err(|e| Error::Database(e.to_string()))?;
-        let edges_by_source = env
-            .create_database(&mut wtxn, Some("edges_by_source"))
-            .map_err(|e| Error::Database(e.to_string()))?;
-        let edges_by_target = env
-            .create_database(&mut wtxn, Some("edges_by_target"))
-            .map_err(|e| Error::Database(e.to_string()))?;
-
-        // Session-board association tables
-        let session_board_associations = env
-            .create_database(&mut wtxn, Some("session_board_associations"))
-            .map_err(|e| Error::Database(e.to_string()))?;
-        let boards_by_session = env
-            .create_database(&mut wtxn, Some("boards_by_session"))
-            .map_err(|e| Error::Database(e.to_string()))?;
-
         wtxn.commit().map_err(|e| Error::Database(e.to_string()))?;
 
         let engine = Self {
@@ -327,23 +167,6 @@ impl LmdbEngine {
             turn_order,
             metadata,
 
-            // Goal system entities
-            goals,
-            plans,
-            todos,
-
-            // Goal system indexes
-            plans_by_goal,
-            todos_by_plan,
-            plans_by_todo,
-            todo_dependencies,
-            todo_dependents,
-
-            // Session bindings
-            session_bindings,
-            bindings_by_session,
-            bindings_by_entity,
-
             // Watcher relationships
             watchers,
             watchers_by_target,
@@ -352,20 +175,6 @@ impl LmdbEngine {
             // User management
             users,
             users_by_username,
-
-            // Kanban system
-            tasks,
-            boards,
-            columns,
-
-            // Graph system
-            edges,
-            edges_by_source,
-            edges_by_target,
-
-            // Session-board associations
-            session_board_associations,
-            boards_by_session,
         };
 
         // Ensure schema version is compatible and up-to-date
@@ -386,9 +195,16 @@ impl LmdbEngine {
     /// - The schema is too new (application is outdated)
     /// - The schema is unversioned (legacy or fresh database)
     pub fn check_schema_version(&self) -> Result<SchemaStatus> {
-        let rtxn = self.env.read_txn().map_err(|e| Error::Database(e.to_string()))?;
+        let rtxn = self
+            .env
+            .read_txn()
+            .map_err(|e| Error::Database(e.to_string()))?;
 
-        match self.metadata.get(&rtxn, SCHEMA_VERSION_KEY).map_err(|e| Error::Database(e.to_string()))? {
+        match self
+            .metadata
+            .get(&rtxn, SCHEMA_VERSION_KEY)
+            .map_err(|e| Error::Database(e.to_string()))?
+        {
             Some(bytes) => {
                 let version: u32 = serde_json::from_slice(bytes)
                     .map_err(|e| Error::Serialization(e.to_string()))?;
@@ -420,7 +236,10 @@ impl LmdbEngine {
         let bytes = serde_json::to_vec(&CURRENT_SCHEMA_VERSION)
             .map_err(|e| Error::Serialization(e.to_string()))?;
 
-        let mut wtxn = self.env.write_txn().map_err(|e| Error::Database(e.to_string()))?;
+        let mut wtxn = self
+            .env
+            .write_txn()
+            .map_err(|e| Error::Database(e.to_string()))?;
         self.metadata
             .put(&mut wtxn, SCHEMA_VERSION_KEY, &bytes)
             .map_err(|e| Error::Database(e.to_string()))?;
@@ -494,9 +313,13 @@ impl LmdbEngine {
                 self.stamp_version()?;
                 Ok(())
             }
-            SchemaStatus::TooNew { db_version, app_version } => {
-                Err(Error::SchemaTooNew { db_version, app_version })
-            }
+            SchemaStatus::TooNew {
+                db_version,
+                app_version,
+            } => Err(Error::SchemaTooNew {
+                db_version,
+                app_version,
+            }),
         }
     }
 
@@ -516,8 +339,8 @@ impl LmdbEngine {
 
         if !ids.contains(&id.to_string()) {
             ids.push(id.to_string());
-            let bytes = serde_json::to_vec(&ids)
-                .map_err(|e| Error::Serialization(e.to_string()))?;
+            let bytes =
+                serde_json::to_vec(&ids).map_err(|e| Error::Serialization(e.to_string()))?;
             db.put(wtxn, key, &bytes)
                 .map_err(|e| Error::Database(e.to_string()))?;
         }
@@ -533,11 +356,15 @@ impl LmdbEngine {
         key: &str,
         id: &str,
     ) -> Result<()> {
-        if let Some(bytes) = db.get(wtxn, key).map_err(|e| Error::Database(e.to_string()))? {
+        if let Some(bytes) = db
+            .get(wtxn, key)
+            .map_err(|e| Error::Database(e.to_string()))?
+        {
             if let Ok(mut ids) = serde_json::from_slice::<Vec<String>>(bytes) {
                 ids.retain(|existing| existing != id);
                 if ids.is_empty() {
-                    db.delete(wtxn, key).map_err(|e| Error::Database(e.to_string()))?;
+                    db.delete(wtxn, key)
+                        .map_err(|e| Error::Database(e.to_string()))?;
                 } else {
                     let new_bytes = serde_json::to_vec(&ids)
                         .map_err(|e| Error::Serialization(e.to_string()))?;
@@ -555,7 +382,10 @@ impl StorageEngine for LmdbEngine {
     async fn save_session(&self, id: &str, data: &SessionData) -> Result<()> {
         let bytes = serde_json::to_vec(data).map_err(|e| Error::Serialization(e.to_string()))?;
 
-        let mut wtxn = self.env.write_txn().map_err(|e| Error::Database(e.to_string()))?;
+        let mut wtxn = self
+            .env
+            .write_txn()
+            .map_err(|e| Error::Database(e.to_string()))?;
         self.sessions
             .put(&mut wtxn, id, &bytes)
             .map_err(|e| Error::Database(e.to_string()))?;
@@ -565,9 +395,16 @@ impl StorageEngine for LmdbEngine {
     }
 
     async fn load_session(&self, id: &str) -> Result<Option<SessionData>> {
-        let rtxn = self.env.read_txn().map_err(|e| Error::Database(e.to_string()))?;
+        let rtxn = self
+            .env
+            .read_txn()
+            .map_err(|e| Error::Database(e.to_string()))?;
 
-        match self.sessions.get(&rtxn, id).map_err(|e| Error::Database(e.to_string()))? {
+        match self
+            .sessions
+            .get(&rtxn, id)
+            .map_err(|e| Error::Database(e.to_string()))?
+        {
             Some(bytes) => {
                 let data: SessionData = serde_json::from_slice(bytes)
                     .map_err(|e| Error::Serialization(e.to_string()))?;
@@ -584,9 +421,13 @@ impl StorageEngine for LmdbEngine {
             .await?
             .ok_or_else(|| Error::SessionNotFound(session_id.to_string()))?;
 
-        let turn_bytes = serde_json::to_vec(turn).map_err(|e| Error::Serialization(e.to_string()))?;
+        let turn_bytes =
+            serde_json::to_vec(turn).map_err(|e| Error::Serialization(e.to_string()))?;
 
-        let mut wtxn = self.env.write_txn().map_err(|e| Error::Database(e.to_string()))?;
+        let mut wtxn = self
+            .env
+            .write_txn()
+            .map_err(|e| Error::Database(e.to_string()))?;
 
         // Save turn to turns table
         self.turns
@@ -594,7 +435,8 @@ impl StorageEngine for LmdbEngine {
             .map_err(|e| Error::Database(e.to_string()))?;
 
         // Update turn order
-        let mut turn_order = match self.turn_order
+        let mut turn_order = match self
+            .turn_order
             .get(&wtxn, session_id)
             .map_err(|e| Error::Database(e.to_string()))?
         {
@@ -611,7 +453,8 @@ impl StorageEngine for LmdbEngine {
             turn_order.turn_ids.push(turn.id.clone());
         }
 
-        let order_bytes = serde_json::to_vec(&turn_order).map_err(|e| Error::Serialization(e.to_string()))?;
+        let order_bytes =
+            serde_json::to_vec(&turn_order).map_err(|e| Error::Serialization(e.to_string()))?;
         self.turn_order
             .put(&mut wtxn, session_id, &order_bytes)
             .map_err(|e| Error::Database(e.to_string()))?;
@@ -622,10 +465,14 @@ impl StorageEngine for LmdbEngine {
     }
 
     async fn load_turns(&self, session_id: &str) -> Result<Vec<TurnData>> {
-        let rtxn = self.env.read_txn().map_err(|e| Error::Database(e.to_string()))?;
+        let rtxn = self
+            .env
+            .read_txn()
+            .map_err(|e| Error::Database(e.to_string()))?;
 
         // Get turn order
-        let turn_order = match self.turn_order
+        let turn_order = match self
+            .turn_order
             .get(&rtxn, session_id)
             .map_err(|e| Error::Database(e.to_string()))?
         {
@@ -637,7 +484,8 @@ impl StorageEngine for LmdbEngine {
         // Load turns in order
         let mut turns = Vec::with_capacity(turn_order.turn_ids.len());
         for turn_id in &turn_order.turn_ids {
-            if let Some(bytes) = self.turns
+            if let Some(bytes) = self
+                .turns
                 .get(&rtxn, turn_id)
                 .map_err(|e| Error::Database(e.to_string()))?
             {
@@ -652,10 +500,14 @@ impl StorageEngine for LmdbEngine {
     }
 
     async fn get_turn_count(&self, session_id: &str) -> Result<usize> {
-        let rtxn = self.env.read_txn().map_err(|e| Error::Database(e.to_string()))?;
+        let rtxn = self
+            .env
+            .read_txn()
+            .map_err(|e| Error::Database(e.to_string()))?;
 
         // Get turn order and return the length
-        match self.turn_order
+        match self
+            .turn_order
             .get(&rtxn, session_id)
             .map_err(|e| Error::Database(e.to_string()))?
         {
@@ -674,10 +526,14 @@ impl StorageEngine for LmdbEngine {
         offset: usize,
         limit: usize,
     ) -> Result<Vec<TurnData>> {
-        let rtxn = self.env.read_txn().map_err(|e| Error::Database(e.to_string()))?;
+        let rtxn = self
+            .env
+            .read_txn()
+            .map_err(|e| Error::Database(e.to_string()))?;
 
         // Get turn order
-        let turn_order = match self.turn_order
+        let turn_order = match self
+            .turn_order
             .get(&rtxn, session_id)
             .map_err(|e| Error::Database(e.to_string()))?
         {
@@ -698,7 +554,8 @@ impl StorageEngine for LmdbEngine {
         // Load turns in order
         let mut turns = Vec::with_capacity(turn_ids_slice.len());
         for turn_id in turn_ids_slice {
-            if let Some(bytes) = self.turns
+            if let Some(bytes) = self
+                .turns
                 .get(&rtxn, turn_id)
                 .map_err(|e| Error::Database(e.to_string()))?
             {
@@ -713,10 +570,14 @@ impl StorageEngine for LmdbEngine {
     }
 
     async fn delete_turn(&self, session_id: &str, turn_id: &str) -> Result<()> {
-        let mut wtxn = self.env.write_txn().map_err(|e| Error::Database(e.to_string()))?;
+        let mut wtxn = self
+            .env
+            .write_txn()
+            .map_err(|e| Error::Database(e.to_string()))?;
 
         // Remove from turn order first
-        let mut turn_order = match self.turn_order
+        let mut turn_order = match self
+            .turn_order
             .get(&wtxn, session_id)
             .map_err(|e| Error::Database(e.to_string()))?
         {
@@ -732,7 +593,8 @@ impl StorageEngine for LmdbEngine {
             return Err(Error::TurnNotFound(turn_id.to_string()));
         }
 
-        let order_bytes = serde_json::to_vec(&turn_order).map_err(|e| Error::Serialization(e.to_string()))?;
+        let order_bytes =
+            serde_json::to_vec(&turn_order).map_err(|e| Error::Serialization(e.to_string()))?;
         self.turn_order
             .put(&mut wtxn, session_id, &order_bytes)
             .map_err(|e| Error::Database(e.to_string()))?;
@@ -748,10 +610,14 @@ impl StorageEngine for LmdbEngine {
     }
 
     async fn reorder_turns(&self, session_id: &str, turn_ids: &[String]) -> Result<()> {
-        let mut wtxn = self.env.write_txn().map_err(|e| Error::Database(e.to_string()))?;
+        let mut wtxn = self
+            .env
+            .write_txn()
+            .map_err(|e| Error::Database(e.to_string()))?;
 
         // Verify session has a turn order
-        let turn_order = match self.turn_order
+        let turn_order = match self
+            .turn_order
             .get(&wtxn, session_id)
             .map_err(|e| Error::Database(e.to_string()))?
         {
@@ -773,7 +639,8 @@ impl StorageEngine for LmdbEngine {
             turn_ids: turn_ids.to_vec(),
         };
 
-        let order_bytes = serde_json::to_vec(&new_order).map_err(|e| Error::Serialization(e.to_string()))?;
+        let order_bytes =
+            serde_json::to_vec(&new_order).map_err(|e| Error::Serialization(e.to_string()))?;
         self.turn_order
             .put(&mut wtxn, session_id, &order_bytes)
             .map_err(|e| Error::Database(e.to_string()))?;
@@ -784,17 +651,25 @@ impl StorageEngine for LmdbEngine {
     }
 
     async fn list_sessions(&self) -> Result<Vec<SessionMetadata>> {
-        let rtxn = self.env.read_txn().map_err(|e| Error::Database(e.to_string()))?;
+        let rtxn = self
+            .env
+            .read_txn()
+            .map_err(|e| Error::Database(e.to_string()))?;
 
         let mut sessions = Vec::new();
 
-        for entry in self.sessions.iter(&rtxn).map_err(|e| Error::Database(e.to_string()))? {
+        for entry in self
+            .sessions
+            .iter(&rtxn)
+            .map_err(|e| Error::Database(e.to_string()))?
+        {
             let (key, value) = entry.map_err(|e| Error::Database(e.to_string()))?;
-            let data: SessionData = serde_json::from_slice(value)
-                .map_err(|e| Error::Serialization(e.to_string()))?;
+            let data: SessionData =
+                serde_json::from_slice(value).map_err(|e| Error::Serialization(e.to_string()))?;
 
             // Get turn count from turn order table
-            let turn_count = match self.turn_order
+            let turn_count = match self
+                .turn_order
                 .get(&rtxn, key)
                 .map_err(|e| Error::Database(e.to_string()))?
             {
@@ -837,10 +712,14 @@ impl StorageEngine for LmdbEngine {
     }
 
     async fn delete_session(&self, id: &str) -> Result<()> {
-        let mut wtxn = self.env.write_txn().map_err(|e| Error::Database(e.to_string()))?;
+        let mut wtxn = self
+            .env
+            .write_txn()
+            .map_err(|e| Error::Database(e.to_string()))?;
 
         // Get turn order to know which turns to delete
-        let turn_ids_to_delete = match self.turn_order
+        let turn_ids_to_delete = match self
+            .turn_order
             .get(&wtxn, id)
             .map_err(|e| Error::Database(e.to_string()))?
         {
@@ -880,10 +759,13 @@ impl StorageEngine for LmdbEngine {
         session: &SessionData,
         turns: &[TurnData],
     ) -> Result<()> {
-        let session_bytes = serde_json::to_vec(session)
-            .map_err(|e| Error::Serialization(e.to_string()))?;
+        let session_bytes =
+            serde_json::to_vec(session).map_err(|e| Error::Serialization(e.to_string()))?;
 
-        let mut wtxn = self.env.write_txn().map_err(|e| Error::Database(e.to_string()))?;
+        let mut wtxn = self
+            .env
+            .write_txn()
+            .map_err(|e| Error::Database(e.to_string()))?;
 
         // Save session
         self.sessions
@@ -891,7 +773,8 @@ impl StorageEngine for LmdbEngine {
             .map_err(|e| Error::Database(e.to_string()))?;
 
         // Get existing turn order (if any) to merge with new turns
-        let mut existing_turn_ids: Vec<String> = match self.turn_order
+        let mut existing_turn_ids: Vec<String> = match self
+            .turn_order
             .get(&wtxn, id)
             .map_err(|e| Error::Database(e.to_string()))?
         {
@@ -905,8 +788,8 @@ impl StorageEngine for LmdbEngine {
 
         // Save each turn and update the order
         for turn in turns {
-            let turn_bytes = serde_json::to_vec(turn)
-                .map_err(|e| Error::Serialization(e.to_string()))?;
+            let turn_bytes =
+                serde_json::to_vec(turn).map_err(|e| Error::Serialization(e.to_string()))?;
 
             self.turns
                 .put(&mut wtxn, &turn.id, &turn_bytes)
@@ -923,8 +806,8 @@ impl StorageEngine for LmdbEngine {
             session_id: id.to_string(),
             turn_ids: existing_turn_ids,
         };
-        let order_bytes = serde_json::to_vec(&turn_order)
-            .map_err(|e| Error::Serialization(e.to_string()))?;
+        let order_bytes =
+            serde_json::to_vec(&turn_order).map_err(|e| Error::Serialization(e.to_string()))?;
         self.turn_order
             .put(&mut wtxn, id, &order_bytes)
             .map_err(|e| Error::Database(e.to_string()))?;
@@ -934,15 +817,15 @@ impl StorageEngine for LmdbEngine {
         Ok(())
     }
 
-    async fn replace_session_turns(
-        &self,
-        session_id: &str,
-        turns: &[TurnData],
-    ) -> Result<()> {
-        let mut wtxn = self.env.write_txn().map_err(|e| Error::Database(e.to_string()))?;
+    async fn replace_session_turns(&self, session_id: &str, turns: &[TurnData]) -> Result<()> {
+        let mut wtxn = self
+            .env
+            .write_txn()
+            .map_err(|e| Error::Database(e.to_string()))?;
 
         // Verify session exists
-        if self.sessions
+        if self
+            .sessions
             .get(&wtxn, session_id)
             .map_err(|e| Error::Database(e.to_string()))?
             .is_none()
@@ -951,7 +834,8 @@ impl StorageEngine for LmdbEngine {
         }
 
         // Get existing turn IDs to delete
-        let old_turn_ids: Vec<String> = match self.turn_order
+        let old_turn_ids: Vec<String> = match self
+            .turn_order
             .get(&wtxn, session_id)
             .map_err(|e| Error::Database(e.to_string()))?
         {
@@ -964,9 +848,8 @@ impl StorageEngine for LmdbEngine {
         };
 
         // Build set of new turn IDs for efficient lookup
-        let new_turn_ids: std::collections::HashSet<&str> = turns.iter()
-            .map(|t| t.id.as_str())
-            .collect();
+        let new_turn_ids: std::collections::HashSet<&str> =
+            turns.iter().map(|t| t.id.as_str()).collect();
 
         // Delete turns that are no longer present
         for old_id in &old_turn_ids {
@@ -980,8 +863,8 @@ impl StorageEngine for LmdbEngine {
         // Insert/update all new turns
         let mut ordered_ids = Vec::with_capacity(turns.len());
         for turn in turns {
-            let turn_bytes = serde_json::to_vec(turn)
-                .map_err(|e| Error::Serialization(e.to_string()))?;
+            let turn_bytes =
+                serde_json::to_vec(turn).map_err(|e| Error::Serialization(e.to_string()))?;
 
             self.turns
                 .put(&mut wtxn, &turn.id, &turn_bytes)
@@ -995,8 +878,8 @@ impl StorageEngine for LmdbEngine {
             session_id: session_id.to_string(),
             turn_ids: ordered_ids,
         };
-        let order_bytes = serde_json::to_vec(&turn_order)
-            .map_err(|e| Error::Serialization(e.to_string()))?;
+        let order_bytes =
+            serde_json::to_vec(&turn_order).map_err(|e| Error::Serialization(e.to_string()))?;
         self.turn_order
             .put(&mut wtxn, session_id, &order_bytes)
             .map_err(|e| Error::Database(e.to_string()))?;
@@ -1007,9 +890,16 @@ impl StorageEngine for LmdbEngine {
     }
 
     async fn load_session_history(&self) -> Result<Vec<String>> {
-        let rtxn = self.env.read_txn().map_err(|e| Error::Database(e.to_string()))?;
+        let rtxn = self
+            .env
+            .read_txn()
+            .map_err(|e| Error::Database(e.to_string()))?;
 
-        match self.metadata.get(&rtxn, SESSION_HISTORY_KEY).map_err(|e| Error::Database(e.to_string()))? {
+        match self
+            .metadata
+            .get(&rtxn, SESSION_HISTORY_KEY)
+            .map_err(|e| Error::Database(e.to_string()))?
+        {
             Some(bytes) => {
                 let history: Vec<String> = serde_json::from_slice(bytes)
                     .map_err(|e| Error::Serialization(e.to_string()))?;
@@ -1020,10 +910,13 @@ impl StorageEngine for LmdbEngine {
     }
 
     async fn save_session_history(&self, session_ids: &[String]) -> Result<()> {
-        let bytes = serde_json::to_vec(session_ids)
-            .map_err(|e| Error::Serialization(e.to_string()))?;
+        let bytes =
+            serde_json::to_vec(session_ids).map_err(|e| Error::Serialization(e.to_string()))?;
 
-        let mut wtxn = self.env.write_txn().map_err(|e| Error::Database(e.to_string()))?;
+        let mut wtxn = self
+            .env
+            .write_txn()
+            .map_err(|e| Error::Database(e.to_string()))?;
         self.metadata
             .put(&mut wtxn, SESSION_HISTORY_KEY, &bytes)
             .map_err(|e| Error::Database(e.to_string()))?;
@@ -1033,881 +926,38 @@ impl StorageEngine for LmdbEngine {
     }
 
     // =========================================================================
-    // Goal System - Goals
-    // =========================================================================
-
-    async fn save_goal(&self, goal: &GoalData) -> Result<()> {
-        let bytes = serde_json::to_vec(goal).map_err(|e| Error::Serialization(e.to_string()))?;
-
-        let mut wtxn = self.env.write_txn().map_err(|e| Error::Database(e.to_string()))?;
-        self.goals
-            .put(&mut wtxn, &goal.id, &bytes)
-            .map_err(|e| Error::Database(e.to_string()))?;
-        wtxn.commit().map_err(|e| Error::Database(e.to_string()))?;
-
-        Ok(())
-    }
-
-    async fn load_goal(&self, id: &str) -> Result<Option<GoalData>> {
-        let rtxn = self.env.read_txn().map_err(|e| Error::Database(e.to_string()))?;
-
-        match self.goals.get(&rtxn, id).map_err(|e| Error::Database(e.to_string()))? {
-            Some(bytes) => {
-                let data: GoalData = serde_json::from_slice(bytes)
-                    .map_err(|e| Error::Serialization(e.to_string()))?;
-                Ok(Some(data))
-            }
-            None => Ok(None),
-        }
-    }
-
-    async fn delete_goal(&self, id: &str) -> Result<()> {
-        let mut wtxn = self.env.write_txn().map_err(|e| Error::Database(e.to_string()))?;
-        self.goals
-            .delete(&mut wtxn, id)
-            .map_err(|e| Error::Database(e.to_string()))?;
-        wtxn.commit().map_err(|e| Error::Database(e.to_string()))?;
-
-        Ok(())
-    }
-
-    async fn list_goals(&self) -> Result<Vec<GoalData>> {
-        let rtxn = self.env.read_txn().map_err(|e| Error::Database(e.to_string()))?;
-
-        let mut goals = Vec::new();
-        for entry in self.goals.iter(&rtxn).map_err(|e| Error::Database(e.to_string()))? {
-            let (_key, value) = entry.map_err(|e| Error::Database(e.to_string()))?;
-            let data: GoalData = serde_json::from_slice(value)
-                .map_err(|e| Error::Serialization(e.to_string()))?;
-            goals.push(data);
-        }
-
-        Ok(goals)
-    }
-
-    // =========================================================================
-    // Goal System - Plans
-    // =========================================================================
-
-    async fn save_plan(&self, plan: &PlanData) -> Result<()> {
-        let bytes = serde_json::to_vec(plan).map_err(|e| Error::Serialization(e.to_string()))?;
-
-        let mut wtxn = self.env.write_txn().map_err(|e| Error::Database(e.to_string()))?;
-
-        // Check if plan already exists to handle goal_id changes
-        let old_goal_id: Option<String> = match self.plans.get(&wtxn, &plan.id).map_err(|e| Error::Database(e.to_string()))? {
-            Some(old_bytes) => {
-                let old_plan: PlanData = serde_json::from_slice(old_bytes)
-                    .map_err(|e| Error::Serialization(e.to_string()))?;
-                if old_plan.goal_id != plan.goal_id {
-                    Some(old_plan.goal_id)
-                } else {
-                    None
-                }
-            }
-            None => None,
-        };
-
-        // Save the plan
-        self.plans
-            .put(&mut wtxn, &plan.id, &bytes)
-            .map_err(|e| Error::Database(e.to_string()))?;
-
-        // Remove from old goal's index if goal_id changed
-        if let Some(old_goal_id) = old_goal_id {
-            if let Some(index_bytes) = self.plans_by_goal.get(&wtxn, &old_goal_id).map_err(|e| Error::Database(e.to_string()))? {
-                let mut plan_ids: Vec<String> = serde_json::from_slice(index_bytes)
-                    .map_err(|e| Error::Serialization(e.to_string()))?;
-                plan_ids.retain(|id| id != &plan.id);
-                if plan_ids.is_empty() {
-                    self.plans_by_goal
-                        .delete(&mut wtxn, &old_goal_id)
-                        .map_err(|e| Error::Database(e.to_string()))?;
-                } else {
-                    let new_bytes = serde_json::to_vec(&plan_ids)
-                        .map_err(|e| Error::Serialization(e.to_string()))?;
-                    self.plans_by_goal
-                        .put(&mut wtxn, &old_goal_id, &new_bytes)
-                        .map_err(|e| Error::Database(e.to_string()))?;
-                }
-            }
-        }
-
-        // Update plans_by_goal index
-        let mut plan_ids: Vec<String> = match self.plans_by_goal.get(&wtxn, &plan.goal_id).map_err(|e| Error::Database(e.to_string()))? {
-            Some(index_bytes) => serde_json::from_slice(index_bytes)
-                .map_err(|e| Error::Serialization(e.to_string()))?,
-            None => vec![],
-        };
-
-        if !plan_ids.contains(&plan.id) {
-            plan_ids.push(plan.id.clone());
-            let index_bytes = serde_json::to_vec(&plan_ids)
-                .map_err(|e| Error::Serialization(e.to_string()))?;
-            self.plans_by_goal
-                .put(&mut wtxn, &plan.goal_id, &index_bytes)
-                .map_err(|e| Error::Database(e.to_string()))?;
-        }
-
-        wtxn.commit().map_err(|e| Error::Database(e.to_string()))?;
-
-        Ok(())
-    }
-
-    async fn load_plan(&self, id: &str) -> Result<Option<PlanData>> {
-        let rtxn = self.env.read_txn().map_err(|e| Error::Database(e.to_string()))?;
-
-        match self.plans.get(&rtxn, id).map_err(|e| Error::Database(e.to_string()))? {
-            Some(bytes) => {
-                let data: PlanData = serde_json::from_slice(bytes)
-                    .map_err(|e| Error::Serialization(e.to_string()))?;
-                Ok(Some(data))
-            }
-            None => Ok(None),
-        }
-    }
-
-    async fn delete_plan(&self, id: &str) -> Result<()> {
-        let mut wtxn = self.env.write_txn().map_err(|e| Error::Database(e.to_string()))?;
-
-        // Get the plan to find its goal_id for index cleanup
-        if let Some(bytes) = self.plans.get(&wtxn, id).map_err(|e| Error::Database(e.to_string()))? {
-            let plan: PlanData = serde_json::from_slice(bytes)
-                .map_err(|e| Error::Serialization(e.to_string()))?;
-
-            // Remove from plans_by_goal index
-            if let Some(index_bytes) = self.plans_by_goal.get(&wtxn, &plan.goal_id).map_err(|e| Error::Database(e.to_string()))? {
-                let mut plan_ids: Vec<String> = serde_json::from_slice(index_bytes)
-                    .map_err(|e| Error::Serialization(e.to_string()))?;
-                plan_ids.retain(|pid| pid != id);
-                if plan_ids.is_empty() {
-                    self.plans_by_goal
-                        .delete(&mut wtxn, &plan.goal_id)
-                        .map_err(|e| Error::Database(e.to_string()))?;
-                } else {
-                    let new_bytes = serde_json::to_vec(&plan_ids)
-                        .map_err(|e| Error::Serialization(e.to_string()))?;
-                    self.plans_by_goal
-                        .put(&mut wtxn, &plan.goal_id, &new_bytes)
-                        .map_err(|e| Error::Database(e.to_string()))?;
-                }
-            }
-        }
-
-        // Delete the plan
-        self.plans
-            .delete(&mut wtxn, id)
-            .map_err(|e| Error::Database(e.to_string()))?;
-
-        wtxn.commit().map_err(|e| Error::Database(e.to_string()))?;
-
-        Ok(())
-    }
-
-    async fn list_plans(&self, goal_id: Option<&str>) -> Result<Vec<PlanData>> {
-        let rtxn = self.env.read_txn().map_err(|e| Error::Database(e.to_string()))?;
-
-        match goal_id {
-            Some(gid) => {
-                // Filter by goal_id using the index
-                let plan_ids: Vec<String> = match self.plans_by_goal.get(&rtxn, gid).map_err(|e| Error::Database(e.to_string()))? {
-                    Some(bytes) => serde_json::from_slice(bytes)
-                        .map_err(|e| Error::Serialization(e.to_string()))?,
-                    None => return Ok(vec![]),
-                };
-
-                let mut plans = Vec::with_capacity(plan_ids.len());
-                for plan_id in plan_ids {
-                    if let Some(bytes) = self.plans.get(&rtxn, &plan_id).map_err(|e| Error::Database(e.to_string()))? {
-                        let plan: PlanData = serde_json::from_slice(bytes)
-                            .map_err(|e| Error::Serialization(e.to_string()))?;
-                        plans.push(plan);
-                    }
-                }
-                Ok(plans)
-            }
-            None => {
-                // Return all plans
-                let mut plans = Vec::new();
-                for entry in self.plans.iter(&rtxn).map_err(|e| Error::Database(e.to_string()))? {
-                    let (_key, value) = entry.map_err(|e| Error::Database(e.to_string()))?;
-                    let plan: PlanData = serde_json::from_slice(value)
-                        .map_err(|e| Error::Serialization(e.to_string()))?;
-                    plans.push(plan);
-                }
-                Ok(plans)
-            }
-        }
-    }
-
-    // =========================================================================
-    // Goal System - Todos
-    // =========================================================================
-
-    async fn save_todo(&self, todo: &TodoData) -> Result<()> {
-        let bytes = serde_json::to_vec(todo).map_err(|e| Error::Serialization(e.to_string()))?;
-
-        let mut wtxn = self.env.write_txn().map_err(|e| Error::Database(e.to_string()))?;
-        self.todos
-            .put(&mut wtxn, &todo.id, &bytes)
-            .map_err(|e| Error::Database(e.to_string()))?;
-        wtxn.commit().map_err(|e| Error::Database(e.to_string()))?;
-
-        Ok(())
-    }
-
-    async fn load_todo(&self, id: &str) -> Result<Option<TodoData>> {
-        let rtxn = self.env.read_txn().map_err(|e| Error::Database(e.to_string()))?;
-
-        match self.todos.get(&rtxn, id).map_err(|e| Error::Database(e.to_string()))? {
-            Some(bytes) => {
-                let data: TodoData = serde_json::from_slice(bytes)
-                    .map_err(|e| Error::Serialization(e.to_string()))?;
-                Ok(Some(data))
-            }
-            None => Ok(None),
-        }
-    }
-
-    async fn delete_todo(&self, id: &str) -> Result<()> {
-        let mut wtxn = self.env.write_txn().map_err(|e| Error::Database(e.to_string()))?;
-
-        // Clean up todo-plan links (plans_by_todo index tells us which plans to update)
-        if let Some(bytes) = self.plans_by_todo.get(&wtxn, id).map_err(|e| Error::Database(e.to_string()))? {
-            let plan_ids: Vec<String> = serde_json::from_slice(bytes)
-                .map_err(|e| Error::Serialization(e.to_string()))?;
-
-            // Remove from each plan's todos_by_plan index
-            for plan_id in plan_ids {
-                if let Some(index_bytes) = self.todos_by_plan.get(&wtxn, &plan_id).map_err(|e| Error::Database(e.to_string()))? {
-                    let mut todo_ids: Vec<String> = serde_json::from_slice(index_bytes)
-                        .map_err(|e| Error::Serialization(e.to_string()))?;
-                    todo_ids.retain(|tid| tid != id);
-                    if todo_ids.is_empty() {
-                        self.todos_by_plan
-                            .delete(&mut wtxn, &plan_id)
-                            .map_err(|e| Error::Database(e.to_string()))?;
-                    } else {
-                        let new_bytes = serde_json::to_vec(&todo_ids)
-                            .map_err(|e| Error::Serialization(e.to_string()))?;
-                        self.todos_by_plan
-                            .put(&mut wtxn, &plan_id, &new_bytes)
-                            .map_err(|e| Error::Database(e.to_string()))?;
-                    }
-                }
-            }
-
-            // Delete the plans_by_todo entry
-            self.plans_by_todo
-                .delete(&mut wtxn, id)
-                .map_err(|e| Error::Database(e.to_string()))?;
-        }
-
-        // Clean up todo dependencies (where this todo depends on others)
-        self.todo_dependencies
-            .delete(&mut wtxn, id)
-            .map_err(|e| Error::Database(e.to_string()))?;
-
-        // Clean up todo dependents (where others depend on this todo)
-        if let Some(bytes) = self.todo_dependents.get(&wtxn, id).map_err(|e| Error::Database(e.to_string()))? {
-            let dependent_ids: Vec<String> = serde_json::from_slice(bytes)
-                .map_err(|e| Error::Serialization(e.to_string()))?;
-
-            // Remove this todo from each dependent's dependencies list
-            for dep_id in dependent_ids {
-                if let Some(dep_bytes) = self.todo_dependencies.get(&wtxn, &dep_id).map_err(|e| Error::Database(e.to_string()))? {
-                    let mut deps: Vec<TodoDependency> = serde_json::from_slice(dep_bytes)
-                        .map_err(|e| Error::Serialization(e.to_string()))?;
-                    deps.retain(|d| d.depends_on_id != id);
-                    if deps.is_empty() {
-                        self.todo_dependencies
-                            .delete(&mut wtxn, &dep_id)
-                            .map_err(|e| Error::Database(e.to_string()))?;
-                    } else {
-                        let new_bytes = serde_json::to_vec(&deps)
-                            .map_err(|e| Error::Serialization(e.to_string()))?;
-                        self.todo_dependencies
-                            .put(&mut wtxn, &dep_id, &new_bytes)
-                            .map_err(|e| Error::Database(e.to_string()))?;
-                    }
-                }
-            }
-
-            // Delete the dependents entry
-            self.todo_dependents
-                .delete(&mut wtxn, id)
-                .map_err(|e| Error::Database(e.to_string()))?;
-        }
-
-        // Delete the todo itself
-        self.todos
-            .delete(&mut wtxn, id)
-            .map_err(|e| Error::Database(e.to_string()))?;
-
-        wtxn.commit().map_err(|e| Error::Database(e.to_string()))?;
-
-        Ok(())
-    }
-
-    async fn list_todos(&self, plan_id: Option<&str>) -> Result<Vec<TodoData>> {
-        let rtxn = self.env.read_txn().map_err(|e| Error::Database(e.to_string()))?;
-
-        match plan_id {
-            Some(pid) => {
-                // Filter by plan_id using the todos_by_plan index
-                let todo_ids: Vec<String> = match self.todos_by_plan.get(&rtxn, pid).map_err(|e| Error::Database(e.to_string()))? {
-                    Some(bytes) => serde_json::from_slice(bytes)
-                        .map_err(|e| Error::Serialization(e.to_string()))?,
-                    None => return Ok(vec![]),
-                };
-
-                let mut todos = Vec::with_capacity(todo_ids.len());
-                for todo_id in todo_ids {
-                    if let Some(bytes) = self.todos.get(&rtxn, &todo_id).map_err(|e| Error::Database(e.to_string()))? {
-                        let todo: TodoData = serde_json::from_slice(bytes)
-                            .map_err(|e| Error::Serialization(e.to_string()))?;
-                        todos.push(todo);
-                    }
-                }
-                Ok(todos)
-            }
-            None => {
-                // Return all todos
-                let mut todos = Vec::new();
-                for entry in self.todos.iter(&rtxn).map_err(|e| Error::Database(e.to_string()))? {
-                    let (_key, value) = entry.map_err(|e| Error::Database(e.to_string()))?;
-                    let todo: TodoData = serde_json::from_slice(value)
-                        .map_err(|e| Error::Serialization(e.to_string()))?;
-                    todos.push(todo);
-                }
-                Ok(todos)
-            }
-        }
-    }
-
-    // =========================================================================
-    // Goal System - Todo-Plan Links
-    // =========================================================================
-
-    async fn save_todo_plan_link(&self, link: &TodoPlanLink) -> Result<()> {
-        let mut wtxn = self.env.write_txn().map_err(|e| Error::Database(e.to_string()))?;
-
-        // Update todos_by_plan index
-        let mut todo_ids: Vec<String> = match self.todos_by_plan.get(&wtxn, &link.plan_id).map_err(|e| Error::Database(e.to_string()))? {
-            Some(bytes) => serde_json::from_slice(bytes)
-                .map_err(|e| Error::Serialization(e.to_string()))?,
-            None => vec![],
-        };
-
-        if !todo_ids.contains(&link.todo_id) {
-            todo_ids.push(link.todo_id.clone());
-            let bytes = serde_json::to_vec(&todo_ids)
-                .map_err(|e| Error::Serialization(e.to_string()))?;
-            self.todos_by_plan
-                .put(&mut wtxn, &link.plan_id, &bytes)
-                .map_err(|e| Error::Database(e.to_string()))?;
-        }
-
-        // Update plans_by_todo index
-        let mut plan_ids: Vec<String> = match self.plans_by_todo.get(&wtxn, &link.todo_id).map_err(|e| Error::Database(e.to_string()))? {
-            Some(bytes) => serde_json::from_slice(bytes)
-                .map_err(|e| Error::Serialization(e.to_string()))?,
-            None => vec![],
-        };
-
-        if !plan_ids.contains(&link.plan_id) {
-            plan_ids.push(link.plan_id.clone());
-            let bytes = serde_json::to_vec(&plan_ids)
-                .map_err(|e| Error::Serialization(e.to_string()))?;
-            self.plans_by_todo
-                .put(&mut wtxn, &link.todo_id, &bytes)
-                .map_err(|e| Error::Database(e.to_string()))?;
-        }
-
-        wtxn.commit().map_err(|e| Error::Database(e.to_string()))?;
-
-        Ok(())
-    }
-
-    async fn delete_todo_plan_link(&self, todo_id: &str, plan_id: &str) -> Result<()> {
-        let mut wtxn = self.env.write_txn().map_err(|e| Error::Database(e.to_string()))?;
-
-        // Update todos_by_plan index
-        if let Some(bytes) = self.todos_by_plan.get(&wtxn, plan_id).map_err(|e| Error::Database(e.to_string()))? {
-            let mut todo_ids: Vec<String> = serde_json::from_slice(bytes)
-                .map_err(|e| Error::Serialization(e.to_string()))?;
-            todo_ids.retain(|tid| tid != todo_id);
-            if todo_ids.is_empty() {
-                self.todos_by_plan
-                    .delete(&mut wtxn, plan_id)
-                    .map_err(|e| Error::Database(e.to_string()))?;
-            } else {
-                let new_bytes = serde_json::to_vec(&todo_ids)
-                    .map_err(|e| Error::Serialization(e.to_string()))?;
-                self.todos_by_plan
-                    .put(&mut wtxn, plan_id, &new_bytes)
-                    .map_err(|e| Error::Database(e.to_string()))?;
-            }
-        }
-
-        // Update plans_by_todo index
-        if let Some(bytes) = self.plans_by_todo.get(&wtxn, todo_id).map_err(|e| Error::Database(e.to_string()))? {
-            let mut plan_ids: Vec<String> = serde_json::from_slice(bytes)
-                .map_err(|e| Error::Serialization(e.to_string()))?;
-            plan_ids.retain(|pid| pid != plan_id);
-            if plan_ids.is_empty() {
-                self.plans_by_todo
-                    .delete(&mut wtxn, todo_id)
-                    .map_err(|e| Error::Database(e.to_string()))?;
-            } else {
-                let new_bytes = serde_json::to_vec(&plan_ids)
-                    .map_err(|e| Error::Serialization(e.to_string()))?;
-                self.plans_by_todo
-                    .put(&mut wtxn, todo_id, &new_bytes)
-                    .map_err(|e| Error::Database(e.to_string()))?;
-            }
-        }
-
-        wtxn.commit().map_err(|e| Error::Database(e.to_string()))?;
-
-        Ok(())
-    }
-
-    async fn get_plans_for_todo(&self, todo_id: &str) -> Result<Vec<PlanData>> {
-        let rtxn = self.env.read_txn().map_err(|e| Error::Database(e.to_string()))?;
-
-        let plan_ids: Vec<String> = match self.plans_by_todo.get(&rtxn, todo_id).map_err(|e| Error::Database(e.to_string()))? {
-            Some(bytes) => serde_json::from_slice(bytes)
-                .map_err(|e| Error::Serialization(e.to_string()))?,
-            None => return Ok(vec![]),
-        };
-
-        let mut plans = Vec::with_capacity(plan_ids.len());
-        for plan_id in plan_ids {
-            if let Some(bytes) = self.plans.get(&rtxn, &plan_id).map_err(|e| Error::Database(e.to_string()))? {
-                let plan: PlanData = serde_json::from_slice(bytes)
-                    .map_err(|e| Error::Serialization(e.to_string()))?;
-                plans.push(plan);
-            }
-        }
-
-        Ok(plans)
-    }
-
-    async fn get_todos_for_plan(&self, plan_id: &str) -> Result<Vec<TodoData>> {
-        let rtxn = self.env.read_txn().map_err(|e| Error::Database(e.to_string()))?;
-
-        let todo_ids: Vec<String> = match self.todos_by_plan.get(&rtxn, plan_id).map_err(|e| Error::Database(e.to_string()))? {
-            Some(bytes) => serde_json::from_slice(bytes)
-                .map_err(|e| Error::Serialization(e.to_string()))?,
-            None => return Ok(vec![]),
-        };
-
-        let mut todos = Vec::with_capacity(todo_ids.len());
-        for todo_id in todo_ids {
-            if let Some(bytes) = self.todos.get(&rtxn, &todo_id).map_err(|e| Error::Database(e.to_string()))? {
-                let todo: TodoData = serde_json::from_slice(bytes)
-                    .map_err(|e| Error::Serialization(e.to_string()))?;
-                todos.push(todo);
-            }
-        }
-
-        Ok(todos)
-    }
-
-    // =========================================================================
-    // Goal System - Todo Dependencies
-    // =========================================================================
-
-    async fn save_todo_dependency(&self, dependency: &TodoDependency) -> Result<()> {
-        let mut wtxn = self.env.write_txn().map_err(|e| Error::Database(e.to_string()))?;
-
-        // Update todo_dependencies index (todo_id -> [TodoDependency])
-        let mut deps: Vec<TodoDependency> = match self.todo_dependencies.get(&wtxn, &dependency.todo_id).map_err(|e| Error::Database(e.to_string()))? {
-            Some(bytes) => serde_json::from_slice(bytes)
-                .map_err(|e| Error::Serialization(e.to_string()))?,
-            None => vec![],
-        };
-
-        // Check if dependency already exists
-        if !deps.iter().any(|d| d.depends_on_id == dependency.depends_on_id) {
-            deps.push(dependency.clone());
-            let bytes = serde_json::to_vec(&deps)
-                .map_err(|e| Error::Serialization(e.to_string()))?;
-            self.todo_dependencies
-                .put(&mut wtxn, &dependency.todo_id, &bytes)
-                .map_err(|e| Error::Database(e.to_string()))?;
-        }
-
-        // Update todo_dependents index (depends_on_id -> [todo_id])
-        let mut dependents: Vec<String> = match self.todo_dependents.get(&wtxn, &dependency.depends_on_id).map_err(|e| Error::Database(e.to_string()))? {
-            Some(bytes) => serde_json::from_slice(bytes)
-                .map_err(|e| Error::Serialization(e.to_string()))?,
-            None => vec![],
-        };
-
-        if !dependents.contains(&dependency.todo_id) {
-            dependents.push(dependency.todo_id.clone());
-            let bytes = serde_json::to_vec(&dependents)
-                .map_err(|e| Error::Serialization(e.to_string()))?;
-            self.todo_dependents
-                .put(&mut wtxn, &dependency.depends_on_id, &bytes)
-                .map_err(|e| Error::Database(e.to_string()))?;
-        }
-
-        wtxn.commit().map_err(|e| Error::Database(e.to_string()))?;
-
-        Ok(())
-    }
-
-    async fn delete_todo_dependency(&self, todo_id: &str, depends_on_id: &str) -> Result<()> {
-        let mut wtxn = self.env.write_txn().map_err(|e| Error::Database(e.to_string()))?;
-
-        // Update todo_dependencies index
-        if let Some(bytes) = self.todo_dependencies.get(&wtxn, todo_id).map_err(|e| Error::Database(e.to_string()))? {
-            let mut deps: Vec<TodoDependency> = serde_json::from_slice(bytes)
-                .map_err(|e| Error::Serialization(e.to_string()))?;
-            deps.retain(|d| d.depends_on_id != depends_on_id);
-            if deps.is_empty() {
-                self.todo_dependencies
-                    .delete(&mut wtxn, todo_id)
-                    .map_err(|e| Error::Database(e.to_string()))?;
-            } else {
-                let new_bytes = serde_json::to_vec(&deps)
-                    .map_err(|e| Error::Serialization(e.to_string()))?;
-                self.todo_dependencies
-                    .put(&mut wtxn, todo_id, &new_bytes)
-                    .map_err(|e| Error::Database(e.to_string()))?;
-            }
-        }
-
-        // Update todo_dependents index
-        if let Some(bytes) = self.todo_dependents.get(&wtxn, depends_on_id).map_err(|e| Error::Database(e.to_string()))? {
-            let mut dependents: Vec<String> = serde_json::from_slice(bytes)
-                .map_err(|e| Error::Serialization(e.to_string()))?;
-            dependents.retain(|tid| tid != todo_id);
-            if dependents.is_empty() {
-                self.todo_dependents
-                    .delete(&mut wtxn, depends_on_id)
-                    .map_err(|e| Error::Database(e.to_string()))?;
-            } else {
-                let new_bytes = serde_json::to_vec(&dependents)
-                    .map_err(|e| Error::Serialization(e.to_string()))?;
-                self.todo_dependents
-                    .put(&mut wtxn, depends_on_id, &new_bytes)
-                    .map_err(|e| Error::Database(e.to_string()))?;
-            }
-        }
-
-        wtxn.commit().map_err(|e| Error::Database(e.to_string()))?;
-
-        Ok(())
-    }
-
-    async fn get_dependencies(&self, todo_id: &str) -> Result<Vec<TodoData>> {
-        let rtxn = self.env.read_txn().map_err(|e| Error::Database(e.to_string()))?;
-
-        let deps: Vec<TodoDependency> = match self.todo_dependencies.get(&rtxn, todo_id).map_err(|e| Error::Database(e.to_string()))? {
-            Some(bytes) => serde_json::from_slice(bytes)
-                .map_err(|e| Error::Serialization(e.to_string()))?,
-            None => return Ok(vec![]),
-        };
-
-        let mut todos = Vec::with_capacity(deps.len());
-        for dep in deps {
-            if let Some(bytes) = self.todos.get(&rtxn, &dep.depends_on_id).map_err(|e| Error::Database(e.to_string()))? {
-                let todo: TodoData = serde_json::from_slice(bytes)
-                    .map_err(|e| Error::Serialization(e.to_string()))?;
-                todos.push(todo);
-            }
-        }
-
-        Ok(todos)
-    }
-
-    async fn get_dependents(&self, todo_id: &str) -> Result<Vec<TodoData>> {
-        let rtxn = self.env.read_txn().map_err(|e| Error::Database(e.to_string()))?;
-
-        let dependent_ids: Vec<String> = match self.todo_dependents.get(&rtxn, todo_id).map_err(|e| Error::Database(e.to_string()))? {
-            Some(bytes) => serde_json::from_slice(bytes)
-                .map_err(|e| Error::Serialization(e.to_string()))?,
-            None => return Ok(vec![]),
-        };
-
-        let mut todos = Vec::with_capacity(dependent_ids.len());
-        for dep_id in dependent_ids {
-            if let Some(bytes) = self.todos.get(&rtxn, &dep_id).map_err(|e| Error::Database(e.to_string()))? {
-                let todo: TodoData = serde_json::from_slice(bytes)
-                    .map_err(|e| Error::Serialization(e.to_string()))?;
-                todos.push(todo);
-            }
-        }
-
-        Ok(todos)
-    }
-
-    // =========================================================================
-    // Goal System - Session Bindings
-    // =========================================================================
-
-    async fn save_session_binding(&self, binding: &SessionBinding) -> Result<()> {
-        let bytes = serde_json::to_vec(binding).map_err(|e| Error::Serialization(e.to_string()))?;
-
-        let mut wtxn = self.env.write_txn().map_err(|e| Error::Database(e.to_string()))?;
-
-        // Check if binding already exists to handle session/entity changes
-        let old_binding: Option<SessionBinding> = match self.session_bindings.get(&wtxn, &binding.id).map_err(|e| Error::Database(e.to_string()))? {
-            Some(old_bytes) => Some(serde_json::from_slice(old_bytes)
-                .map_err(|e| Error::Serialization(e.to_string()))?),
-            None => None,
-        };
-
-        // Save the binding
-        self.session_bindings
-            .put(&mut wtxn, &binding.id, &bytes)
-            .map_err(|e| Error::Database(e.to_string()))?;
-
-        // Handle index updates if session_id or entity changed
-        if let Some(ref old) = old_binding {
-            // Remove from old session index if session changed
-            if old.session_id != binding.session_id {
-                if let Some(index_bytes) = self.bindings_by_session.get(&wtxn, &old.session_id).map_err(|e| Error::Database(e.to_string()))? {
-                    let mut binding_ids: Vec<String> = serde_json::from_slice(index_bytes)
-                        .map_err(|e| Error::Serialization(e.to_string()))?;
-                    binding_ids.retain(|id| id != &binding.id);
-                    if binding_ids.is_empty() {
-                        self.bindings_by_session
-                            .delete(&mut wtxn, &old.session_id)
-                            .map_err(|e| Error::Database(e.to_string()))?;
-                    } else {
-                        let new_bytes = serde_json::to_vec(&binding_ids)
-                            .map_err(|e| Error::Serialization(e.to_string()))?;
-                        self.bindings_by_session
-                            .put(&mut wtxn, &old.session_id, &new_bytes)
-                            .map_err(|e| Error::Database(e.to_string()))?;
-                    }
-                }
-            }
-
-            // Remove from old entity index if entity changed
-            let old_entity_key = format!("{}:{}", old.entity_type, old.entity_id);
-            let new_entity_key = format!("{}:{}", binding.entity_type, binding.entity_id);
-            if old_entity_key != new_entity_key {
-                if let Some(index_bytes) = self.bindings_by_entity.get(&wtxn, &old_entity_key).map_err(|e| Error::Database(e.to_string()))? {
-                    let mut binding_ids: Vec<String> = serde_json::from_slice(index_bytes)
-                        .map_err(|e| Error::Serialization(e.to_string()))?;
-                    binding_ids.retain(|id| id != &binding.id);
-                    if binding_ids.is_empty() {
-                        self.bindings_by_entity
-                            .delete(&mut wtxn, &old_entity_key)
-                            .map_err(|e| Error::Database(e.to_string()))?;
-                    } else {
-                        let new_bytes = serde_json::to_vec(&binding_ids)
-                            .map_err(|e| Error::Serialization(e.to_string()))?;
-                        self.bindings_by_entity
-                            .put(&mut wtxn, &old_entity_key, &new_bytes)
-                            .map_err(|e| Error::Database(e.to_string()))?;
-                    }
-                }
-            }
-        }
-
-        // Update bindings_by_session index
-        let mut session_binding_ids: Vec<String> = match self.bindings_by_session.get(&wtxn, &binding.session_id).map_err(|e| Error::Database(e.to_string()))? {
-            Some(index_bytes) => serde_json::from_slice(index_bytes)
-                .map_err(|e| Error::Serialization(e.to_string()))?,
-            None => vec![],
-        };
-
-        if !session_binding_ids.contains(&binding.id) {
-            session_binding_ids.push(binding.id.clone());
-            let index_bytes = serde_json::to_vec(&session_binding_ids)
-                .map_err(|e| Error::Serialization(e.to_string()))?;
-            self.bindings_by_session
-                .put(&mut wtxn, &binding.session_id, &index_bytes)
-                .map_err(|e| Error::Database(e.to_string()))?;
-        }
-
-        // Update bindings_by_entity index
-        let entity_key = format!("{}:{}", binding.entity_type, binding.entity_id);
-        let mut entity_binding_ids: Vec<String> = match self.bindings_by_entity.get(&wtxn, &entity_key).map_err(|e| Error::Database(e.to_string()))? {
-            Some(index_bytes) => serde_json::from_slice(index_bytes)
-                .map_err(|e| Error::Serialization(e.to_string()))?,
-            None => vec![],
-        };
-
-        if !entity_binding_ids.contains(&binding.id) {
-            entity_binding_ids.push(binding.id.clone());
-            let index_bytes = serde_json::to_vec(&entity_binding_ids)
-                .map_err(|e| Error::Serialization(e.to_string()))?;
-            self.bindings_by_entity
-                .put(&mut wtxn, &entity_key, &index_bytes)
-                .map_err(|e| Error::Database(e.to_string()))?;
-        }
-
-        wtxn.commit().map_err(|e| Error::Database(e.to_string()))?;
-
-        Ok(())
-    }
-
-    async fn load_session_binding(&self, id: &str) -> Result<Option<SessionBinding>> {
-        let rtxn = self.env.read_txn().map_err(|e| Error::Database(e.to_string()))?;
-
-        match self.session_bindings.get(&rtxn, id).map_err(|e| Error::Database(e.to_string()))? {
-            Some(bytes) => {
-                let data: SessionBinding = serde_json::from_slice(bytes)
-                    .map_err(|e| Error::Serialization(e.to_string()))?;
-                Ok(Some(data))
-            }
-            None => Ok(None),
-        }
-    }
-
-    async fn delete_session_binding(&self, id: &str) -> Result<()> {
-        let mut wtxn = self.env.write_txn().map_err(|e| Error::Database(e.to_string()))?;
-
-        // Get the binding to find its indexes
-        if let Some(bytes) = self.session_bindings.get(&wtxn, id).map_err(|e| Error::Database(e.to_string()))? {
-            let binding: SessionBinding = serde_json::from_slice(bytes)
-                .map_err(|e| Error::Serialization(e.to_string()))?;
-
-            // Remove from bindings_by_session index
-            if let Some(index_bytes) = self.bindings_by_session.get(&wtxn, &binding.session_id).map_err(|e| Error::Database(e.to_string()))? {
-                let mut binding_ids: Vec<String> = serde_json::from_slice(index_bytes)
-                    .map_err(|e| Error::Serialization(e.to_string()))?;
-                binding_ids.retain(|bid| bid != id);
-                if binding_ids.is_empty() {
-                    self.bindings_by_session
-                        .delete(&mut wtxn, &binding.session_id)
-                        .map_err(|e| Error::Database(e.to_string()))?;
-                } else {
-                    let new_bytes = serde_json::to_vec(&binding_ids)
-                        .map_err(|e| Error::Serialization(e.to_string()))?;
-                    self.bindings_by_session
-                        .put(&mut wtxn, &binding.session_id, &new_bytes)
-                        .map_err(|e| Error::Database(e.to_string()))?;
-                }
-            }
-
-            // Remove from bindings_by_entity index
-            let entity_key = format!("{}:{}", binding.entity_type, binding.entity_id);
-            if let Some(index_bytes) = self.bindings_by_entity.get(&wtxn, &entity_key).map_err(|e| Error::Database(e.to_string()))? {
-                let mut binding_ids: Vec<String> = serde_json::from_slice(index_bytes)
-                    .map_err(|e| Error::Serialization(e.to_string()))?;
-                binding_ids.retain(|bid| bid != id);
-                if binding_ids.is_empty() {
-                    self.bindings_by_entity
-                        .delete(&mut wtxn, &entity_key)
-                        .map_err(|e| Error::Database(e.to_string()))?;
-                } else {
-                    let new_bytes = serde_json::to_vec(&binding_ids)
-                        .map_err(|e| Error::Serialization(e.to_string()))?;
-                    self.bindings_by_entity
-                        .put(&mut wtxn, &entity_key, &new_bytes)
-                        .map_err(|e| Error::Database(e.to_string()))?;
-                }
-            }
-        }
-
-        // Delete the binding
-        self.session_bindings
-            .delete(&mut wtxn, id)
-            .map_err(|e| Error::Database(e.to_string()))?;
-
-        wtxn.commit().map_err(|e| Error::Database(e.to_string()))?;
-
-        Ok(())
-    }
-
-    async fn get_bindings_for_session(&self, session_id: &str) -> Result<Vec<SessionBinding>> {
-        let rtxn = self.env.read_txn().map_err(|e| Error::Database(e.to_string()))?;
-
-        let binding_ids: Vec<String> = match self.bindings_by_session.get(&rtxn, session_id).map_err(|e| Error::Database(e.to_string()))? {
-            Some(bytes) => serde_json::from_slice(bytes)
-                .map_err(|e| Error::Serialization(e.to_string()))?,
-            None => return Ok(vec![]),
-        };
-
-        let mut bindings = Vec::with_capacity(binding_ids.len());
-        for bid in binding_ids {
-            if let Some(bytes) = self.session_bindings.get(&rtxn, &bid).map_err(|e| Error::Database(e.to_string()))? {
-                let binding: SessionBinding = serde_json::from_slice(bytes)
-                    .map_err(|e| Error::Serialization(e.to_string()))?;
-                bindings.push(binding);
-            }
-        }
-
-        Ok(bindings)
-    }
-
-    async fn get_bindings_for_entity(
-        &self,
-        entity_type: &str,
-        entity_id: &str,
-    ) -> Result<Vec<SessionBinding>> {
-        let rtxn = self.env.read_txn().map_err(|e| Error::Database(e.to_string()))?;
-
-        let entity_key = format!("{}:{}", entity_type, entity_id);
-        let binding_ids: Vec<String> = match self.bindings_by_entity.get(&rtxn, &entity_key).map_err(|e| Error::Database(e.to_string()))? {
-            Some(bytes) => serde_json::from_slice(bytes)
-                .map_err(|e| Error::Serialization(e.to_string()))?,
-            None => return Ok(vec![]),
-        };
-
-        let mut bindings = Vec::with_capacity(binding_ids.len());
-        for bid in binding_ids {
-            if let Some(bytes) = self.session_bindings.get(&rtxn, &bid).map_err(|e| Error::Database(e.to_string()))? {
-                let binding: SessionBinding = serde_json::from_slice(bytes)
-                    .map_err(|e| Error::Serialization(e.to_string()))?;
-                bindings.push(binding);
-            }
-        }
-
-        Ok(bindings)
-    }
-
-    async fn list_bindings(&self) -> Result<Vec<SessionBinding>> {
-        let rtxn = self.env.read_txn().map_err(|e| Error::Database(e.to_string()))?;
-
-        let mut bindings = Vec::new();
-        let iter = self.session_bindings.iter(&rtxn)
-            .map_err(|e| Error::Database(e.to_string()))?;
-
-        for result in iter {
-            let (_key, bytes) = result.map_err(|e| Error::Database(e.to_string()))?;
-            let binding: SessionBinding = serde_json::from_slice(bytes)
-                .map_err(|e| Error::Serialization(e.to_string()))?;
-            bindings.push(binding);
-        }
-
-        Ok(bindings)
-    }
-
-    // =========================================================================
     // User Preferences Implementation
     // =========================================================================
 
     async fn load_user_prefs(&self) -> Result<UserPrefs> {
-        let rtxn = self.env.read_txn().map_err(|e| Error::Database(e.to_string()))?;
+        let rtxn = self
+            .env
+            .read_txn()
+            .map_err(|e| Error::Database(e.to_string()))?;
 
-        match self.metadata.get(&rtxn, USER_PREFS_KEY).map_err(|e| Error::Database(e.to_string()))? {
+        match self
+            .metadata
+            .get(&rtxn, USER_PREFS_KEY)
+            .map_err(|e| Error::Database(e.to_string()))?
+        {
             Some(bytes) => {
                 let prefs: UserPrefs = serde_json::from_slice(bytes)
                     .map_err(|e| Error::Serialization(e.to_string()))?;
                 Ok(prefs)
             }
             None => Ok(UserPrefs {
-                goal_tree_collapsed_ids: vec![],
                 pinned_session_ids: vec![],
             }),
         }
     }
 
     async fn save_user_prefs(&self, prefs: &UserPrefs) -> Result<()> {
-        let bytes = serde_json::to_vec(prefs)
-            .map_err(|e| Error::Serialization(e.to_string()))?;
+        let bytes = serde_json::to_vec(prefs).map_err(|e| Error::Serialization(e.to_string()))?;
 
-        let mut wtxn = self.env.write_txn().map_err(|e| Error::Database(e.to_string()))?;
+        let mut wtxn = self
+            .env
+            .write_txn()
+            .map_err(|e| Error::Database(e.to_string()))?;
         self.metadata
             .put(&mut wtxn, USER_PREFS_KEY, &bytes)
             .map_err(|e| Error::Database(e.to_string()))?;
@@ -1921,13 +971,16 @@ impl StorageEngine for LmdbEngine {
     // =========================================================================
 
     async fn save_watcher(&self, watcher: &WatcherRelation) -> Result<()> {
-        let bytes = serde_json::to_vec(watcher)
-            .map_err(|e| Error::Serialization(e.to_string()))?;
+        let bytes = serde_json::to_vec(watcher).map_err(|e| Error::Serialization(e.to_string()))?;
 
-        let mut wtxn = self.env.write_txn().map_err(|e| Error::Database(e.to_string()))?;
+        let mut wtxn = self
+            .env
+            .write_txn()
+            .map_err(|e| Error::Database(e.to_string()))?;
 
         // Check if this watcher already exists to handle index updates
-        let existing = self.watchers
+        let existing = self
+            .watchers
             .get(&wtxn, &watcher.id)
             .map_err(|e| Error::Database(e.to_string()))?
             .and_then(|b| serde_json::from_slice::<WatcherRelation>(b).ok());
@@ -1942,33 +995,70 @@ impl StorageEngine for LmdbEngine {
         if let Some(ref old) = existing {
             if old.target_session_id != watcher.target_session_id {
                 // Remove from old target index
-                self.remove_from_index(&mut wtxn, &self.watchers_by_target, &old.target_session_id, &watcher.id)?;
+                self.remove_from_index(
+                    &mut wtxn,
+                    &self.watchers_by_target,
+                    &old.target_session_id,
+                    &watcher.id,
+                )?;
             }
             if old.watcher_session_id != watcher.watcher_session_id {
                 // Remove from old watcher index
-                self.remove_from_index(&mut wtxn, &self.watchers_by_watcher, &old.watcher_session_id, &watcher.id)?;
+                self.remove_from_index(
+                    &mut wtxn,
+                    &self.watchers_by_watcher,
+                    &old.watcher_session_id,
+                    &watcher.id,
+                )?;
             }
         }
 
         // Add to target index
-        self.add_to_index(&mut wtxn, &self.watchers_by_target, &watcher.target_session_id, &watcher.id)?;
+        self.add_to_index(
+            &mut wtxn,
+            &self.watchers_by_target,
+            &watcher.target_session_id,
+            &watcher.id,
+        )?;
 
         // Add to watcher index
-        self.add_to_index(&mut wtxn, &self.watchers_by_watcher, &watcher.watcher_session_id, &watcher.id)?;
+        self.add_to_index(
+            &mut wtxn,
+            &self.watchers_by_watcher,
+            &watcher.watcher_session_id,
+            &watcher.id,
+        )?;
 
         wtxn.commit().map_err(|e| Error::Database(e.to_string()))?;
         Ok(())
     }
 
     async fn delete_watcher(&self, id: &str) -> Result<()> {
-        let mut wtxn = self.env.write_txn().map_err(|e| Error::Database(e.to_string()))?;
+        let mut wtxn = self
+            .env
+            .write_txn()
+            .map_err(|e| Error::Database(e.to_string()))?;
 
         // Load the watcher first to clean up indexes
-        if let Some(bytes) = self.watchers.get(&wtxn, id).map_err(|e| Error::Database(e.to_string()))? {
+        if let Some(bytes) = self
+            .watchers
+            .get(&wtxn, id)
+            .map_err(|e| Error::Database(e.to_string()))?
+        {
             if let Ok(watcher) = serde_json::from_slice::<WatcherRelation>(bytes) {
                 // Remove from indexes
-                self.remove_from_index(&mut wtxn, &self.watchers_by_target, &watcher.target_session_id, id)?;
-                self.remove_from_index(&mut wtxn, &self.watchers_by_watcher, &watcher.watcher_session_id, id)?;
+                self.remove_from_index(
+                    &mut wtxn,
+                    &self.watchers_by_target,
+                    &watcher.target_session_id,
+                    id,
+                )?;
+                self.remove_from_index(
+                    &mut wtxn,
+                    &self.watchers_by_watcher,
+                    &watcher.watcher_session_id,
+                    id,
+                )?;
             }
         }
 
@@ -1981,11 +1071,18 @@ impl StorageEngine for LmdbEngine {
         Ok(())
     }
 
-    async fn get_watchers_for_target(&self, target_session_id: &str) -> Result<Vec<WatcherRelation>> {
-        let rtxn = self.env.read_txn().map_err(|e| Error::Database(e.to_string()))?;
+    async fn get_watchers_for_target(
+        &self,
+        target_session_id: &str,
+    ) -> Result<Vec<WatcherRelation>> {
+        let rtxn = self
+            .env
+            .read_txn()
+            .map_err(|e| Error::Database(e.to_string()))?;
 
         // Get watcher IDs from index
-        let ids: Vec<String> = self.watchers_by_target
+        let ids: Vec<String> = self
+            .watchers_by_target
             .get(&rtxn, target_session_id)
             .map_err(|e| Error::Database(e.to_string()))?
             .and_then(|b| serde_json::from_slice(b).ok())
@@ -1994,7 +1091,11 @@ impl StorageEngine for LmdbEngine {
         // Load each watcher
         let mut watchers = Vec::new();
         for id in ids {
-            if let Some(bytes) = self.watchers.get(&rtxn, &id).map_err(|e| Error::Database(e.to_string()))? {
+            if let Some(bytes) = self
+                .watchers
+                .get(&rtxn, &id)
+                .map_err(|e| Error::Database(e.to_string()))?
+            {
                 if let Ok(watcher) = serde_json::from_slice(bytes) {
                     watchers.push(watcher);
                 }
@@ -2004,11 +1105,18 @@ impl StorageEngine for LmdbEngine {
         Ok(watchers)
     }
 
-    async fn get_targets_for_watcher(&self, watcher_session_id: &str) -> Result<Vec<WatcherRelation>> {
-        let rtxn = self.env.read_txn().map_err(|e| Error::Database(e.to_string()))?;
+    async fn get_targets_for_watcher(
+        &self,
+        watcher_session_id: &str,
+    ) -> Result<Vec<WatcherRelation>> {
+        let rtxn = self
+            .env
+            .read_txn()
+            .map_err(|e| Error::Database(e.to_string()))?;
 
         // Get watcher IDs from index
-        let ids: Vec<String> = self.watchers_by_watcher
+        let ids: Vec<String> = self
+            .watchers_by_watcher
             .get(&rtxn, watcher_session_id)
             .map_err(|e| Error::Database(e.to_string()))?
             .and_then(|b| serde_json::from_slice(b).ok())
@@ -2017,7 +1125,11 @@ impl StorageEngine for LmdbEngine {
         // Load each watcher
         let mut watchers = Vec::new();
         for id in ids {
-            if let Some(bytes) = self.watchers.get(&rtxn, &id).map_err(|e| Error::Database(e.to_string()))? {
+            if let Some(bytes) = self
+                .watchers
+                .get(&rtxn, &id)
+                .map_err(|e| Error::Database(e.to_string()))?
+            {
                 if let Ok(watcher) = serde_json::from_slice(bytes) {
                     watchers.push(watcher);
                 }
@@ -2028,10 +1140,16 @@ impl StorageEngine for LmdbEngine {
     }
 
     async fn list_watchers(&self) -> Result<Vec<WatcherRelation>> {
-        let rtxn = self.env.read_txn().map_err(|e| Error::Database(e.to_string()))?;
+        let rtxn = self
+            .env
+            .read_txn()
+            .map_err(|e| Error::Database(e.to_string()))?;
         let mut watchers = Vec::new();
 
-        let iter = self.watchers.iter(&rtxn).map_err(|e| Error::Database(e.to_string()))?;
+        let iter = self
+            .watchers
+            .iter(&rtxn)
+            .map_err(|e| Error::Database(e.to_string()))?;
         for result in iter {
             let (_, bytes) = result.map_err(|e| Error::Database(e.to_string()))?;
             if let Ok(watcher) = serde_json::from_slice(bytes) {
@@ -2050,10 +1168,17 @@ impl StorageEngine for LmdbEngine {
         let bytes = serde_json::to_vec(user).map_err(|e| Error::Serialization(e.to_string()))?;
         let username_key = user.username.to_lowercase();
 
-        let mut wtxn = self.env.write_txn().map_err(|e| Error::Database(e.to_string()))?;
+        let mut wtxn = self
+            .env
+            .write_txn()
+            .map_err(|e| Error::Database(e.to_string()))?;
 
         // Check if user already exists to handle username changes
-        let old_username: Option<String> = match self.users.get(&wtxn, &user.id).map_err(|e| Error::Database(e.to_string()))? {
+        let old_username: Option<String> = match self
+            .users
+            .get(&wtxn, &user.id)
+            .map_err(|e| Error::Database(e.to_string()))?
+        {
             Some(old_bytes) => {
                 let old_user: UserData = serde_json::from_slice(old_bytes)
                     .map_err(|e| Error::Serialization(e.to_string()))?;
@@ -2080,8 +1205,8 @@ impl StorageEngine for LmdbEngine {
         }
 
         // Update users_by_username index (store user_id, not full user)
-        let id_bytes = serde_json::to_vec(&user.id)
-            .map_err(|e| Error::Serialization(e.to_string()))?;
+        let id_bytes =
+            serde_json::to_vec(&user.id).map_err(|e| Error::Serialization(e.to_string()))?;
         self.users_by_username
             .put(&mut wtxn, &username_key, &id_bytes)
             .map_err(|e| Error::Database(e.to_string()))?;
@@ -2092,9 +1217,16 @@ impl StorageEngine for LmdbEngine {
     }
 
     async fn load_user(&self, id: &str) -> Result<Option<UserData>> {
-        let rtxn = self.env.read_txn().map_err(|e| Error::Database(e.to_string()))?;
+        let rtxn = self
+            .env
+            .read_txn()
+            .map_err(|e| Error::Database(e.to_string()))?;
 
-        match self.users.get(&rtxn, id).map_err(|e| Error::Database(e.to_string()))? {
+        match self
+            .users
+            .get(&rtxn, id)
+            .map_err(|e| Error::Database(e.to_string()))?
+        {
             Some(bytes) => {
                 let data: UserData = serde_json::from_slice(bytes)
                     .map_err(|e| Error::Serialization(e.to_string()))?;
@@ -2105,18 +1237,30 @@ impl StorageEngine for LmdbEngine {
     }
 
     async fn load_user_by_username(&self, username: &str) -> Result<Option<UserData>> {
-        let rtxn = self.env.read_txn().map_err(|e| Error::Database(e.to_string()))?;
+        let rtxn = self
+            .env
+            .read_txn()
+            .map_err(|e| Error::Database(e.to_string()))?;
         let username_key = username.to_lowercase();
 
         // Look up user_id from username index
-        let user_id: String = match self.users_by_username.get(&rtxn, &username_key).map_err(|e| Error::Database(e.to_string()))? {
-            Some(bytes) => serde_json::from_slice(bytes)
-                .map_err(|e| Error::Serialization(e.to_string()))?,
+        let user_id: String = match self
+            .users_by_username
+            .get(&rtxn, &username_key)
+            .map_err(|e| Error::Database(e.to_string()))?
+        {
+            Some(bytes) => {
+                serde_json::from_slice(bytes).map_err(|e| Error::Serialization(e.to_string()))?
+            }
             None => return Ok(None),
         };
 
         // Load the full user record
-        match self.users.get(&rtxn, &user_id).map_err(|e| Error::Database(e.to_string()))? {
+        match self
+            .users
+            .get(&rtxn, &user_id)
+            .map_err(|e| Error::Database(e.to_string()))?
+        {
             Some(bytes) => {
                 let data: UserData = serde_json::from_slice(bytes)
                     .map_err(|e| Error::Serialization(e.to_string()))?;
@@ -2127,12 +1271,19 @@ impl StorageEngine for LmdbEngine {
     }
 
     async fn delete_user(&self, id: &str) -> Result<()> {
-        let mut wtxn = self.env.write_txn().map_err(|e| Error::Database(e.to_string()))?;
+        let mut wtxn = self
+            .env
+            .write_txn()
+            .map_err(|e| Error::Database(e.to_string()))?;
 
         // Get the user to find their username for index cleanup
-        if let Some(bytes) = self.users.get(&wtxn, id).map_err(|e| Error::Database(e.to_string()))? {
-            let user: UserData = serde_json::from_slice(bytes)
-                .map_err(|e| Error::Serialization(e.to_string()))?;
+        if let Some(bytes) = self
+            .users
+            .get(&wtxn, id)
+            .map_err(|e| Error::Database(e.to_string()))?
+        {
+            let user: UserData =
+                serde_json::from_slice(bytes).map_err(|e| Error::Serialization(e.to_string()))?;
 
             // Remove from users_by_username index
             let username_key = user.username.to_lowercase();
@@ -2152,649 +1303,24 @@ impl StorageEngine for LmdbEngine {
     }
 
     async fn list_users(&self) -> Result<Vec<UserData>> {
-        let rtxn = self.env.read_txn().map_err(|e| Error::Database(e.to_string()))?;
+        let rtxn = self
+            .env
+            .read_txn()
+            .map_err(|e| Error::Database(e.to_string()))?;
 
         let mut users = Vec::new();
-        for entry in self.users.iter(&rtxn).map_err(|e| Error::Database(e.to_string()))? {
-            let (_key, value) = entry.map_err(|e| Error::Database(e.to_string()))?;
-            let data: UserData = serde_json::from_slice(value)
-                .map_err(|e| Error::Serialization(e.to_string()))?;
-            users.push(data);
-        }
-
-        Ok(users)
-    }
-
-    // =========================================================================
-    // Kanban System - Tasks
-    // =========================================================================
-
-    async fn save_task(&self, task: &TaskData) -> Result<()> {
-        let bytes = serde_json::to_vec(task).map_err(|e| Error::Serialization(e.to_string()))?;
-
-        let mut wtxn = self.env.write_txn().map_err(|e| Error::Database(e.to_string()))?;
-        self.tasks
-            .put(&mut wtxn, &task.id, &bytes)
-            .map_err(|e| Error::Database(e.to_string()))?;
-        wtxn.commit().map_err(|e| Error::Database(e.to_string()))?;
-
-        Ok(())
-    }
-
-    async fn load_task(&self, id: &str) -> Result<Option<TaskData>> {
-        let rtxn = self.env.read_txn().map_err(|e| Error::Database(e.to_string()))?;
-
-        match self.tasks.get(&rtxn, id).map_err(|e| Error::Database(e.to_string()))? {
-            Some(bytes) => {
-                let data: TaskData = serde_json::from_slice(bytes)
-                    .map_err(|e| Error::Serialization(e.to_string()))?;
-                Ok(Some(data))
-            }
-            None => Ok(None),
-        }
-    }
-
-    async fn delete_task(&self, id: &str) -> Result<()> {
-        let mut wtxn = self.env.write_txn().map_err(|e| Error::Database(e.to_string()))?;
-        self.tasks
-            .delete(&mut wtxn, id)
-            .map_err(|e| Error::Database(e.to_string()))?;
-        wtxn.commit().map_err(|e| Error::Database(e.to_string()))?;
-
-        Ok(())
-    }
-
-    async fn list_tasks(&self) -> Result<Vec<TaskData>> {
-        let rtxn = self.env.read_txn().map_err(|e| Error::Database(e.to_string()))?;
-
-        let mut tasks = Vec::new();
-        for entry in self.tasks.iter(&rtxn).map_err(|e| Error::Database(e.to_string()))? {
-            let (_key, value) = entry.map_err(|e| Error::Database(e.to_string()))?;
-            let data: TaskData = serde_json::from_slice(value)
-                .map_err(|e| Error::Serialization(e.to_string()))?;
-            tasks.push(data);
-        }
-
-        Ok(tasks)
-    }
-
-    // =========================================================================
-    // Kanban System - Boards
-    // =========================================================================
-
-    async fn save_board(&self, board: &BoardData) -> Result<()> {
-        let bytes = serde_json::to_vec(board).map_err(|e| Error::Serialization(e.to_string()))?;
-
-        let mut wtxn = self.env.write_txn().map_err(|e| Error::Database(e.to_string()))?;
-        self.boards
-            .put(&mut wtxn, &board.id, &bytes)
-            .map_err(|e| Error::Database(e.to_string()))?;
-        wtxn.commit().map_err(|e| Error::Database(e.to_string()))?;
-
-        Ok(())
-    }
-
-    async fn load_board(&self, id: &str) -> Result<Option<BoardData>> {
-        let rtxn = self.env.read_txn().map_err(|e| Error::Database(e.to_string()))?;
-
-        match self.boards.get(&rtxn, id).map_err(|e| Error::Database(e.to_string()))? {
-            Some(bytes) => {
-                let data: BoardData = serde_json::from_slice(bytes)
-                    .map_err(|e| Error::Serialization(e.to_string()))?;
-                Ok(Some(data))
-            }
-            None => Ok(None),
-        }
-    }
-
-    async fn delete_board(&self, id: &str) -> Result<()> {
-        let mut wtxn = self.env.write_txn().map_err(|e| Error::Database(e.to_string()))?;
-        self.boards
-            .delete(&mut wtxn, id)
-            .map_err(|e| Error::Database(e.to_string()))?;
-        wtxn.commit().map_err(|e| Error::Database(e.to_string()))?;
-
-        Ok(())
-    }
-
-    async fn list_boards(&self) -> Result<Vec<BoardData>> {
-        let rtxn = self.env.read_txn().map_err(|e| Error::Database(e.to_string()))?;
-
-        let mut boards = Vec::new();
-        for entry in self.boards.iter(&rtxn).map_err(|e| Error::Database(e.to_string()))? {
-            let (_key, value) = entry.map_err(|e| Error::Database(e.to_string()))?;
-            let data: BoardData = serde_json::from_slice(value)
-                .map_err(|e| Error::Serialization(e.to_string()))?;
-            boards.push(data);
-        }
-
-        Ok(boards)
-    }
-
-    // =========================================================================
-    // Kanban System - Columns
-    // =========================================================================
-
-    async fn save_column(&self, column: &ColumnData) -> Result<()> {
-        let bytes = serde_json::to_vec(column).map_err(|e| Error::Serialization(e.to_string()))?;
-
-        let mut wtxn = self.env.write_txn().map_err(|e| Error::Database(e.to_string()))?;
-        self.columns
-            .put(&mut wtxn, &column.id, &bytes)
-            .map_err(|e| Error::Database(e.to_string()))?;
-        wtxn.commit().map_err(|e| Error::Database(e.to_string()))?;
-
-        Ok(())
-    }
-
-    async fn load_column(&self, id: &str) -> Result<Option<ColumnData>> {
-        let rtxn = self.env.read_txn().map_err(|e| Error::Database(e.to_string()))?;
-
-        match self.columns.get(&rtxn, id).map_err(|e| Error::Database(e.to_string()))? {
-            Some(bytes) => {
-                let data: ColumnData = serde_json::from_slice(bytes)
-                    .map_err(|e| Error::Serialization(e.to_string()))?;
-                Ok(Some(data))
-            }
-            None => Ok(None),
-        }
-    }
-
-    async fn delete_column(&self, id: &str) -> Result<()> {
-        let mut wtxn = self.env.write_txn().map_err(|e| Error::Database(e.to_string()))?;
-        self.columns
-            .delete(&mut wtxn, id)
-            .map_err(|e| Error::Database(e.to_string()))?;
-        wtxn.commit().map_err(|e| Error::Database(e.to_string()))?;
-
-        Ok(())
-    }
-
-    // =========================================================================
-    // Graph System - Edges
-    // =========================================================================
-
-    async fn save_edge(&self, edge: &EdgeData) -> Result<()> {
-        let bytes = serde_json::to_vec(edge).map_err(|e| Error::Serialization(e.to_string()))?;
-
-        let mut wtxn = self.env.write_txn().map_err(|e| Error::Database(e.to_string()))?;
-
-        // Check if this edge already exists (for index cleanup on update)
-        let old_edge: Option<EdgeData> = match self.edges.get(&wtxn, &edge.id).map_err(|e| Error::Database(e.to_string()))? {
-            Some(old_bytes) => Some(serde_json::from_slice(old_bytes).map_err(|e| Error::Serialization(e.to_string()))?),
-            None => None,
-        };
-
-        // Save edge to primary table
-        self.edges
-            .put(&mut wtxn, &edge.id, &bytes)
-            .map_err(|e| Error::Database(e.to_string()))?;
-
-        // Update source index
-        let source_key = format!("{}:{}", edge.source_type, edge.source_id);
-        let mut source_edges: Vec<String> = match self.edges_by_source
-            .get(&wtxn, &source_key)
-            .map_err(|e| Error::Database(e.to_string()))?
-        {
-            Some(bytes) => serde_json::from_slice(bytes).map_err(|e| Error::Serialization(e.to_string()))?,
-            None => vec![],
-        };
-
-        // Remove from old source index if source changed
-        if let Some(ref old) = old_edge {
-            let old_source_key = format!("{}:{}", old.source_type, old.source_id);
-            if old_source_key != source_key {
-                let mut old_source_edges: Vec<String> = match self.edges_by_source
-                    .get(&wtxn, &old_source_key)
-                    .map_err(|e| Error::Database(e.to_string()))?
-                {
-                    Some(bytes) => serde_json::from_slice(bytes).map_err(|e| Error::Serialization(e.to_string()))?,
-                    None => vec![],
-                };
-                old_source_edges.retain(|id| id != &edge.id);
-                if old_source_edges.is_empty() {
-                    self.edges_by_source.delete(&mut wtxn, &old_source_key).map_err(|e| Error::Database(e.to_string()))?;
-                } else {
-                    let old_bytes = serde_json::to_vec(&old_source_edges).map_err(|e| Error::Serialization(e.to_string()))?;
-                    self.edges_by_source.put(&mut wtxn, &old_source_key, &old_bytes).map_err(|e| Error::Database(e.to_string()))?;
-                }
-            }
-        }
-
-        // Add to source index if not already present
-        if !source_edges.contains(&edge.id) {
-            source_edges.push(edge.id.clone());
-            let source_bytes = serde_json::to_vec(&source_edges).map_err(|e| Error::Serialization(e.to_string()))?;
-            self.edges_by_source.put(&mut wtxn, &source_key, &source_bytes).map_err(|e| Error::Database(e.to_string()))?;
-        }
-
-        // Update target index
-        let target_key = format!("{}:{}", edge.target_type, edge.target_id);
-        let mut target_edges: Vec<String> = match self.edges_by_target
-            .get(&wtxn, &target_key)
-            .map_err(|e| Error::Database(e.to_string()))?
-        {
-            Some(bytes) => serde_json::from_slice(bytes).map_err(|e| Error::Serialization(e.to_string()))?,
-            None => vec![],
-        };
-
-        // Remove from old target index if target changed
-        if let Some(ref old) = old_edge {
-            let old_target_key = format!("{}:{}", old.target_type, old.target_id);
-            if old_target_key != target_key {
-                let mut old_target_edges: Vec<String> = match self.edges_by_target
-                    .get(&wtxn, &old_target_key)
-                    .map_err(|e| Error::Database(e.to_string()))?
-                {
-                    Some(bytes) => serde_json::from_slice(bytes).map_err(|e| Error::Serialization(e.to_string()))?,
-                    None => vec![],
-                };
-                old_target_edges.retain(|id| id != &edge.id);
-                if old_target_edges.is_empty() {
-                    self.edges_by_target.delete(&mut wtxn, &old_target_key).map_err(|e| Error::Database(e.to_string()))?;
-                } else {
-                    let old_bytes = serde_json::to_vec(&old_target_edges).map_err(|e| Error::Serialization(e.to_string()))?;
-                    self.edges_by_target.put(&mut wtxn, &old_target_key, &old_bytes).map_err(|e| Error::Database(e.to_string()))?;
-                }
-            }
-        }
-
-        // Add to target index if not already present
-        if !target_edges.contains(&edge.id) {
-            target_edges.push(edge.id.clone());
-            let target_bytes = serde_json::to_vec(&target_edges).map_err(|e| Error::Serialization(e.to_string()))?;
-            self.edges_by_target.put(&mut wtxn, &target_key, &target_bytes).map_err(|e| Error::Database(e.to_string()))?;
-        }
-
-        wtxn.commit().map_err(|e| Error::Database(e.to_string()))?;
-
-        Ok(())
-    }
-
-    async fn load_edge(&self, id: &str) -> Result<Option<EdgeData>> {
-        let rtxn = self.env.read_txn().map_err(|e| Error::Database(e.to_string()))?;
-
-        match self.edges.get(&rtxn, id).map_err(|e| Error::Database(e.to_string()))? {
-            Some(bytes) => {
-                let data: EdgeData = serde_json::from_slice(bytes)
-                    .map_err(|e| Error::Serialization(e.to_string()))?;
-                Ok(Some(data))
-            }
-            None => Ok(None),
-        }
-    }
-
-    async fn delete_edge(&self, id: &str) -> Result<()> {
-        let mut wtxn = self.env.write_txn().map_err(|e| Error::Database(e.to_string()))?;
-
-        // Load edge to get index keys
-        let edge: Option<EdgeData> = match self.edges.get(&wtxn, id).map_err(|e| Error::Database(e.to_string()))? {
-            Some(bytes) => Some(serde_json::from_slice(bytes).map_err(|e| Error::Serialization(e.to_string()))?),
-            None => None,
-        };
-
-        // Delete from primary table
-        self.edges
-            .delete(&mut wtxn, id)
-            .map_err(|e| Error::Database(e.to_string()))?;
-
-        // Clean up indexes
-        if let Some(edge) = edge {
-            // Remove from source index
-            let source_key = format!("{}:{}", edge.source_type, edge.source_id);
-            if let Some(bytes) = self.edges_by_source.get(&wtxn, &source_key).map_err(|e| Error::Database(e.to_string()))? {
-                let mut source_edges: Vec<String> = serde_json::from_slice(bytes).map_err(|e| Error::Serialization(e.to_string()))?;
-                source_edges.retain(|eid| eid != id);
-                if source_edges.is_empty() {
-                    self.edges_by_source.delete(&mut wtxn, &source_key).map_err(|e| Error::Database(e.to_string()))?;
-                } else {
-                    let bytes = serde_json::to_vec(&source_edges).map_err(|e| Error::Serialization(e.to_string()))?;
-                    self.edges_by_source.put(&mut wtxn, &source_key, &bytes).map_err(|e| Error::Database(e.to_string()))?;
-                }
-            }
-
-            // Remove from target index
-            let target_key = format!("{}:{}", edge.target_type, edge.target_id);
-            if let Some(bytes) = self.edges_by_target.get(&wtxn, &target_key).map_err(|e| Error::Database(e.to_string()))? {
-                let mut target_edges: Vec<String> = serde_json::from_slice(bytes).map_err(|e| Error::Serialization(e.to_string()))?;
-                target_edges.retain(|eid| eid != id);
-                if target_edges.is_empty() {
-                    self.edges_by_target.delete(&mut wtxn, &target_key).map_err(|e| Error::Database(e.to_string()))?;
-                } else {
-                    let bytes = serde_json::to_vec(&target_edges).map_err(|e| Error::Serialization(e.to_string()))?;
-                    self.edges_by_target.put(&mut wtxn, &target_key, &bytes).map_err(|e| Error::Database(e.to_string()))?;
-                }
-            }
-        }
-
-        wtxn.commit().map_err(|e| Error::Database(e.to_string()))?;
-
-        Ok(())
-    }
-
-    async fn get_edges_by_source(
-        &self,
-        source_type: &str,
-        source_id: &str,
-    ) -> Result<Vec<EdgeData>> {
-        let rtxn = self.env.read_txn().map_err(|e| Error::Database(e.to_string()))?;
-
-        let source_key = format!("{}:{}", source_type, source_id);
-        let edge_ids: Vec<String> = match self.edges_by_source
-            .get(&rtxn, &source_key)
-            .map_err(|e| Error::Database(e.to_string()))?
-        {
-            Some(bytes) => serde_json::from_slice(bytes).map_err(|e| Error::Serialization(e.to_string()))?,
-            None => return Ok(vec![]),
-        };
-
-        let mut edges = Vec::with_capacity(edge_ids.len());
-        for edge_id in edge_ids {
-            if let Some(bytes) = self.edges.get(&rtxn, &edge_id).map_err(|e| Error::Database(e.to_string()))? {
-                let edge: EdgeData = serde_json::from_slice(bytes).map_err(|e| Error::Serialization(e.to_string()))?;
-                edges.push(edge);
-            }
-        }
-
-        // Sort by position (if set), then by created_at
-        edges.sort_by(|a, b| {
-            match (a.position, b.position) {
-                (Some(pa), Some(pb)) => pa.cmp(&pb),
-                (Some(_), None) => std::cmp::Ordering::Less,
-                (None, Some(_)) => std::cmp::Ordering::Greater,
-                (None, None) => a.created_at.cmp(&b.created_at),
-            }
-        });
-
-        Ok(edges)
-    }
-
-    async fn get_edges_by_target(
-        &self,
-        target_type: &str,
-        target_id: &str,
-    ) -> Result<Vec<EdgeData>> {
-        let rtxn = self.env.read_txn().map_err(|e| Error::Database(e.to_string()))?;
-
-        let target_key = format!("{}:{}", target_type, target_id);
-        let edge_ids: Vec<String> = match self.edges_by_target
-            .get(&rtxn, &target_key)
-            .map_err(|e| Error::Database(e.to_string()))?
-        {
-            Some(bytes) => serde_json::from_slice(bytes).map_err(|e| Error::Serialization(e.to_string()))?,
-            None => return Ok(vec![]),
-        };
-
-        let mut edges = Vec::with_capacity(edge_ids.len());
-        for edge_id in edge_ids {
-            if let Some(bytes) = self.edges.get(&rtxn, &edge_id).map_err(|e| Error::Database(e.to_string()))? {
-                let edge: EdgeData = serde_json::from_slice(bytes).map_err(|e| Error::Serialization(e.to_string()))?;
-                edges.push(edge);
-            }
-        }
-
-        // Sort by position (if set), then by created_at
-        edges.sort_by(|a, b| {
-            match (a.position, b.position) {
-                (Some(pa), Some(pb)) => pa.cmp(&pb),
-                (Some(_), None) => std::cmp::Ordering::Less,
-                (None, Some(_)) => std::cmp::Ordering::Greater,
-                (None, None) => a.created_at.cmp(&b.created_at),
-            }
-        });
-
-        Ok(edges)
-    }
-
-    async fn get_edges_by_source_and_relationship(
-        &self,
-        source_type: &str,
-        source_id: &str,
-        relationship: &str,
-    ) -> Result<Vec<EdgeData>> {
-        let edges = self.get_edges_by_source(source_type, source_id).await?;
-        Ok(edges.into_iter().filter(|e| e.relationship == relationship).collect())
-    }
-
-    async fn get_edges_by_target_and_relationship(
-        &self,
-        target_type: &str,
-        target_id: &str,
-        relationship: &str,
-    ) -> Result<Vec<EdgeData>> {
-        let edges = self.get_edges_by_target(target_type, target_id).await?;
-        Ok(edges.into_iter().filter(|e| e.relationship == relationship).collect())
-    }
-
-    async fn list_edges(&self) -> Result<Vec<EdgeData>> {
-        let rtxn = self.env.read_txn().map_err(|e| Error::Database(e.to_string()))?;
-
-        let mut edges = Vec::new();
-        for entry in self.edges.iter(&rtxn).map_err(|e| Error::Database(e.to_string()))? {
-            let (_key, value) = entry.map_err(|e| Error::Database(e.to_string()))?;
-            let data: EdgeData = serde_json::from_slice(value)
-                .map_err(|e| Error::Serialization(e.to_string()))?;
-            edges.push(data);
-        }
-
-        Ok(edges)
-    }
-
-    // =========================================================================
-    // Session-Board Associations
-    // =========================================================================
-
-    async fn save_session_board_association(
-        &self,
-        association: &SessionBoardAssociation,
-    ) -> Result<()> {
-        let bytes =
-            serde_json::to_vec(association).map_err(|e| Error::Serialization(e.to_string()))?;
-
-        let mut wtxn = self
-            .env
-            .write_txn()
-            .map_err(|e| Error::Database(e.to_string()))?;
-
-        // Check if association already exists to handle session_id changes
-        let old_association: Option<SessionBoardAssociation> = match self
-            .session_board_associations
-            .get(&wtxn, &association.id)
-            .map_err(|e| Error::Database(e.to_string()))?
-        {
-            Some(old_bytes) => Some(
-                serde_json::from_slice(old_bytes).map_err(|e| Error::Serialization(e.to_string()))?,
-            ),
-            None => None,
-        };
-
-        // Save the association
-        self.session_board_associations
-            .put(&mut wtxn, &association.id, &bytes)
-            .map_err(|e| Error::Database(e.to_string()))?;
-
-        // Handle index updates if session_id changed
-        if let Some(ref old) = old_association {
-            if old.session_id != association.session_id {
-                // Remove from old session index
-                if let Some(index_bytes) = self
-                    .boards_by_session
-                    .get(&wtxn, &old.session_id)
-                    .map_err(|e| Error::Database(e.to_string()))?
-                {
-                    let mut assoc_ids: Vec<String> = serde_json::from_slice(index_bytes)
-                        .map_err(|e| Error::Serialization(e.to_string()))?;
-                    assoc_ids.retain(|id| id != &association.id);
-                    if assoc_ids.is_empty() {
-                        self.boards_by_session
-                            .delete(&mut wtxn, &old.session_id)
-                            .map_err(|e| Error::Database(e.to_string()))?;
-                    } else {
-                        let new_bytes = serde_json::to_vec(&assoc_ids)
-                            .map_err(|e| Error::Serialization(e.to_string()))?;
-                        self.boards_by_session
-                            .put(&mut wtxn, &old.session_id, &new_bytes)
-                            .map_err(|e| Error::Database(e.to_string()))?;
-                    }
-                }
-            }
-        }
-
-        // Update boards_by_session index
-        let mut session_assoc_ids: Vec<String> = match self
-            .boards_by_session
-            .get(&wtxn, &association.session_id)
-            .map_err(|e| Error::Database(e.to_string()))?
-        {
-            Some(index_bytes) => {
-                serde_json::from_slice(index_bytes).map_err(|e| Error::Serialization(e.to_string()))?
-            }
-            None => vec![],
-        };
-
-        if !session_assoc_ids.contains(&association.id) {
-            session_assoc_ids.push(association.id.clone());
-            let index_bytes =
-                serde_json::to_vec(&session_assoc_ids).map_err(|e| Error::Serialization(e.to_string()))?;
-            self.boards_by_session
-                .put(&mut wtxn, &association.session_id, &index_bytes)
-                .map_err(|e| Error::Database(e.to_string()))?;
-        }
-
-        wtxn.commit().map_err(|e| Error::Database(e.to_string()))?;
-
-        Ok(())
-    }
-
-    async fn load_session_board_association(
-        &self,
-        id: &str,
-    ) -> Result<Option<SessionBoardAssociation>> {
-        let rtxn = self
-            .env
-            .read_txn()
-            .map_err(|e| Error::Database(e.to_string()))?;
-
-        match self
-            .session_board_associations
-            .get(&rtxn, id)
-            .map_err(|e| Error::Database(e.to_string()))?
-        {
-            Some(bytes) => {
-                let data: SessionBoardAssociation = serde_json::from_slice(bytes)
-                    .map_err(|e| Error::Serialization(e.to_string()))?;
-                Ok(Some(data))
-            }
-            None => Ok(None),
-        }
-    }
-
-    async fn delete_session_board_association(&self, id: &str) -> Result<()> {
-        let mut wtxn = self
-            .env
-            .write_txn()
-            .map_err(|e| Error::Database(e.to_string()))?;
-
-        // Get the association to find its session for index cleanup
-        if let Some(bytes) = self
-            .session_board_associations
-            .get(&wtxn, id)
-            .map_err(|e| Error::Database(e.to_string()))?
-        {
-            let assoc: SessionBoardAssociation = serde_json::from_slice(bytes)
-                .map_err(|e| Error::Serialization(e.to_string()))?;
-
-            // Remove from boards_by_session index
-            if let Some(index_bytes) = self
-                .boards_by_session
-                .get(&wtxn, &assoc.session_id)
-                .map_err(|e| Error::Database(e.to_string()))?
-            {
-                let mut assoc_ids: Vec<String> = serde_json::from_slice(index_bytes)
-                    .map_err(|e| Error::Serialization(e.to_string()))?;
-                assoc_ids.retain(|aid| aid != id);
-                if assoc_ids.is_empty() {
-                    self.boards_by_session
-                        .delete(&mut wtxn, &assoc.session_id)
-                        .map_err(|e| Error::Database(e.to_string()))?;
-                } else {
-                    let new_bytes = serde_json::to_vec(&assoc_ids)
-                        .map_err(|e| Error::Serialization(e.to_string()))?;
-                    self.boards_by_session
-                        .put(&mut wtxn, &assoc.session_id, &new_bytes)
-                        .map_err(|e| Error::Database(e.to_string()))?;
-                }
-            }
-        }
-
-        // Delete the association itself
-        self.session_board_associations
-            .delete(&mut wtxn, id)
-            .map_err(|e| Error::Database(e.to_string()))?;
-
-        wtxn.commit().map_err(|e| Error::Database(e.to_string()))?;
-
-        Ok(())
-    }
-
-    async fn get_board_associations_for_session(
-        &self,
-        session_id: &str,
-    ) -> Result<Vec<SessionBoardAssociation>> {
-        let rtxn = self
-            .env
-            .read_txn()
-            .map_err(|e| Error::Database(e.to_string()))?;
-
-        let assoc_ids: Vec<String> = match self
-            .boards_by_session
-            .get(&rtxn, session_id)
-            .map_err(|e| Error::Database(e.to_string()))?
-        {
-            Some(bytes) => {
-                serde_json::from_slice(bytes).map_err(|e| Error::Serialization(e.to_string()))?
-            }
-            None => return Ok(vec![]),
-        };
-
-        let mut associations = Vec::with_capacity(assoc_ids.len());
-        for id in assoc_ids {
-            if let Some(bytes) = self
-                .session_board_associations
-                .get(&rtxn, &id)
-                .map_err(|e| Error::Database(e.to_string()))?
-            {
-                let assoc: SessionBoardAssociation = serde_json::from_slice(bytes)
-                    .map_err(|e| Error::Serialization(e.to_string()))?;
-                associations.push(assoc);
-            }
-        }
-
-        // Sort by created_at
-        associations.sort_by(|a, b| a.created_at.cmp(&b.created_at));
-
-        Ok(associations)
-    }
-
-    async fn list_session_board_associations(&self) -> Result<Vec<SessionBoardAssociation>> {
-        let rtxn = self
-            .env
-            .read_txn()
-            .map_err(|e| Error::Database(e.to_string()))?;
-
-        let mut associations = Vec::new();
         for entry in self
-            .session_board_associations
+            .users
             .iter(&rtxn)
             .map_err(|e| Error::Database(e.to_string()))?
         {
             let (_key, value) = entry.map_err(|e| Error::Database(e.to_string()))?;
-            let data: SessionBoardAssociation = serde_json::from_slice(value)
-                .map_err(|e| Error::Serialization(e.to_string()))?;
-            associations.push(data);
+            let data: UserData =
+                serde_json::from_slice(value).map_err(|e| Error::Serialization(e.to_string()))?;
+            users.push(data);
         }
 
-        Ok(associations)
+        Ok(users)
     }
 }
 
@@ -3181,7 +1707,10 @@ mod tests {
             // Update session metadata (shouldn't affect turns)
             let mut updated_session = session.clone();
             updated_session.title = "Updated Title".to_string();
-            engine.save_session("sess-1", &updated_session).await.unwrap();
+            engine
+                .save_session("sess-1", &updated_session)
+                .await
+                .unwrap();
 
             // Verify turns are still intact
             let turns = engine.load_turns("sess-1").await.unwrap();
@@ -3209,7 +1738,10 @@ mod tests {
 
         future::block_on(async {
             // Save session with all turns atomically
-            engine.save_session_with_turns("sess-1", &session, &turns).await.unwrap();
+            engine
+                .save_session_with_turns("sess-1", &session, &turns)
+                .await
+                .unwrap();
 
             // Verify session was saved
             let loaded = engine.load_session("sess-1").await.unwrap();
@@ -3244,7 +1776,10 @@ mod tests {
                 make_turn("turn-2", "assistant", "Second"),
                 make_turn("turn-3", "user", "Third"),
             ];
-            engine.save_session_with_turns("sess-1", &session, &new_turns).await.unwrap();
+            engine
+                .save_session_with_turns("sess-1", &session, &new_turns)
+                .await
+                .unwrap();
 
             // All three turns should exist
             let loaded_turns = engine.load_turns("sess-1").await.unwrap();
@@ -3269,14 +1804,20 @@ mod tests {
 
         future::block_on(async {
             // Save initial session with turns
-            engine.save_session_with_turns("sess-1", &session, &initial_turns).await.unwrap();
+            engine
+                .save_session_with_turns("sess-1", &session, &initial_turns)
+                .await
+                .unwrap();
 
             // Replace with different turns (keep turn-2, remove turn-1 and turn-3, add turn-4)
             let replacement_turns = vec![
                 make_turn("turn-2", "assistant", "Second (updated)"),
                 make_turn("turn-4", "user", "Fourth"),
             ];
-            engine.replace_session_turns("sess-1", &replacement_turns).await.unwrap();
+            engine
+                .replace_session_turns("sess-1", &replacement_turns)
+                .await
+                .unwrap();
 
             // Verify only the replacement turns exist, in order
             let loaded_turns = engine.load_turns("sess-1").await.unwrap();
@@ -3300,7 +1841,10 @@ mod tests {
         ];
 
         future::block_on(async {
-            engine.save_session_with_turns("sess-1", &session, &turns).await.unwrap();
+            engine
+                .save_session_with_turns("sess-1", &session, &turns)
+                .await
+                .unwrap();
 
             // Replace with empty list (delete all turns)
             engine.replace_session_turns("sess-1", &[]).await.unwrap();
@@ -3385,10 +1929,7 @@ mod tests {
         let dir = TestDir::new("lmdb_test_session_history_persistence");
         let db_path = dir.db_path();
 
-        let session_ids = vec![
-            "sess-a".to_string(),
-            "sess-b".to_string(),
-        ];
+        let session_ids = vec!["sess-a".to_string(), "sess-b".to_string()];
 
         // Save and close
         {
@@ -3419,7 +1960,7 @@ mod tests {
 
         future::block_on(async {
             let prefs = engine.load_user_prefs().await.unwrap();
-            assert!(prefs.goal_tree_collapsed_ids.is_empty());
+            assert!(prefs.pinned_session_ids.is_empty());
         });
     }
 
@@ -3429,18 +1970,12 @@ mod tests {
         let engine = LmdbEngine::open(dir.db_path()).unwrap();
 
         let prefs = UserPrefs {
-            goal_tree_collapsed_ids: vec![
-                "goal-1".to_string(),
-                "plan-2".to_string(),
-                "todo-3".to_string(),
-            ],
             pinned_session_ids: vec!["session-1".to_string()],
         };
 
         future::block_on(async {
             engine.save_user_prefs(&prefs).await.unwrap();
             let loaded = engine.load_user_prefs().await.unwrap();
-            assert_eq!(loaded.goal_tree_collapsed_ids, prefs.goal_tree_collapsed_ids);
             assert_eq!(loaded.pinned_session_ids, prefs.pinned_session_ids);
         });
     }
@@ -3451,7 +1986,6 @@ mod tests {
         let db_path = dir.db_path();
 
         let prefs = UserPrefs {
-            goal_tree_collapsed_ids: vec!["goal-abc".to_string(), "plan-xyz".to_string()],
             pinned_session_ids: vec!["session-abc".to_string()],
         };
 
@@ -3468,7 +2002,6 @@ mod tests {
             let engine = LmdbEngine::open(&db_path).unwrap();
             future::block_on(async {
                 let loaded = engine.load_user_prefs().await.unwrap();
-                assert_eq!(loaded.goal_tree_collapsed_ids, prefs.goal_tree_collapsed_ids);
                 assert_eq!(loaded.pinned_session_ids, prefs.pinned_session_ids);
             });
         }
@@ -3482,20 +2015,17 @@ mod tests {
         future::block_on(async {
             // Save initial prefs
             let initial = UserPrefs {
-                goal_tree_collapsed_ids: vec!["node-1".to_string()],
                 pinned_session_ids: vec!["session-a".to_string()],
             };
             engine.save_user_prefs(&initial).await.unwrap();
 
             // Save new prefs (should overwrite)
             let updated = UserPrefs {
-                goal_tree_collapsed_ids: vec!["node-2".to_string(), "node-3".to_string()],
                 pinned_session_ids: vec!["session-b".to_string(), "session-c".to_string()],
             };
             engine.save_user_prefs(&updated).await.unwrap();
 
             let loaded = engine.load_user_prefs().await.unwrap();
-            assert_eq!(loaded.goal_tree_collapsed_ids, updated.goal_tree_collapsed_ids);
             assert_eq!(loaded.pinned_session_ids, updated.pinned_session_ids);
         });
     }
@@ -3542,828 +2072,5 @@ mod tests {
 
         let status = engine.check_schema_version().unwrap();
         assert_eq!(status, SchemaStatus::Current);
-    }
-
-    // =========================================================================
-    // Goal System Tests - Goals
-    // =========================================================================
-
-    fn make_goal(id: &str, title: &str) -> GoalData {
-        GoalData {
-            id: id.to_string(),
-            title: title.to_string(),
-            description: "Test goal description".to_string(),
-            weight: 5,
-            status: "active".to_string(),
-            acceptance_criteria: vec!["Criterion 1".to_string()],
-            created_at: "2024-01-01T00:00:00Z".to_string(),
-            updated_at: "2024-01-01T00:00:00Z".to_string(),
-            completed_at: None,
-            supersedes_id: None,
-            parent_goal_id: None,
-        }
-    }
-
-    fn make_plan(id: &str, goal_id: &str, title: &str) -> PlanData {
-        PlanData {
-            id: id.to_string(),
-            goal_id: goal_id.to_string(),
-            title: title.to_string(),
-            description: "Test plan description".to_string(),
-            status: "active".to_string(),
-            created_at: "2024-01-01T00:00:00Z".to_string(),
-            updated_at: "2024-01-01T00:00:00Z".to_string(),
-            completed_at: None,
-            postmortem: None,
-        }
-    }
-
-    fn make_todo_data(id: &str, title: &str) -> TodoData {
-        TodoData {
-            id: id.to_string(),
-            title: title.to_string(),
-            description: "Test todo description".to_string(),
-            status: "pending".to_string(),
-            is_spike: false,
-            created_at: "2024-01-01T00:00:00Z".to_string(),
-            updated_at: "2024-01-01T00:00:00Z".to_string(),
-            completed_at: None,
-            timebox_minutes: None,
-            completed_by_session: None,
-            completed_by: None,
-        }
-    }
-
-    fn make_binding(id: &str, session_id: &str, entity_type: &str, entity_id: &str) -> SessionBinding {
-        SessionBinding {
-            id: id.to_string(),
-            session_id: session_id.to_string(),
-            entity_type: entity_type.to_string(),
-            entity_id: entity_id.to_string(),
-            role: "implementation".to_string(),
-            created_at: "2024-01-01T00:00:00Z".to_string(),
-            released_at: None,
-        }
-    }
-
-    #[test]
-    fn test_save_and_load_goal() {
-        let dir = TestDir::new("lmdb_test_save_and_load_goal");
-        let engine = LmdbEngine::open(dir.db_path()).unwrap();
-
-        let goal = make_goal("goal-1", "Test Goal");
-
-        future::block_on(async {
-            engine.save_goal(&goal).await.unwrap();
-            let loaded = engine.load_goal("goal-1").await.unwrap();
-
-            assert!(loaded.is_some());
-            let loaded = loaded.unwrap();
-            assert_eq!(loaded.id, "goal-1");
-            assert_eq!(loaded.title, "Test Goal");
-        });
-    }
-
-    #[test]
-    fn test_list_goals() {
-        let dir = TestDir::new("lmdb_test_list_goals");
-        let engine = LmdbEngine::open(dir.db_path()).unwrap();
-
-        let goal1 = make_goal("goal-1", "First Goal");
-        let goal2 = make_goal("goal-2", "Second Goal");
-
-        future::block_on(async {
-            engine.save_goal(&goal1).await.unwrap();
-            engine.save_goal(&goal2).await.unwrap();
-
-            let goals = engine.list_goals().await.unwrap();
-            assert_eq!(goals.len(), 2);
-        });
-    }
-
-    #[test]
-    fn test_delete_goal() {
-        let dir = TestDir::new("lmdb_test_delete_goal");
-        let engine = LmdbEngine::open(dir.db_path()).unwrap();
-
-        let goal = make_goal("goal-1", "Test Goal");
-
-        future::block_on(async {
-            engine.save_goal(&goal).await.unwrap();
-            engine.delete_goal("goal-1").await.unwrap();
-
-            let loaded = engine.load_goal("goal-1").await.unwrap();
-            assert!(loaded.is_none());
-        });
-    }
-
-    // =========================================================================
-    // Goal System Tests - Plans
-    // =========================================================================
-
-    #[test]
-    fn test_save_and_load_plan() {
-        let dir = TestDir::new("lmdb_test_save_and_load_plan");
-        let engine = LmdbEngine::open(dir.db_path()).unwrap();
-
-        let goal = make_goal("goal-1", "Test Goal");
-        let plan = make_plan("plan-1", "goal-1", "Test Plan");
-
-        future::block_on(async {
-            engine.save_goal(&goal).await.unwrap();
-            engine.save_plan(&plan).await.unwrap();
-            let loaded = engine.load_plan("plan-1").await.unwrap();
-
-            assert!(loaded.is_some());
-            let loaded = loaded.unwrap();
-            assert_eq!(loaded.id, "plan-1");
-            assert_eq!(loaded.title, "Test Plan");
-            assert_eq!(loaded.goal_id, "goal-1");
-        });
-    }
-
-    #[test]
-    fn test_list_plans_by_goal() {
-        let dir = TestDir::new("lmdb_test_list_plans_by_goal");
-        let engine = LmdbEngine::open(dir.db_path()).unwrap();
-
-        let goal1 = make_goal("goal-1", "Goal 1");
-        let goal2 = make_goal("goal-2", "Goal 2");
-        let plan1 = make_plan("plan-1", "goal-1", "Plan 1");
-        let plan2 = make_plan("plan-2", "goal-1", "Plan 2");
-        let plan3 = make_plan("plan-3", "goal-2", "Plan 3");
-
-        future::block_on(async {
-            engine.save_goal(&goal1).await.unwrap();
-            engine.save_goal(&goal2).await.unwrap();
-            engine.save_plan(&plan1).await.unwrap();
-            engine.save_plan(&plan2).await.unwrap();
-            engine.save_plan(&plan3).await.unwrap();
-
-            // Filter by goal-1
-            let plans = engine.list_plans(Some("goal-1")).await.unwrap();
-            assert_eq!(plans.len(), 2);
-
-            // Filter by goal-2
-            let plans = engine.list_plans(Some("goal-2")).await.unwrap();
-            assert_eq!(plans.len(), 1);
-            assert_eq!(plans[0].id, "plan-3");
-
-            // All plans
-            let all_plans = engine.list_plans(None).await.unwrap();
-            assert_eq!(all_plans.len(), 3);
-        });
-    }
-
-    #[test]
-    fn test_delete_plan_cleans_index() {
-        let dir = TestDir::new("lmdb_test_delete_plan_cleans_index");
-        let engine = LmdbEngine::open(dir.db_path()).unwrap();
-
-        let goal = make_goal("goal-1", "Test Goal");
-        let plan = make_plan("plan-1", "goal-1", "Test Plan");
-
-        future::block_on(async {
-            engine.save_goal(&goal).await.unwrap();
-            engine.save_plan(&plan).await.unwrap();
-
-            // Verify plan is in index
-            let plans = engine.list_plans(Some("goal-1")).await.unwrap();
-            assert_eq!(plans.len(), 1);
-
-            // Delete plan
-            engine.delete_plan("plan-1").await.unwrap();
-
-            // Verify index is cleaned up
-            let plans = engine.list_plans(Some("goal-1")).await.unwrap();
-            assert_eq!(plans.len(), 0);
-        });
-    }
-
-    // =========================================================================
-    // Goal System Tests - Todos
-    // =========================================================================
-
-    #[test]
-    fn test_save_and_load_todo() {
-        let dir = TestDir::new("lmdb_test_save_and_load_todo");
-        let engine = LmdbEngine::open(dir.db_path()).unwrap();
-
-        let todo = make_todo_data("todo-1", "Test Todo");
-
-        future::block_on(async {
-            engine.save_todo(&todo).await.unwrap();
-            let loaded = engine.load_todo("todo-1").await.unwrap();
-
-            assert!(loaded.is_some());
-            let loaded = loaded.unwrap();
-            assert_eq!(loaded.id, "todo-1");
-            assert_eq!(loaded.title, "Test Todo");
-        });
-    }
-
-    #[test]
-    fn test_list_todos() {
-        let dir = TestDir::new("lmdb_test_list_todos");
-        let engine = LmdbEngine::open(dir.db_path()).unwrap();
-
-        let todo1 = make_todo_data("todo-1", "Todo 1");
-        let todo2 = make_todo_data("todo-2", "Todo 2");
-
-        future::block_on(async {
-            engine.save_todo(&todo1).await.unwrap();
-            engine.save_todo(&todo2).await.unwrap();
-
-            let todos = engine.list_todos(None).await.unwrap();
-            assert_eq!(todos.len(), 2);
-        });
-    }
-
-    // =========================================================================
-    // Goal System Tests - Todo-Plan Links
-    // =========================================================================
-
-    #[test]
-    fn test_todo_plan_link() {
-        let dir = TestDir::new("lmdb_test_todo_plan_link");
-        let engine = LmdbEngine::open(dir.db_path()).unwrap();
-
-        let goal = make_goal("goal-1", "Test Goal");
-        let plan = make_plan("plan-1", "goal-1", "Test Plan");
-        let todo = make_todo_data("todo-1", "Test Todo");
-
-        future::block_on(async {
-            engine.save_goal(&goal).await.unwrap();
-            engine.save_plan(&plan).await.unwrap();
-            engine.save_todo(&todo).await.unwrap();
-
-            // Create link
-            let link = TodoPlanLink {
-                todo_id: "todo-1".to_string(),
-                plan_id: "plan-1".to_string(),
-                created_at: "2024-01-01T00:00:00Z".to_string(),
-            };
-            engine.save_todo_plan_link(&link).await.unwrap();
-
-            // Verify bidirectional lookup
-            let plans = engine.get_plans_for_todo("todo-1").await.unwrap();
-            assert_eq!(plans.len(), 1);
-            assert_eq!(plans[0].id, "plan-1");
-
-            let todos = engine.get_todos_for_plan("plan-1").await.unwrap();
-            assert_eq!(todos.len(), 1);
-            assert_eq!(todos[0].id, "todo-1");
-
-            // List todos filtered by plan
-            let filtered = engine.list_todos(Some("plan-1")).await.unwrap();
-            assert_eq!(filtered.len(), 1);
-        });
-    }
-
-    #[test]
-    fn test_todo_multiple_plans() {
-        let dir = TestDir::new("lmdb_test_todo_multiple_plans");
-        let engine = LmdbEngine::open(dir.db_path()).unwrap();
-
-        let goal = make_goal("goal-1", "Test Goal");
-        let plan1 = make_plan("plan-1", "goal-1", "Plan 1");
-        let plan2 = make_plan("plan-2", "goal-1", "Plan 2");
-        let todo = make_todo_data("todo-1", "Shared Todo");
-
-        future::block_on(async {
-            engine.save_goal(&goal).await.unwrap();
-            engine.save_plan(&plan1).await.unwrap();
-            engine.save_plan(&plan2).await.unwrap();
-            engine.save_todo(&todo).await.unwrap();
-
-            // Link todo to both plans
-            let link1 = TodoPlanLink {
-                todo_id: "todo-1".to_string(),
-                plan_id: "plan-1".to_string(),
-                created_at: "2024-01-01T00:00:00Z".to_string(),
-            };
-            let link2 = TodoPlanLink {
-                todo_id: "todo-1".to_string(),
-                plan_id: "plan-2".to_string(),
-                created_at: "2024-01-01T00:00:00Z".to_string(),
-            };
-            engine.save_todo_plan_link(&link1).await.unwrap();
-            engine.save_todo_plan_link(&link2).await.unwrap();
-
-            // Todo should belong to 2 plans
-            let plans = engine.get_plans_for_todo("todo-1").await.unwrap();
-            assert_eq!(plans.len(), 2);
-        });
-    }
-
-    #[test]
-    fn test_delete_todo_plan_link() {
-        let dir = TestDir::new("lmdb_test_delete_todo_plan_link");
-        let engine = LmdbEngine::open(dir.db_path()).unwrap();
-
-        let goal = make_goal("goal-1", "Test Goal");
-        let plan = make_plan("plan-1", "goal-1", "Test Plan");
-        let todo = make_todo_data("todo-1", "Test Todo");
-
-        future::block_on(async {
-            engine.save_goal(&goal).await.unwrap();
-            engine.save_plan(&plan).await.unwrap();
-            engine.save_todo(&todo).await.unwrap();
-
-            let link = TodoPlanLink {
-                todo_id: "todo-1".to_string(),
-                plan_id: "plan-1".to_string(),
-                created_at: "2024-01-01T00:00:00Z".to_string(),
-            };
-            engine.save_todo_plan_link(&link).await.unwrap();
-
-            // Delete the link
-            engine.delete_todo_plan_link("todo-1", "plan-1").await.unwrap();
-
-            // Verify link is gone
-            let plans = engine.get_plans_for_todo("todo-1").await.unwrap();
-            assert_eq!(plans.len(), 0);
-
-            let todos = engine.get_todos_for_plan("plan-1").await.unwrap();
-            assert_eq!(todos.len(), 0);
-        });
-    }
-
-    // =========================================================================
-    // Goal System Tests - Todo Dependencies
-    // =========================================================================
-
-    #[test]
-    fn test_todo_dependency() {
-        let dir = TestDir::new("lmdb_test_todo_dependency");
-        let engine = LmdbEngine::open(dir.db_path()).unwrap();
-
-        let todo1 = make_todo_data("todo-1", "First Todo");
-        let todo2 = make_todo_data("todo-2", "Second Todo");
-
-        future::block_on(async {
-            engine.save_todo(&todo1).await.unwrap();
-            engine.save_todo(&todo2).await.unwrap();
-
-            // todo-2 depends on todo-1
-            let dep = TodoDependency {
-                todo_id: "todo-2".to_string(),
-                depends_on_id: "todo-1".to_string(),
-                created_at: "2024-01-01T00:00:00Z".to_string(),
-            };
-            engine.save_todo_dependency(&dep).await.unwrap();
-
-            // Check dependencies (what todo-2 depends on)
-            let deps = engine.get_dependencies("todo-2").await.unwrap();
-            assert_eq!(deps.len(), 1);
-            assert_eq!(deps[0].id, "todo-1");
-
-            // Check dependents (what depends on todo-1)
-            let dependents = engine.get_dependents("todo-1").await.unwrap();
-            assert_eq!(dependents.len(), 1);
-            assert_eq!(dependents[0].id, "todo-2");
-        });
-    }
-
-    #[test]
-    fn test_delete_todo_dependency() {
-        let dir = TestDir::new("lmdb_test_delete_todo_dependency");
-        let engine = LmdbEngine::open(dir.db_path()).unwrap();
-
-        let todo1 = make_todo_data("todo-1", "First Todo");
-        let todo2 = make_todo_data("todo-2", "Second Todo");
-
-        future::block_on(async {
-            engine.save_todo(&todo1).await.unwrap();
-            engine.save_todo(&todo2).await.unwrap();
-
-            let dep = TodoDependency {
-                todo_id: "todo-2".to_string(),
-                depends_on_id: "todo-1".to_string(),
-                created_at: "2024-01-01T00:00:00Z".to_string(),
-            };
-            engine.save_todo_dependency(&dep).await.unwrap();
-
-            // Delete the dependency
-            engine.delete_todo_dependency("todo-2", "todo-1").await.unwrap();
-
-            // Verify dependency is gone
-            let deps = engine.get_dependencies("todo-2").await.unwrap();
-            assert_eq!(deps.len(), 0);
-
-            let dependents = engine.get_dependents("todo-1").await.unwrap();
-            assert_eq!(dependents.len(), 0);
-        });
-    }
-
-    #[test]
-    fn test_delete_todo_cleans_up_links_and_deps() {
-        let dir = TestDir::new("lmdb_test_delete_todo_cleanup");
-        let engine = LmdbEngine::open(dir.db_path()).unwrap();
-
-        let goal = make_goal("goal-1", "Test Goal");
-        let plan = make_plan("plan-1", "goal-1", "Test Plan");
-        let todo1 = make_todo_data("todo-1", "Todo 1");
-        let todo2 = make_todo_data("todo-2", "Todo 2");
-
-        future::block_on(async {
-            engine.save_goal(&goal).await.unwrap();
-            engine.save_plan(&plan).await.unwrap();
-            engine.save_todo(&todo1).await.unwrap();
-            engine.save_todo(&todo2).await.unwrap();
-
-            // Link todo-1 to plan
-            let link = TodoPlanLink {
-                todo_id: "todo-1".to_string(),
-                plan_id: "plan-1".to_string(),
-                created_at: "2024-01-01T00:00:00Z".to_string(),
-            };
-            engine.save_todo_plan_link(&link).await.unwrap();
-
-            // todo-2 depends on todo-1
-            let dep = TodoDependency {
-                todo_id: "todo-2".to_string(),
-                depends_on_id: "todo-1".to_string(),
-                created_at: "2024-01-01T00:00:00Z".to_string(),
-            };
-            engine.save_todo_dependency(&dep).await.unwrap();
-
-            // Delete todo-1
-            engine.delete_todo("todo-1").await.unwrap();
-
-            // Verify todo-1 is gone
-            let loaded = engine.load_todo("todo-1").await.unwrap();
-            assert!(loaded.is_none());
-
-            // Verify link is cleaned up
-            let todos = engine.get_todos_for_plan("plan-1").await.unwrap();
-            assert_eq!(todos.len(), 0);
-
-            // Verify dependency is cleaned up
-            let deps = engine.get_dependencies("todo-2").await.unwrap();
-            assert_eq!(deps.len(), 0);
-        });
-    }
-
-    // =========================================================================
-    // Goal System Tests - Session Bindings
-    // =========================================================================
-
-    #[test]
-    fn test_save_and_load_session_binding() {
-        let dir = TestDir::new("lmdb_test_save_and_load_binding");
-        let engine = LmdbEngine::open(dir.db_path()).unwrap();
-
-        let binding = make_binding("bind-1", "sess-1", "todo", "todo-1");
-
-        future::block_on(async {
-            engine.save_session_binding(&binding).await.unwrap();
-            let loaded = engine.load_session_binding("bind-1").await.unwrap();
-
-            assert!(loaded.is_some());
-            let loaded = loaded.unwrap();
-            assert_eq!(loaded.id, "bind-1");
-            assert_eq!(loaded.session_id, "sess-1");
-            assert_eq!(loaded.entity_type, "todo");
-            assert_eq!(loaded.entity_id, "todo-1");
-        });
-    }
-
-    #[test]
-    fn test_bindings_by_session() {
-        let dir = TestDir::new("lmdb_test_bindings_by_session");
-        let engine = LmdbEngine::open(dir.db_path()).unwrap();
-
-        let binding1 = make_binding("bind-1", "sess-1", "todo", "todo-1");
-        let binding2 = make_binding("bind-2", "sess-1", "goal", "goal-1");
-        let binding3 = make_binding("bind-3", "sess-2", "todo", "todo-2");
-
-        future::block_on(async {
-            engine.save_session_binding(&binding1).await.unwrap();
-            engine.save_session_binding(&binding2).await.unwrap();
-            engine.save_session_binding(&binding3).await.unwrap();
-
-            let bindings = engine.get_bindings_for_session("sess-1").await.unwrap();
-            assert_eq!(bindings.len(), 2);
-
-            let bindings = engine.get_bindings_for_session("sess-2").await.unwrap();
-            assert_eq!(bindings.len(), 1);
-        });
-    }
-
-    #[test]
-    fn test_bindings_by_entity() {
-        let dir = TestDir::new("lmdb_test_bindings_by_entity");
-        let engine = LmdbEngine::open(dir.db_path()).unwrap();
-
-        let binding1 = make_binding("bind-1", "sess-1", "todo", "todo-1");
-        let binding2 = make_binding("bind-2", "sess-2", "todo", "todo-1");
-        let binding3 = make_binding("bind-3", "sess-1", "goal", "goal-1");
-
-        future::block_on(async {
-            engine.save_session_binding(&binding1).await.unwrap();
-            engine.save_session_binding(&binding2).await.unwrap();
-            engine.save_session_binding(&binding3).await.unwrap();
-
-            // Two sessions bound to todo-1
-            let bindings = engine.get_bindings_for_entity("todo", "todo-1").await.unwrap();
-            assert_eq!(bindings.len(), 2);
-
-            // One session bound to goal-1
-            let bindings = engine.get_bindings_for_entity("goal", "goal-1").await.unwrap();
-            assert_eq!(bindings.len(), 1);
-        });
-    }
-
-    #[test]
-    fn test_delete_session_binding() {
-        let dir = TestDir::new("lmdb_test_delete_binding");
-        let engine = LmdbEngine::open(dir.db_path()).unwrap();
-
-        let binding = make_binding("bind-1", "sess-1", "todo", "todo-1");
-
-        future::block_on(async {
-            engine.save_session_binding(&binding).await.unwrap();
-
-            // Verify indexes are populated
-            let by_session = engine.get_bindings_for_session("sess-1").await.unwrap();
-            assert_eq!(by_session.len(), 1);
-            let by_entity = engine.get_bindings_for_entity("todo", "todo-1").await.unwrap();
-            assert_eq!(by_entity.len(), 1);
-
-            // Delete binding
-            engine.delete_session_binding("bind-1").await.unwrap();
-
-            // Verify binding is gone
-            let loaded = engine.load_session_binding("bind-1").await.unwrap();
-            assert!(loaded.is_none());
-
-            // Verify indexes are cleaned up
-            let by_session = engine.get_bindings_for_session("sess-1").await.unwrap();
-            assert_eq!(by_session.len(), 0);
-            let by_entity = engine.get_bindings_for_entity("todo", "todo-1").await.unwrap();
-            assert_eq!(by_entity.len(), 0);
-        });
-    }
-
-    // =========================================================================
-    // Kanban / Graph System Tests
-    // =========================================================================
-
-    fn make_task(id: &str, title: &str) -> TaskData {
-        TaskData {
-            id: id.to_string(),
-            title: title.to_string(),
-            description: "Test task".to_string(),
-            created_at: "2024-01-01T00:00:00Z".to_string(),
-            updated_at: "2024-01-01T00:00:00Z".to_string(),
-        }
-    }
-
-    fn make_board(id: &str, name: &str, default_column: &str) -> BoardData {
-        BoardData {
-            id: id.to_string(),
-            name: name.to_string(),
-            default_column_id: default_column.to_string(),
-            created_at: "2024-01-01T00:00:00Z".to_string(),
-        }
-    }
-
-    fn make_column(id: &str, name: &str, position: i64) -> ColumnData {
-        ColumnData {
-            id: id.to_string(),
-            name: name.to_string(),
-            position,
-        }
-    }
-
-    fn make_edge(id: &str, src_type: &str, src_id: &str, tgt_type: &str, tgt_id: &str, rel: &str, pos: Option<i64>) -> EdgeData {
-        EdgeData {
-            id: id.to_string(),
-            source_type: src_type.to_string(),
-            source_id: src_id.to_string(),
-            target_type: tgt_type.to_string(),
-            target_id: tgt_id.to_string(),
-            relationship: rel.to_string(),
-            position: pos,
-            created_at: "2024-01-01T00:00:00Z".to_string(),
-        }
-    }
-
-    #[test]
-    fn test_task_crud() {
-        let dir = TestDir::new("lmdb_test_task_crud");
-        let engine = LmdbEngine::open(dir.db_path()).unwrap();
-
-        let task = make_task("task-1", "Buy paint");
-
-        future::block_on(async {
-            // Create
-            engine.save_task(&task).await.unwrap();
-
-            // Read
-            let loaded = engine.load_task("task-1").await.unwrap();
-            assert!(loaded.is_some());
-            assert_eq!(loaded.unwrap().title, "Buy paint");
-
-            // List
-            let tasks = engine.list_tasks().await.unwrap();
-            assert_eq!(tasks.len(), 1);
-
-            // Delete
-            engine.delete_task("task-1").await.unwrap();
-            let loaded = engine.load_task("task-1").await.unwrap();
-            assert!(loaded.is_none());
-        });
-    }
-
-    #[test]
-    fn test_board_crud() {
-        let dir = TestDir::new("lmdb_test_board_crud");
-        let engine = LmdbEngine::open(dir.db_path()).unwrap();
-
-        let board = make_board("board-1", "Sprint 1", "col-todo");
-
-        future::block_on(async {
-            engine.save_board(&board).await.unwrap();
-
-            let loaded = engine.load_board("board-1").await.unwrap();
-            assert!(loaded.is_some());
-            assert_eq!(loaded.unwrap().name, "Sprint 1");
-
-            let boards = engine.list_boards().await.unwrap();
-            assert_eq!(boards.len(), 1);
-
-            engine.delete_board("board-1").await.unwrap();
-            let loaded = engine.load_board("board-1").await.unwrap();
-            assert!(loaded.is_none());
-        });
-    }
-
-    #[test]
-    fn test_column_crud() {
-        let dir = TestDir::new("lmdb_test_column_crud");
-        let engine = LmdbEngine::open(dir.db_path()).unwrap();
-
-        let column = make_column("col-1", "Todo", 0);
-
-        future::block_on(async {
-            engine.save_column(&column).await.unwrap();
-
-            let loaded = engine.load_column("col-1").await.unwrap();
-            assert!(loaded.is_some());
-            assert_eq!(loaded.unwrap().name, "Todo");
-
-            engine.delete_column("col-1").await.unwrap();
-            let loaded = engine.load_column("col-1").await.unwrap();
-            assert!(loaded.is_none());
-        });
-    }
-
-    #[test]
-    fn test_edge_crud_and_indexes() {
-        let dir = TestDir::new("lmdb_test_edge_crud");
-        let engine = LmdbEngine::open(dir.db_path()).unwrap();
-
-        // Create edge: Column belongs to Board
-        let edge = make_edge("edge-1", "column", "col-todo", "board", "board-1", "part_of", Some(0));
-
-        future::block_on(async {
-            // Create
-            engine.save_edge(&edge).await.unwrap();
-
-            // Read
-            let loaded = engine.load_edge("edge-1").await.unwrap();
-            assert!(loaded.is_some());
-            assert_eq!(loaded.unwrap().relationship, "part_of");
-
-            // Query by source
-            let by_source = engine.get_edges_by_source("column", "col-todo").await.unwrap();
-            assert_eq!(by_source.len(), 1);
-            assert_eq!(by_source[0].id, "edge-1");
-
-            // Query by target
-            let by_target = engine.get_edges_by_target("board", "board-1").await.unwrap();
-            assert_eq!(by_target.len(), 1);
-            assert_eq!(by_target[0].id, "edge-1");
-
-            // Delete and verify indexes cleaned up
-            engine.delete_edge("edge-1").await.unwrap();
-            let by_source = engine.get_edges_by_source("column", "col-todo").await.unwrap();
-            assert_eq!(by_source.len(), 0);
-            let by_target = engine.get_edges_by_target("board", "board-1").await.unwrap();
-            assert_eq!(by_target.len(), 0);
-        });
-    }
-
-    #[test]
-    fn test_edge_filtering_by_relationship() {
-        let dir = TestDir::new("lmdb_test_edge_filter");
-        let engine = LmdbEngine::open(dir.db_path()).unwrap();
-
-        future::block_on(async {
-            // Create multiple edges from same source with different relationships
-            engine.save_edge(&make_edge("e1", "task", "t1", "board", "b1", "tracked_on", None)).await.unwrap();
-            engine.save_edge(&make_edge("e2", "task", "t1", "column", "c1", "in_column", Some(0))).await.unwrap();
-
-            // Query all edges from task
-            let all = engine.get_edges_by_source("task", "t1").await.unwrap();
-            assert_eq!(all.len(), 2);
-
-            // Query only tracked_on edges
-            let tracked = engine.get_edges_by_source_and_relationship("task", "t1", "tracked_on").await.unwrap();
-            assert_eq!(tracked.len(), 1);
-            assert_eq!(tracked[0].target_type, "board");
-
-            // Query only in_column edges
-            let in_col = engine.get_edges_by_source_and_relationship("task", "t1", "in_column").await.unwrap();
-            assert_eq!(in_col.len(), 1);
-            assert_eq!(in_col[0].target_type, "column");
-        });
-    }
-
-    #[test]
-    fn test_edge_position_ordering() {
-        let dir = TestDir::new("lmdb_test_edge_order");
-        let engine = LmdbEngine::open(dir.db_path()).unwrap();
-
-        future::block_on(async {
-            // Create columns with positions out of order
-            engine.save_edge(&make_edge("e2", "column", "done", "board", "b1", "part_of", Some(2))).await.unwrap();
-            engine.save_edge(&make_edge("e0", "column", "todo", "board", "b1", "part_of", Some(0))).await.unwrap();
-            engine.save_edge(&make_edge("e1", "column", "wip", "board", "b1", "part_of", Some(1))).await.unwrap();
-
-            // Query should return sorted by position
-            let edges = engine.get_edges_by_target("board", "b1").await.unwrap();
-            assert_eq!(edges.len(), 3);
-            assert_eq!(edges[0].source_id, "todo");   // pos 0
-            assert_eq!(edges[1].source_id, "wip");    // pos 1
-            assert_eq!(edges[2].source_id, "done");   // pos 2
-        });
-    }
-
-    #[test]
-    fn test_full_kanban_setup() {
-        let dir = TestDir::new("lmdb_test_full_kanban");
-        let engine = LmdbEngine::open(dir.db_path()).unwrap();
-
-        future::block_on(async {
-            // Create a board
-            let board = make_board("board-sprint", "Sprint 1", "col-todo");
-            engine.save_board(&board).await.unwrap();
-
-            // Create columns
-            let col_todo = make_column("col-todo", "Todo", 0);
-            let col_wip = make_column("col-wip", "In Progress", 1);
-            let col_done = make_column("col-done", "Done", 2);
-            engine.save_column(&col_todo).await.unwrap();
-            engine.save_column(&col_wip).await.unwrap();
-            engine.save_column(&col_done).await.unwrap();
-
-            // Link columns to board
-            engine.save_edge(&make_edge("e-col-todo", "column", "col-todo", "board", "board-sprint", "part_of", Some(0))).await.unwrap();
-            engine.save_edge(&make_edge("e-col-wip", "column", "col-wip", "board", "board-sprint", "part_of", Some(1))).await.unwrap();
-            engine.save_edge(&make_edge("e-col-done", "column", "col-done", "board", "board-sprint", "part_of", Some(2))).await.unwrap();
-
-            // Create tasks
-            let task1 = make_task("task-1", "Buy paint");
-            let task2 = make_task("task-2", "Paint canvas");
-            engine.save_task(&task1).await.unwrap();
-            engine.save_task(&task2).await.unwrap();
-
-            // Add tasks to board (tracked_on)
-            engine.save_edge(&make_edge("e-t1-board", "task", "task-1", "board", "board-sprint", "tracked_on", None)).await.unwrap();
-            engine.save_edge(&make_edge("e-t2-board", "task", "task-2", "board", "board-sprint", "tracked_on", None)).await.unwrap();
-
-            // Place tasks in columns (in_column)
-            engine.save_edge(&make_edge("e-t1-col", "task", "task-1", "column", "col-wip", "in_column", Some(0))).await.unwrap();
-            engine.save_edge(&make_edge("e-t2-col", "task", "task-2", "column", "col-todo", "in_column", Some(0))).await.unwrap();
-
-            // Query: get all columns for board
-            let columns = engine.get_edges_by_target_and_relationship("board", "board-sprint", "part_of").await.unwrap();
-            assert_eq!(columns.len(), 3);
-
-            // Query: get all tasks on board
-            let tasks = engine.get_edges_by_target_and_relationship("board", "board-sprint", "tracked_on").await.unwrap();
-            assert_eq!(tasks.len(), 2);
-
-            // Query: get tasks in specific column
-            let wip_tasks = engine.get_edges_by_target_and_relationship("column", "col-wip", "in_column").await.unwrap();
-            assert_eq!(wip_tasks.len(), 1);
-            assert_eq!(wip_tasks[0].source_id, "task-1");
-
-            // Move task to done (update edge)
-            let move_edge = make_edge("e-t1-col", "task", "task-1", "column", "col-done", "in_column", Some(0));
-            engine.save_edge(&move_edge).await.unwrap();
-
-            // Verify old column is empty
-            let wip_tasks = engine.get_edges_by_target_and_relationship("column", "col-wip", "in_column").await.unwrap();
-            assert_eq!(wip_tasks.len(), 0);
-
-            // Verify new column has the task
-            let done_tasks = engine.get_edges_by_target_and_relationship("column", "col-done", "in_column").await.unwrap();
-            assert_eq!(done_tasks.len(), 1);
-            assert_eq!(done_tasks[0].source_id, "task-1");
-        });
     }
 }

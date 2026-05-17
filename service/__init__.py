@@ -73,11 +73,9 @@ if TYPE_CHECKING:
     from service.browser_state_service import BrowserStateService
     from service.debug_log_service import DebugLogService
     from service.file_state_service import FileStateService
-    from service.goal_tree_state_service import GoalTreeStateService
     from service.http_server import HttpAuthServer, ServerConfig, create_http_auth_server
     from service.image_service import ImageService
     from service.jwt_auth import JWTAuth, JWTConfig, TokenClaims
-    from service.kanban_ws_service import KanbanWebSocketService
     from service.lsp_service import LSPService
     from service.queue_state_service import QueueStateService
     from service.session_data_service import SessionDataService
@@ -101,7 +99,6 @@ if TYPE_CHECKING:
 __all__ = [
     "QueueStateService",
     "SessionManagerService",
-    "GoalTreeStateService",
     "TaskStateService",
     "SessionDataService",
     "ImageService",
@@ -111,7 +108,6 @@ __all__ = [
     "SupervisorStateService",
     "BrowserStateService",
     "LSPService",
-    "KanbanWebSocketService",
     "WsServer",
     "create_server",
     "JWTAuth",
@@ -138,7 +134,6 @@ __all__ = [
 _EXPORT_MAP = {
     "QueueStateService": ("service.queue_state_service", "QueueStateService"),
     "SessionManagerService": ("service.session_manager_service", "SessionManagerService"),
-    "GoalTreeStateService": ("service.goal_tree_state_service", "GoalTreeStateService"),
     "TaskStateService": ("service.task_state_service", "TaskStateService"),
     "SessionDataService": ("service.session_data_service", "SessionDataService"),
     "ImageService": ("service.image_service", "ImageService"),
@@ -148,7 +143,6 @@ _EXPORT_MAP = {
     "SupervisorStateService": ("service.supervisor_state_service", "SupervisorStateService"),
     "BrowserStateService": ("service.browser_state_service", "BrowserStateService"),
     "LSPService": ("service.lsp_service", "LSPService"),
-    "KanbanWebSocketService": ("service.kanban_ws_service", "KanbanWebSocketService"),
     "WsServer": ("service.ws_server", "WsServer"),
     "create_server": ("service.ws_server", "create_server"),
     "JWTAuth": ("service.jwt_auth", "JWTAuth"),

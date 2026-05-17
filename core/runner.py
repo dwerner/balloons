@@ -19,7 +19,6 @@ from models import (
     TextBlock, ThinkingBlock, ToolUseBlock, ToolResultBlock, ErrorBlock,
 )
 from .exceptions import RateLimitError, InputRequiredError, StreamTimeoutError
-from .binding_context import build_binding_context_for_session
 from session import Session, Turn
 from .debug_log import debug_log, perf_marker, Category
 from .base_runner import BaseRunner
@@ -256,38 +255,11 @@ class SessionRunner:
         return StreamEvent(event_type, data, session_id=self.session.id)
 
     async def _build_prompt_with_bindings(self, prompt: str) -> str:
-        """Build prompt with binding context prepended.
+        """Return the prompt unchanged.
 
-        If the session has active bindings to goals/plans/todos, their
-        context is prepended to the prompt so the LLM stays aligned.
-
-        Args:
-            prompt: The user's prompt
-
-        Returns:
-            Prompt with binding context prepended, or original prompt if no bindings
+        Goal/plan/todo binding context has been removed from Python core.
         """
-        try:
-            # Check if this session is a fork (has a parent)
-            is_fork = self.session.parent_id is not None
-            binding_context = await build_binding_context_for_session(
-                self.session.id, is_fork=is_fork
-            )
-            if binding_context:
-                debug_log.info(
-                    f"Prepending binding context ({len(binding_context)} chars, is_fork={is_fork})",
-                    session_id=self.session.id,
-                    category=Category.RUNNER,
-                )
-                return f"{binding_context}\n\n---\n\n{prompt}"
-            return prompt
-        except Exception as e:
-            debug_log.warning(
-                f"Failed to load binding context: {e}",
-                session_id=self.session.id,
-                category=Category.RUNNER,
-            )
-            return prompt
+        return prompt
 
     async def stream(
         self,

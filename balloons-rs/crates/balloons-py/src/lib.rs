@@ -9,11 +9,7 @@ use pyo3::prelude::*;
 use pyo3::types::PyAny;
 use std::sync::{Arc, Mutex, OnceLock};
 
-use balloons_core::{
-    BoardData, ColumnData, EdgeData, GoalData, LmdbEngine, PlanData, SessionBinding,
-    SessionBoardAssociation, SessionData, StorageClient, TaskData, TodoData, TodoDependency,
-    TodoPlanLink, UserData, UserPrefs, WatcherRelation,
-};
+use balloons_core::{LmdbEngine, SessionData, StorageClient, UserData, UserPrefs, WatcherRelation};
 use balloons_supervisor::{ProcessMode, ProcessSupervisor, StartRequest};
 
 // Global executor for supervisor operations - needs multiple threads since
@@ -188,8 +184,9 @@ impl Storage {
 
         py.detach(|| {
             let mut executor = self.executor.lock().unwrap();
-            let task = executor
-                .spawn_on_any(async move { client.load_turns_range(&session_id, offset, limit).await });
+            let task = executor.spawn_on_any(async move {
+                client.load_turns_range(&session_id, offset, limit).await
+            });
             let turns = future::block_on(task)
                 .map_err(|e| PyRuntimeError::new_err(format!("executor error: {:?}", e)))?
                 .map_err(|e| PyRuntimeError::new_err(e.to_string()))?;
@@ -249,8 +246,8 @@ impl Storage {
     ) -> PyResult<()> {
         let session: balloons_core::SessionData = serde_json::from_str(session_json)
             .map_err(|e| PyRuntimeError::new_err(e.to_string()))?;
-        let turns: Vec<balloons_core::TurnData> = serde_json::from_str(turns_json)
-            .map_err(|e| PyRuntimeError::new_err(e.to_string()))?;
+        let turns: Vec<balloons_core::TurnData> =
+            serde_json::from_str(turns_json).map_err(|e| PyRuntimeError::new_err(e.to_string()))?;
 
         let client = Arc::clone(&self.client);
         let id = id.to_string();
@@ -280,8 +277,8 @@ impl Storage {
         session_id: &str,
         turns_json: &str,
     ) -> PyResult<()> {
-        let turns: Vec<balloons_core::TurnData> = serde_json::from_str(turns_json)
-            .map_err(|e| PyRuntimeError::new_err(e.to_string()))?;
+        let turns: Vec<balloons_core::TurnData> =
+            serde_json::from_str(turns_json).map_err(|e| PyRuntimeError::new_err(e.to_string()))?;
 
         let client = Arc::clone(&self.client);
         let session_id = session_id.to_string();
@@ -327,614 +324,11 @@ impl Storage {
 
         py.detach(|| {
             let mut executor = self.executor.lock().unwrap();
-            let task = executor.spawn_on_any(async move {
-                client.save_session_history(&session_ids).await
-            });
-            future::block_on(task)
-                .map_err(|e| PyRuntimeError::new_err(format!("executor error: {:?}", e)))?
-                .map_err(|e| PyRuntimeError::new_err(e.to_string()))
-        })
-    }
-
-    // =========================================================================
-    // Goal System - Goals
-    // =========================================================================
-
-    /// Save a goal from JSON string (upsert).
-    ///
-    /// Args:
-    ///     goal_json: JSON-encoded GoalData
-    fn save_goal(&self, py: Python<'_>, goal_json: &str) -> PyResult<()> {
-        let goal: GoalData =
-            serde_json::from_str(goal_json).map_err(|e| PyRuntimeError::new_err(e.to_string()))?;
-
-        let client = Arc::clone(&self.client);
-
-        py.detach(|| {
-            let mut executor = self.executor.lock().unwrap();
-            let task = executor.spawn_on_any(async move { client.save_goal(&goal).await });
-            future::block_on(task)
-                .map_err(|e| PyRuntimeError::new_err(format!("executor error: {:?}", e)))?
-                .map_err(|e| PyRuntimeError::new_err(e.to_string()))
-        })
-    }
-
-    /// Load a goal by ID, returns JSON string or None.
-    ///
-    /// Args:
-    ///     goal_id: The goal ID
-    ///
-    /// Returns:
-    ///     JSON-encoded GoalData or None if not found
-    fn load_goal(&self, py: Python<'_>, goal_id: &str) -> PyResult<Option<String>> {
-        let client = Arc::clone(&self.client);
-        let goal_id = goal_id.to_string();
-
-        py.detach(|| {
-            let mut executor = self.executor.lock().unwrap();
-            let task = executor.spawn_on_any(async move { client.load_goal(&goal_id).await });
-            let result = future::block_on(task)
-                .map_err(|e| PyRuntimeError::new_err(format!("executor error: {:?}", e)))?
-                .map_err(|e| PyRuntimeError::new_err(e.to_string()))?;
-
-            match result {
-                Some(goal) => {
-                    let json = serde_json::to_string(&goal)
-                        .map_err(|e| PyRuntimeError::new_err(e.to_string()))?;
-                    Ok(Some(json))
-                }
-                None => Ok(None),
-            }
-        })
-    }
-
-    /// Delete a goal by ID.
-    ///
-    /// Args:
-    ///     goal_id: The goal ID
-    fn delete_goal(&self, py: Python<'_>, goal_id: &str) -> PyResult<()> {
-        let client = Arc::clone(&self.client);
-        let goal_id = goal_id.to_string();
-
-        py.detach(|| {
-            let mut executor = self.executor.lock().unwrap();
-            let task = executor.spawn_on_any(async move { client.delete_goal(&goal_id).await });
-            future::block_on(task)
-                .map_err(|e| PyRuntimeError::new_err(format!("executor error: {:?}", e)))?
-                .map_err(|e| PyRuntimeError::new_err(e.to_string()))
-        })
-    }
-
-    /// List all goals, returns JSON array.
-    ///
-    /// Returns:
-    ///     JSON array of GoalData
-    fn list_goals(&self, py: Python<'_>) -> PyResult<String> {
-        let client = Arc::clone(&self.client);
-
-        py.detach(|| {
-            let mut executor = self.executor.lock().unwrap();
-            let task = executor.spawn_on_any(async move { client.list_goals().await });
-            let goals = future::block_on(task)
-                .map_err(|e| PyRuntimeError::new_err(format!("executor error: {:?}", e)))?
-                .map_err(|e| PyRuntimeError::new_err(e.to_string()))?;
-
-            serde_json::to_string(&goals).map_err(|e| PyRuntimeError::new_err(e.to_string()))
-        })
-    }
-
-    // =========================================================================
-    // Goal System - Plans
-    // =========================================================================
-
-    /// Save a plan from JSON string (upsert).
-    ///
-    /// Args:
-    ///     plan_json: JSON-encoded PlanData
-    fn save_plan(&self, py: Python<'_>, plan_json: &str) -> PyResult<()> {
-        let plan: PlanData =
-            serde_json::from_str(plan_json).map_err(|e| PyRuntimeError::new_err(e.to_string()))?;
-
-        let client = Arc::clone(&self.client);
-
-        py.detach(|| {
-            let mut executor = self.executor.lock().unwrap();
-            let task = executor.spawn_on_any(async move { client.save_plan(&plan).await });
-            future::block_on(task)
-                .map_err(|e| PyRuntimeError::new_err(format!("executor error: {:?}", e)))?
-                .map_err(|e| PyRuntimeError::new_err(e.to_string()))
-        })
-    }
-
-    /// Load a plan by ID, returns JSON string or None.
-    ///
-    /// Args:
-    ///     plan_id: The plan ID
-    ///
-    /// Returns:
-    ///     JSON-encoded PlanData or None if not found
-    fn load_plan(&self, py: Python<'_>, plan_id: &str) -> PyResult<Option<String>> {
-        let client = Arc::clone(&self.client);
-        let plan_id = plan_id.to_string();
-
-        py.detach(|| {
-            let mut executor = self.executor.lock().unwrap();
-            let task = executor.spawn_on_any(async move { client.load_plan(&plan_id).await });
-            let result = future::block_on(task)
-                .map_err(|e| PyRuntimeError::new_err(format!("executor error: {:?}", e)))?
-                .map_err(|e| PyRuntimeError::new_err(e.to_string()))?;
-
-            match result {
-                Some(plan) => {
-                    let json = serde_json::to_string(&plan)
-                        .map_err(|e| PyRuntimeError::new_err(e.to_string()))?;
-                    Ok(Some(json))
-                }
-                None => Ok(None),
-            }
-        })
-    }
-
-    /// Delete a plan by ID.
-    ///
-    /// Args:
-    ///     plan_id: The plan ID
-    fn delete_plan(&self, py: Python<'_>, plan_id: &str) -> PyResult<()> {
-        let client = Arc::clone(&self.client);
-        let plan_id = plan_id.to_string();
-
-        py.detach(|| {
-            let mut executor = self.executor.lock().unwrap();
-            let task = executor.spawn_on_any(async move { client.delete_plan(&plan_id).await });
-            future::block_on(task)
-                .map_err(|e| PyRuntimeError::new_err(format!("executor error: {:?}", e)))?
-                .map_err(|e| PyRuntimeError::new_err(e.to_string()))
-        })
-    }
-
-    /// List plans, optionally filtered by goal_id, returns JSON array.
-    ///
-    /// Args:
-    ///     goal_id: Optional goal ID to filter by
-    ///
-    /// Returns:
-    ///     JSON array of PlanData
-    #[pyo3(signature = (goal_id=None))]
-    fn list_plans(&self, py: Python<'_>, goal_id: Option<&str>) -> PyResult<String> {
-        let client = Arc::clone(&self.client);
-        let goal_id = goal_id.map(|s| s.to_string());
-
-        py.detach(|| {
-            let mut executor = self.executor.lock().unwrap();
             let task = executor
-                .spawn_on_any(async move { client.list_plans(goal_id.as_deref()).await });
-            let plans = future::block_on(task)
-                .map_err(|e| PyRuntimeError::new_err(format!("executor error: {:?}", e)))?
-                .map_err(|e| PyRuntimeError::new_err(e.to_string()))?;
-
-            serde_json::to_string(&plans).map_err(|e| PyRuntimeError::new_err(e.to_string()))
-        })
-    }
-
-    // =========================================================================
-    // Goal System - Todos
-    // =========================================================================
-
-    /// Save a todo from JSON string (upsert).
-    ///
-    /// Args:
-    ///     todo_json: JSON-encoded TodoData
-    fn save_todo(&self, py: Python<'_>, todo_json: &str) -> PyResult<()> {
-        let todo: TodoData =
-            serde_json::from_str(todo_json).map_err(|e| PyRuntimeError::new_err(e.to_string()))?;
-
-        let client = Arc::clone(&self.client);
-
-        py.detach(|| {
-            let mut executor = self.executor.lock().unwrap();
-            let task = executor.spawn_on_any(async move { client.save_todo(&todo).await });
+                .spawn_on_any(async move { client.save_session_history(&session_ids).await });
             future::block_on(task)
                 .map_err(|e| PyRuntimeError::new_err(format!("executor error: {:?}", e)))?
                 .map_err(|e| PyRuntimeError::new_err(e.to_string()))
-        })
-    }
-
-    /// Load a todo by ID, returns JSON string or None.
-    ///
-    /// Args:
-    ///     todo_id: The todo ID
-    ///
-    /// Returns:
-    ///     JSON-encoded TodoData or None if not found
-    fn load_todo(&self, py: Python<'_>, todo_id: &str) -> PyResult<Option<String>> {
-        let client = Arc::clone(&self.client);
-        let todo_id = todo_id.to_string();
-
-        py.detach(|| {
-            let mut executor = self.executor.lock().unwrap();
-            let task = executor.spawn_on_any(async move { client.load_todo(&todo_id).await });
-            let result = future::block_on(task)
-                .map_err(|e| PyRuntimeError::new_err(format!("executor error: {:?}", e)))?
-                .map_err(|e| PyRuntimeError::new_err(e.to_string()))?;
-
-            match result {
-                Some(todo) => {
-                    let json = serde_json::to_string(&todo)
-                        .map_err(|e| PyRuntimeError::new_err(e.to_string()))?;
-                    Ok(Some(json))
-                }
-                None => Ok(None),
-            }
-        })
-    }
-
-    /// Delete a todo by ID.
-    ///
-    /// Args:
-    ///     todo_id: The todo ID
-    fn delete_todo(&self, py: Python<'_>, todo_id: &str) -> PyResult<()> {
-        let client = Arc::clone(&self.client);
-        let todo_id = todo_id.to_string();
-
-        py.detach(|| {
-            let mut executor = self.executor.lock().unwrap();
-            let task = executor.spawn_on_any(async move { client.delete_todo(&todo_id).await });
-            future::block_on(task)
-                .map_err(|e| PyRuntimeError::new_err(format!("executor error: {:?}", e)))?
-                .map_err(|e| PyRuntimeError::new_err(e.to_string()))
-        })
-    }
-
-    /// List todos, optionally filtered by plan_id, returns JSON array.
-    ///
-    /// Args:
-    ///     plan_id: Optional plan ID to filter by
-    ///
-    /// Returns:
-    ///     JSON array of TodoData
-    #[pyo3(signature = (plan_id=None))]
-    fn list_todos(&self, py: Python<'_>, plan_id: Option<&str>) -> PyResult<String> {
-        let client = Arc::clone(&self.client);
-        let plan_id = plan_id.map(|s| s.to_string());
-
-        py.detach(|| {
-            let mut executor = self.executor.lock().unwrap();
-            let task = executor
-                .spawn_on_any(async move { client.list_todos(plan_id.as_deref()).await });
-            let todos = future::block_on(task)
-                .map_err(|e| PyRuntimeError::new_err(format!("executor error: {:?}", e)))?
-                .map_err(|e| PyRuntimeError::new_err(e.to_string()))?;
-
-            serde_json::to_string(&todos).map_err(|e| PyRuntimeError::new_err(e.to_string()))
-        })
-    }
-
-    // =========================================================================
-    // Goal System - Todo-Plan Links
-    // =========================================================================
-
-    /// Save a todo-plan link from JSON string.
-    ///
-    /// Args:
-    ///     link_json: JSON-encoded TodoPlanLink
-    fn save_todo_plan_link(&self, py: Python<'_>, link_json: &str) -> PyResult<()> {
-        let link: TodoPlanLink =
-            serde_json::from_str(link_json).map_err(|e| PyRuntimeError::new_err(e.to_string()))?;
-
-        let client = Arc::clone(&self.client);
-
-        py.detach(|| {
-            let mut executor = self.executor.lock().unwrap();
-            let task = executor.spawn_on_any(async move { client.save_todo_plan_link(&link).await });
-            future::block_on(task)
-                .map_err(|e| PyRuntimeError::new_err(format!("executor error: {:?}", e)))?
-                .map_err(|e| PyRuntimeError::new_err(e.to_string()))
-        })
-    }
-
-    /// Delete a todo-plan link.
-    ///
-    /// Args:
-    ///     todo_id: The todo ID
-    ///     plan_id: The plan ID
-    fn delete_todo_plan_link(&self, py: Python<'_>, todo_id: &str, plan_id: &str) -> PyResult<()> {
-        let client = Arc::clone(&self.client);
-        let todo_id = todo_id.to_string();
-        let plan_id = plan_id.to_string();
-
-        py.detach(|| {
-            let mut executor = self.executor.lock().unwrap();
-            let task = executor
-                .spawn_on_any(async move { client.delete_todo_plan_link(&todo_id, &plan_id).await });
-            future::block_on(task)
-                .map_err(|e| PyRuntimeError::new_err(format!("executor error: {:?}", e)))?
-                .map_err(|e| PyRuntimeError::new_err(e.to_string()))
-        })
-    }
-
-    /// Get all plans that a todo belongs to, returns JSON array.
-    ///
-    /// Args:
-    ///     todo_id: The todo ID
-    ///
-    /// Returns:
-    ///     JSON array of PlanData
-    fn get_plans_for_todo(&self, py: Python<'_>, todo_id: &str) -> PyResult<String> {
-        let client = Arc::clone(&self.client);
-        let todo_id = todo_id.to_string();
-
-        py.detach(|| {
-            let mut executor = self.executor.lock().unwrap();
-            let task =
-                executor.spawn_on_any(async move { client.get_plans_for_todo(&todo_id).await });
-            let plans = future::block_on(task)
-                .map_err(|e| PyRuntimeError::new_err(format!("executor error: {:?}", e)))?
-                .map_err(|e| PyRuntimeError::new_err(e.to_string()))?;
-
-            serde_json::to_string(&plans).map_err(|e| PyRuntimeError::new_err(e.to_string()))
-        })
-    }
-
-    /// Get all todos in a plan, returns JSON array.
-    ///
-    /// Args:
-    ///     plan_id: The plan ID
-    ///
-    /// Returns:
-    ///     JSON array of TodoData
-    fn get_todos_for_plan(&self, py: Python<'_>, plan_id: &str) -> PyResult<String> {
-        let client = Arc::clone(&self.client);
-        let plan_id = plan_id.to_string();
-
-        py.detach(|| {
-            let mut executor = self.executor.lock().unwrap();
-            let task =
-                executor.spawn_on_any(async move { client.get_todos_for_plan(&plan_id).await });
-            let todos = future::block_on(task)
-                .map_err(|e| PyRuntimeError::new_err(format!("executor error: {:?}", e)))?
-                .map_err(|e| PyRuntimeError::new_err(e.to_string()))?;
-
-            serde_json::to_string(&todos).map_err(|e| PyRuntimeError::new_err(e.to_string()))
-        })
-    }
-
-    // =========================================================================
-    // Goal System - Todo Dependencies
-    // =========================================================================
-
-    /// Save a todo dependency from JSON string.
-    ///
-    /// Args:
-    ///     dep_json: JSON-encoded TodoDependency
-    fn save_todo_dependency(&self, py: Python<'_>, dep_json: &str) -> PyResult<()> {
-        let dep: TodoDependency =
-            serde_json::from_str(dep_json).map_err(|e| PyRuntimeError::new_err(e.to_string()))?;
-
-        let client = Arc::clone(&self.client);
-
-        py.detach(|| {
-            let mut executor = self.executor.lock().unwrap();
-            let task = executor.spawn_on_any(async move { client.save_todo_dependency(&dep).await });
-            future::block_on(task)
-                .map_err(|e| PyRuntimeError::new_err(format!("executor error: {:?}", e)))?
-                .map_err(|e| PyRuntimeError::new_err(e.to_string()))
-        })
-    }
-
-    /// Delete a todo dependency.
-    ///
-    /// Args:
-    ///     todo_id: The todo that has the dependency
-    ///     depends_on_id: The todo it depends on
-    fn delete_todo_dependency(
-        &self,
-        py: Python<'_>,
-        todo_id: &str,
-        depends_on_id: &str,
-    ) -> PyResult<()> {
-        let client = Arc::clone(&self.client);
-        let todo_id = todo_id.to_string();
-        let depends_on_id = depends_on_id.to_string();
-
-        py.detach(|| {
-            let mut executor = self.executor.lock().unwrap();
-            let task = executor.spawn_on_any(async move {
-                client.delete_todo_dependency(&todo_id, &depends_on_id).await
-            });
-            future::block_on(task)
-                .map_err(|e| PyRuntimeError::new_err(format!("executor error: {:?}", e)))?
-                .map_err(|e| PyRuntimeError::new_err(e.to_string()))
-        })
-    }
-
-    /// Get todos that the given todo depends on (prerequisites), returns JSON array.
-    ///
-    /// Args:
-    ///     todo_id: The todo ID
-    ///
-    /// Returns:
-    ///     JSON array of TodoData (the prerequisites)
-    fn get_dependencies(&self, py: Python<'_>, todo_id: &str) -> PyResult<String> {
-        let client = Arc::clone(&self.client);
-        let todo_id = todo_id.to_string();
-
-        py.detach(|| {
-            let mut executor = self.executor.lock().unwrap();
-            let task =
-                executor.spawn_on_any(async move { client.get_dependencies(&todo_id).await });
-            let deps = future::block_on(task)
-                .map_err(|e| PyRuntimeError::new_err(format!("executor error: {:?}", e)))?
-                .map_err(|e| PyRuntimeError::new_err(e.to_string()))?;
-
-            serde_json::to_string(&deps).map_err(|e| PyRuntimeError::new_err(e.to_string()))
-        })
-    }
-
-    /// Get todos that depend on the given todo (blockers), returns JSON array.
-    ///
-    /// Args:
-    ///     todo_id: The todo ID
-    ///
-    /// Returns:
-    ///     JSON array of TodoData (the dependents/blockers)
-    fn get_dependents(&self, py: Python<'_>, todo_id: &str) -> PyResult<String> {
-        let client = Arc::clone(&self.client);
-        let todo_id = todo_id.to_string();
-
-        py.detach(|| {
-            let mut executor = self.executor.lock().unwrap();
-            let task = executor.spawn_on_any(async move { client.get_dependents(&todo_id).await });
-            let deps = future::block_on(task)
-                .map_err(|e| PyRuntimeError::new_err(format!("executor error: {:?}", e)))?
-                .map_err(|e| PyRuntimeError::new_err(e.to_string()))?;
-
-            serde_json::to_string(&deps).map_err(|e| PyRuntimeError::new_err(e.to_string()))
-        })
-    }
-
-    // =========================================================================
-    // Goal System - Session Bindings
-    // =========================================================================
-
-    /// Save a session binding from JSON string (upsert).
-    ///
-    /// Args:
-    ///     binding_json: JSON-encoded SessionBinding
-    fn save_session_binding(&self, py: Python<'_>, binding_json: &str) -> PyResult<()> {
-        let binding: SessionBinding =
-            serde_json::from_str(binding_json).map_err(|e| PyRuntimeError::new_err(e.to_string()))?;
-
-        let client = Arc::clone(&self.client);
-
-        py.detach(|| {
-            let mut executor = self.executor.lock().unwrap();
-            let task =
-                executor.spawn_on_any(async move { client.save_session_binding(&binding).await });
-            future::block_on(task)
-                .map_err(|e| PyRuntimeError::new_err(format!("executor error: {:?}", e)))?
-                .map_err(|e| PyRuntimeError::new_err(e.to_string()))
-        })
-    }
-
-    /// Load a session binding by ID, returns JSON string or None.
-    ///
-    /// Args:
-    ///     binding_id: The binding ID
-    ///
-    /// Returns:
-    ///     JSON-encoded SessionBinding or None if not found
-    fn load_session_binding(&self, py: Python<'_>, binding_id: &str) -> PyResult<Option<String>> {
-        let client = Arc::clone(&self.client);
-        let binding_id = binding_id.to_string();
-
-        py.detach(|| {
-            let mut executor = self.executor.lock().unwrap();
-            let task = executor
-                .spawn_on_any(async move { client.load_session_binding(&binding_id).await });
-            let result = future::block_on(task)
-                .map_err(|e| PyRuntimeError::new_err(format!("executor error: {:?}", e)))?
-                .map_err(|e| PyRuntimeError::new_err(e.to_string()))?;
-
-            match result {
-                Some(binding) => {
-                    let json = serde_json::to_string(&binding)
-                        .map_err(|e| PyRuntimeError::new_err(e.to_string()))?;
-                    Ok(Some(json))
-                }
-                None => Ok(None),
-            }
-        })
-    }
-
-    /// Delete a session binding by ID.
-    ///
-    /// Args:
-    ///     binding_id: The binding ID
-    fn delete_session_binding(&self, py: Python<'_>, binding_id: &str) -> PyResult<()> {
-        let client = Arc::clone(&self.client);
-        let binding_id = binding_id.to_string();
-
-        py.detach(|| {
-            let mut executor = self.executor.lock().unwrap();
-            let task = executor
-                .spawn_on_any(async move { client.delete_session_binding(&binding_id).await });
-            future::block_on(task)
-                .map_err(|e| PyRuntimeError::new_err(format!("executor error: {:?}", e)))?
-                .map_err(|e| PyRuntimeError::new_err(e.to_string()))
-        })
-    }
-
-    /// Get all bindings for a session, returns JSON array.
-    ///
-    /// Args:
-    ///     session_id: The session ID
-    ///
-    /// Returns:
-    ///     JSON array of SessionBinding
-    fn get_bindings_for_session(&self, py: Python<'_>, session_id: &str) -> PyResult<String> {
-        let client = Arc::clone(&self.client);
-        let session_id = session_id.to_string();
-
-        py.detach(|| {
-            let mut executor = self.executor.lock().unwrap();
-            let task = executor
-                .spawn_on_any(async move { client.get_bindings_for_session(&session_id).await });
-            let bindings = future::block_on(task)
-                .map_err(|e| PyRuntimeError::new_err(format!("executor error: {:?}", e)))?
-                .map_err(|e| PyRuntimeError::new_err(e.to_string()))?;
-
-            serde_json::to_string(&bindings).map_err(|e| PyRuntimeError::new_err(e.to_string()))
-        })
-    }
-
-    /// Get all bindings for an entity (goal, plan, or todo), returns JSON array.
-    ///
-    /// Args:
-    ///     entity_type: One of "goal", "plan", or "todo"
-    ///     entity_id: The entity ID
-    ///
-    /// Returns:
-    ///     JSON array of SessionBinding
-    fn get_bindings_for_entity(
-        &self,
-        py: Python<'_>,
-        entity_type: &str,
-        entity_id: &str,
-    ) -> PyResult<String> {
-        let client = Arc::clone(&self.client);
-        let entity_type = entity_type.to_string();
-        let entity_id = entity_id.to_string();
-
-        py.detach(|| {
-            let mut executor = self.executor.lock().unwrap();
-            let task = executor.spawn_on_any(async move {
-                client
-                    .get_bindings_for_entity(&entity_type, &entity_id)
-                    .await
-            });
-            let bindings = future::block_on(task)
-                .map_err(|e| PyRuntimeError::new_err(format!("executor error: {:?}", e)))?
-                .map_err(|e| PyRuntimeError::new_err(e.to_string()))?;
-
-            serde_json::to_string(&bindings).map_err(|e| PyRuntimeError::new_err(e.to_string()))
-        })
-    }
-
-    /// List all session bindings, returns JSON array.
-    ///
-    /// Returns:
-    ///     JSON array of SessionBinding
-    fn list_bindings(&self, py: Python<'_>) -> PyResult<String> {
-        let client = Arc::clone(&self.client);
-
-        py.detach(|| {
-            let mut executor = self.executor.lock().unwrap();
-            let task = executor.spawn_on_any(async move { client.list_bindings().await });
-            let bindings = future::block_on(task)
-                .map_err(|e| PyRuntimeError::new_err(format!("executor error: {:?}", e)))?
-                .map_err(|e| PyRuntimeError::new_err(e.to_string()))?;
-
-            serde_json::to_string(&bindings).map_err(|e| PyRuntimeError::new_err(e.to_string()))
         })
     }
 
@@ -987,8 +381,8 @@ impl Storage {
 
     /// Save a watcher relationship (upsert).
     fn save_watcher(&self, py: Python<'_>, watcher_json: &str) -> PyResult<()> {
-        let watcher: WatcherRelation =
-            serde_json::from_str(watcher_json).map_err(|e| PyRuntimeError::new_err(e.to_string()))?;
+        let watcher: WatcherRelation = serde_json::from_str(watcher_json)
+            .map_err(|e| PyRuntimeError::new_err(e.to_string()))?;
 
         let client = Arc::clone(&self.client);
 
@@ -1033,7 +427,11 @@ impl Storage {
     }
 
     /// Get all targets a watcher session is watching. Returns JSON array.
-    fn get_targets_for_watcher(&self, py: Python<'_>, watcher_session_id: &str) -> PyResult<String> {
+    fn get_targets_for_watcher(
+        &self,
+        py: Python<'_>,
+        watcher_session_id: &str,
+    ) -> PyResult<String> {
         let client = Arc::clone(&self.client);
         let watcher_session_id = watcher_session_id.to_string();
 
@@ -1106,8 +504,8 @@ impl Storage {
 
             match result {
                 Some(user) => {
-                    let json =
-                        serde_json::to_string(&user).map_err(|e| PyRuntimeError::new_err(e.to_string()))?;
+                    let json = serde_json::to_string(&user)
+                        .map_err(|e| PyRuntimeError::new_err(e.to_string()))?;
                     Ok(Some(json))
                 }
                 None => Ok(None),
@@ -1128,15 +526,16 @@ impl Storage {
 
         py.detach(|| {
             let mut executor = self.executor.lock().unwrap();
-            let task = executor.spawn_on_any(async move { client.load_user_by_username(&username).await });
+            let task =
+                executor.spawn_on_any(async move { client.load_user_by_username(&username).await });
             let result = future::block_on(task)
                 .map_err(|e| PyRuntimeError::new_err(format!("executor error: {:?}", e)))?
                 .map_err(|e| PyRuntimeError::new_err(e.to_string()))?;
 
             match result {
                 Some(user) => {
-                    let json =
-                        serde_json::to_string(&user).map_err(|e| PyRuntimeError::new_err(e.to_string()))?;
+                    let json = serde_json::to_string(&user)
+                        .map_err(|e| PyRuntimeError::new_err(e.to_string()))?;
                     Ok(Some(json))
                 }
                 None => Ok(None),
@@ -1176,501 +575,6 @@ impl Storage {
                 .map_err(|e| PyRuntimeError::new_err(e.to_string()))?;
 
             serde_json::to_string(&users).map_err(|e| PyRuntimeError::new_err(e.to_string()))
-        })
-    }
-
-    // =========================================================================
-    // Kanban System - Tasks
-    // =========================================================================
-
-    /// Save a task from JSON string (upsert).
-    ///
-    /// Args:
-    ///     task_json: JSON-encoded TaskData
-    fn save_task(&self, py: Python<'_>, task_json: &str) -> PyResult<()> {
-        let task: TaskData =
-            serde_json::from_str(task_json).map_err(|e| PyRuntimeError::new_err(e.to_string()))?;
-
-        let client = Arc::clone(&self.client);
-
-        py.detach(|| {
-            let mut executor = self.executor.lock().unwrap();
-            let task_future = executor.spawn_on_any(async move { client.save_task(&task).await });
-            future::block_on(task_future)
-                .map_err(|e| PyRuntimeError::new_err(format!("executor error: {:?}", e)))?
-                .map_err(|e| PyRuntimeError::new_err(e.to_string()))
-        })
-    }
-
-    /// Load a task by ID, returns JSON string or None.
-    fn load_task(&self, py: Python<'_>, task_id: &str) -> PyResult<Option<String>> {
-        let client = Arc::clone(&self.client);
-        let task_id = task_id.to_string();
-
-        py.detach(|| {
-            let mut executor = self.executor.lock().unwrap();
-            let task_future = executor.spawn_on_any(async move { client.load_task(&task_id).await });
-            let result = future::block_on(task_future)
-                .map_err(|e| PyRuntimeError::new_err(format!("executor error: {:?}", e)))?
-                .map_err(|e| PyRuntimeError::new_err(e.to_string()))?;
-
-            match result {
-                Some(task) => {
-                    let json =
-                        serde_json::to_string(&task).map_err(|e| PyRuntimeError::new_err(e.to_string()))?;
-                    Ok(Some(json))
-                }
-                None => Ok(None),
-            }
-        })
-    }
-
-    /// Delete a task by ID.
-    fn delete_task(&self, py: Python<'_>, task_id: &str) -> PyResult<()> {
-        let client = Arc::clone(&self.client);
-        let task_id = task_id.to_string();
-
-        py.detach(|| {
-            let mut executor = self.executor.lock().unwrap();
-            let task_future = executor.spawn_on_any(async move { client.delete_task(&task_id).await });
-            future::block_on(task_future)
-                .map_err(|e| PyRuntimeError::new_err(format!("executor error: {:?}", e)))?
-                .map_err(|e| PyRuntimeError::new_err(e.to_string()))
-        })
-    }
-
-    /// List all tasks. Returns JSON array.
-    fn list_tasks(&self, py: Python<'_>) -> PyResult<String> {
-        let client = Arc::clone(&self.client);
-
-        py.detach(|| {
-            let mut executor = self.executor.lock().unwrap();
-            let task_future = executor.spawn_on_any(async move { client.list_tasks().await });
-            let tasks = future::block_on(task_future)
-                .map_err(|e| PyRuntimeError::new_err(format!("executor error: {:?}", e)))?
-                .map_err(|e| PyRuntimeError::new_err(e.to_string()))?;
-
-            serde_json::to_string(&tasks).map_err(|e| PyRuntimeError::new_err(e.to_string()))
-        })
-    }
-
-    // =========================================================================
-    // Kanban System - Boards
-    // =========================================================================
-
-    /// Save a board from JSON string (upsert).
-    fn save_board(&self, py: Python<'_>, board_json: &str) -> PyResult<()> {
-        let board: BoardData =
-            serde_json::from_str(board_json).map_err(|e| PyRuntimeError::new_err(e.to_string()))?;
-
-        let client = Arc::clone(&self.client);
-
-        py.detach(|| {
-            let mut executor = self.executor.lock().unwrap();
-            let task = executor.spawn_on_any(async move { client.save_board(&board).await });
-            future::block_on(task)
-                .map_err(|e| PyRuntimeError::new_err(format!("executor error: {:?}", e)))?
-                .map_err(|e| PyRuntimeError::new_err(e.to_string()))
-        })
-    }
-
-    /// Load a board by ID, returns JSON string or None.
-    fn load_board(&self, py: Python<'_>, board_id: &str) -> PyResult<Option<String>> {
-        let client = Arc::clone(&self.client);
-        let board_id = board_id.to_string();
-
-        py.detach(|| {
-            let mut executor = self.executor.lock().unwrap();
-            let task = executor.spawn_on_any(async move { client.load_board(&board_id).await });
-            let result = future::block_on(task)
-                .map_err(|e| PyRuntimeError::new_err(format!("executor error: {:?}", e)))?
-                .map_err(|e| PyRuntimeError::new_err(e.to_string()))?;
-
-            match result {
-                Some(board) => {
-                    let json =
-                        serde_json::to_string(&board).map_err(|e| PyRuntimeError::new_err(e.to_string()))?;
-                    Ok(Some(json))
-                }
-                None => Ok(None),
-            }
-        })
-    }
-
-    /// Delete a board by ID.
-    fn delete_board(&self, py: Python<'_>, board_id: &str) -> PyResult<()> {
-        let client = Arc::clone(&self.client);
-        let board_id = board_id.to_string();
-
-        py.detach(|| {
-            let mut executor = self.executor.lock().unwrap();
-            let task = executor.spawn_on_any(async move { client.delete_board(&board_id).await });
-            future::block_on(task)
-                .map_err(|e| PyRuntimeError::new_err(format!("executor error: {:?}", e)))?
-                .map_err(|e| PyRuntimeError::new_err(e.to_string()))
-        })
-    }
-
-    /// List all boards. Returns JSON array.
-    fn list_boards(&self, py: Python<'_>) -> PyResult<String> {
-        let client = Arc::clone(&self.client);
-
-        py.detach(|| {
-            let mut executor = self.executor.lock().unwrap();
-            let task = executor.spawn_on_any(async move { client.list_boards().await });
-            let boards = future::block_on(task)
-                .map_err(|e| PyRuntimeError::new_err(format!("executor error: {:?}", e)))?
-                .map_err(|e| PyRuntimeError::new_err(e.to_string()))?;
-
-            serde_json::to_string(&boards).map_err(|e| PyRuntimeError::new_err(e.to_string()))
-        })
-    }
-
-    // =========================================================================
-    // Kanban System - Columns
-    // =========================================================================
-
-    /// Save a column from JSON string (upsert).
-    fn save_column(&self, py: Python<'_>, column_json: &str) -> PyResult<()> {
-        let column: ColumnData =
-            serde_json::from_str(column_json).map_err(|e| PyRuntimeError::new_err(e.to_string()))?;
-
-        let client = Arc::clone(&self.client);
-
-        py.detach(|| {
-            let mut executor = self.executor.lock().unwrap();
-            let task = executor.spawn_on_any(async move { client.save_column(&column).await });
-            future::block_on(task)
-                .map_err(|e| PyRuntimeError::new_err(format!("executor error: {:?}", e)))?
-                .map_err(|e| PyRuntimeError::new_err(e.to_string()))
-        })
-    }
-
-    /// Load a column by ID, returns JSON string or None.
-    fn load_column(&self, py: Python<'_>, column_id: &str) -> PyResult<Option<String>> {
-        let client = Arc::clone(&self.client);
-        let column_id = column_id.to_string();
-
-        py.detach(|| {
-            let mut executor = self.executor.lock().unwrap();
-            let task = executor.spawn_on_any(async move { client.load_column(&column_id).await });
-            let result = future::block_on(task)
-                .map_err(|e| PyRuntimeError::new_err(format!("executor error: {:?}", e)))?
-                .map_err(|e| PyRuntimeError::new_err(e.to_string()))?;
-
-            match result {
-                Some(column) => {
-                    let json =
-                        serde_json::to_string(&column).map_err(|e| PyRuntimeError::new_err(e.to_string()))?;
-                    Ok(Some(json))
-                }
-                None => Ok(None),
-            }
-        })
-    }
-
-    /// Delete a column by ID.
-    fn delete_column(&self, py: Python<'_>, column_id: &str) -> PyResult<()> {
-        let client = Arc::clone(&self.client);
-        let column_id = column_id.to_string();
-
-        py.detach(|| {
-            let mut executor = self.executor.lock().unwrap();
-            let task = executor.spawn_on_any(async move { client.delete_column(&column_id).await });
-            future::block_on(task)
-                .map_err(|e| PyRuntimeError::new_err(format!("executor error: {:?}", e)))?
-                .map_err(|e| PyRuntimeError::new_err(e.to_string()))
-        })
-    }
-
-    // =========================================================================
-    // Graph System - Edges
-    // =========================================================================
-
-    /// Save an edge from JSON string (upsert).
-    ///
-    /// Args:
-    ///     edge_json: JSON-encoded EdgeData
-    fn save_edge(&self, py: Python<'_>, edge_json: &str) -> PyResult<()> {
-        let edge: EdgeData =
-            serde_json::from_str(edge_json).map_err(|e| PyRuntimeError::new_err(e.to_string()))?;
-
-        let client = Arc::clone(&self.client);
-
-        py.detach(|| {
-            let mut executor = self.executor.lock().unwrap();
-            let task = executor.spawn_on_any(async move { client.save_edge(&edge).await });
-            future::block_on(task)
-                .map_err(|e| PyRuntimeError::new_err(format!("executor error: {:?}", e)))?
-                .map_err(|e| PyRuntimeError::new_err(e.to_string()))
-        })
-    }
-
-    /// Load an edge by ID, returns JSON string or None.
-    fn load_edge(&self, py: Python<'_>, edge_id: &str) -> PyResult<Option<String>> {
-        let client = Arc::clone(&self.client);
-        let edge_id = edge_id.to_string();
-
-        py.detach(|| {
-            let mut executor = self.executor.lock().unwrap();
-            let task = executor.spawn_on_any(async move { client.load_edge(&edge_id).await });
-            let result = future::block_on(task)
-                .map_err(|e| PyRuntimeError::new_err(format!("executor error: {:?}", e)))?
-                .map_err(|e| PyRuntimeError::new_err(e.to_string()))?;
-
-            match result {
-                Some(edge) => {
-                    let json =
-                        serde_json::to_string(&edge).map_err(|e| PyRuntimeError::new_err(e.to_string()))?;
-                    Ok(Some(json))
-                }
-                None => Ok(None),
-            }
-        })
-    }
-
-    /// Delete an edge by ID.
-    fn delete_edge(&self, py: Python<'_>, edge_id: &str) -> PyResult<()> {
-        let client = Arc::clone(&self.client);
-        let edge_id = edge_id.to_string();
-
-        py.detach(|| {
-            let mut executor = self.executor.lock().unwrap();
-            let task = executor.spawn_on_any(async move { client.delete_edge(&edge_id).await });
-            future::block_on(task)
-                .map_err(|e| PyRuntimeError::new_err(format!("executor error: {:?}", e)))?
-                .map_err(|e| PyRuntimeError::new_err(e.to_string()))
-        })
-    }
-
-    /// Get edges by source entity. Returns JSON array.
-    ///
-    /// Args:
-    ///     source_type: Entity type ("task", "column", "board", etc.)
-    ///     source_id: Entity ID
-    fn get_edges_by_source(&self, py: Python<'_>, source_type: &str, source_id: &str) -> PyResult<String> {
-        let client = Arc::clone(&self.client);
-        let source_type = source_type.to_string();
-        let source_id = source_id.to_string();
-
-        py.detach(|| {
-            let mut executor = self.executor.lock().unwrap();
-            let task = executor
-                .spawn_on_any(async move { client.get_edges_by_source(&source_type, &source_id).await });
-            let edges = future::block_on(task)
-                .map_err(|e| PyRuntimeError::new_err(format!("executor error: {:?}", e)))?
-                .map_err(|e| PyRuntimeError::new_err(e.to_string()))?;
-
-            serde_json::to_string(&edges).map_err(|e| PyRuntimeError::new_err(e.to_string()))
-        })
-    }
-
-    /// Get edges by target entity. Returns JSON array.
-    ///
-    /// Args:
-    ///     target_type: Entity type ("task", "column", "board", etc.)
-    ///     target_id: Entity ID
-    fn get_edges_by_target(&self, py: Python<'_>, target_type: &str, target_id: &str) -> PyResult<String> {
-        let client = Arc::clone(&self.client);
-        let target_type = target_type.to_string();
-        let target_id = target_id.to_string();
-
-        py.detach(|| {
-            let mut executor = self.executor.lock().unwrap();
-            let task = executor
-                .spawn_on_any(async move { client.get_edges_by_target(&target_type, &target_id).await });
-            let edges = future::block_on(task)
-                .map_err(|e| PyRuntimeError::new_err(format!("executor error: {:?}", e)))?
-                .map_err(|e| PyRuntimeError::new_err(e.to_string()))?;
-
-            serde_json::to_string(&edges).map_err(|e| PyRuntimeError::new_err(e.to_string()))
-        })
-    }
-
-    /// Get edges by source and relationship type. Returns JSON array.
-    ///
-    /// Args:
-    ///     source_type: Entity type
-    ///     source_id: Entity ID
-    ///     relationship: Relationship type ("part_of", "in_column", "tracked_on", etc.)
-    fn get_edges_by_source_and_relationship(
-        &self,
-        py: Python<'_>,
-        source_type: &str,
-        source_id: &str,
-        relationship: &str,
-    ) -> PyResult<String> {
-        let client = Arc::clone(&self.client);
-        let source_type = source_type.to_string();
-        let source_id = source_id.to_string();
-        let relationship = relationship.to_string();
-
-        py.detach(|| {
-            let mut executor = self.executor.lock().unwrap();
-            let task = executor.spawn_on_any(async move {
-                client
-                    .get_edges_by_source_and_relationship(&source_type, &source_id, &relationship)
-                    .await
-            });
-            let edges = future::block_on(task)
-                .map_err(|e| PyRuntimeError::new_err(format!("executor error: {:?}", e)))?
-                .map_err(|e| PyRuntimeError::new_err(e.to_string()))?;
-
-            serde_json::to_string(&edges).map_err(|e| PyRuntimeError::new_err(e.to_string()))
-        })
-    }
-
-    /// Get edges by target and relationship type. Returns JSON array.
-    ///
-    /// Args:
-    ///     target_type: Entity type
-    ///     target_id: Entity ID
-    ///     relationship: Relationship type ("part_of", "in_column", "tracked_on", etc.)
-    fn get_edges_by_target_and_relationship(
-        &self,
-        py: Python<'_>,
-        target_type: &str,
-        target_id: &str,
-        relationship: &str,
-    ) -> PyResult<String> {
-        let client = Arc::clone(&self.client);
-        let target_type = target_type.to_string();
-        let target_id = target_id.to_string();
-        let relationship = relationship.to_string();
-
-        py.detach(|| {
-            let mut executor = self.executor.lock().unwrap();
-            let task = executor.spawn_on_any(async move {
-                client
-                    .get_edges_by_target_and_relationship(&target_type, &target_id, &relationship)
-                    .await
-            });
-            let edges = future::block_on(task)
-                .map_err(|e| PyRuntimeError::new_err(format!("executor error: {:?}", e)))?
-                .map_err(|e| PyRuntimeError::new_err(e.to_string()))?;
-
-            serde_json::to_string(&edges).map_err(|e| PyRuntimeError::new_err(e.to_string()))
-        })
-    }
-
-    /// List all edges. Returns JSON array.
-    fn list_edges(&self, py: Python<'_>) -> PyResult<String> {
-        let client = Arc::clone(&self.client);
-
-        py.detach(|| {
-            let mut executor = self.executor.lock().unwrap();
-            let task = executor.spawn_on_any(async move { client.list_edges().await });
-            let edges = future::block_on(task)
-                .map_err(|e| PyRuntimeError::new_err(format!("executor error: {:?}", e)))?
-                .map_err(|e| PyRuntimeError::new_err(e.to_string()))?;
-
-            serde_json::to_string(&edges).map_err(|e| PyRuntimeError::new_err(e.to_string()))
-        })
-    }
-
-    // =========================================================================
-    // Session-Board Associations
-    // =========================================================================
-
-    /// Save a session-board association from JSON string.
-    fn save_session_board_association(
-        &self,
-        py: Python<'_>,
-        association_json: &str,
-    ) -> PyResult<()> {
-        let association: SessionBoardAssociation = serde_json::from_str(association_json)
-            .map_err(|e| PyRuntimeError::new_err(e.to_string()))?;
-
-        let client = Arc::clone(&self.client);
-
-        py.detach(|| {
-            let mut executor = self.executor.lock().unwrap();
-            let task = executor
-                .spawn_on_any(async move { client.save_session_board_association(&association).await });
-            future::block_on(task)
-                .map_err(|e| PyRuntimeError::new_err(format!("executor error: {:?}", e)))?
-                .map_err(|e| PyRuntimeError::new_err(e.to_string()))
-        })
-    }
-
-    /// Load a session-board association by ID. Returns JSON string or None.
-    fn load_session_board_association(
-        &self,
-        py: Python<'_>,
-        id: &str,
-    ) -> PyResult<Option<String>> {
-        let client = Arc::clone(&self.client);
-        let id = id.to_string();
-
-        py.detach(|| {
-            let mut executor = self.executor.lock().unwrap();
-            let task =
-                executor.spawn_on_any(async move { client.load_session_board_association(&id).await });
-            let result = future::block_on(task)
-                .map_err(|e| PyRuntimeError::new_err(format!("executor error: {:?}", e)))?
-                .map_err(|e| PyRuntimeError::new_err(e.to_string()))?;
-
-            match result {
-                Some(data) => {
-                    let json = serde_json::to_string(&data)
-                        .map_err(|e| PyRuntimeError::new_err(e.to_string()))?;
-                    Ok(Some(json))
-                }
-                None => Ok(None),
-            }
-        })
-    }
-
-    /// Delete a session-board association by ID.
-    fn delete_session_board_association(&self, py: Python<'_>, id: &str) -> PyResult<()> {
-        let client = Arc::clone(&self.client);
-        let id = id.to_string();
-
-        py.detach(|| {
-            let mut executor = self.executor.lock().unwrap();
-            let task = executor
-                .spawn_on_any(async move { client.delete_session_board_association(&id).await });
-            future::block_on(task)
-                .map_err(|e| PyRuntimeError::new_err(format!("executor error: {:?}", e)))?
-                .map_err(|e| PyRuntimeError::new_err(e.to_string()))
-        })
-    }
-
-    /// Get all board associations for a session. Returns JSON array.
-    fn get_board_associations_for_session(
-        &self,
-        py: Python<'_>,
-        session_id: &str,
-    ) -> PyResult<String> {
-        let client = Arc::clone(&self.client);
-        let session_id = session_id.to_string();
-
-        py.detach(|| {
-            let mut executor = self.executor.lock().unwrap();
-            let task = executor.spawn_on_any(async move {
-                client.get_board_associations_for_session(&session_id).await
-            });
-            let associations = future::block_on(task)
-                .map_err(|e| PyRuntimeError::new_err(format!("executor error: {:?}", e)))?
-                .map_err(|e| PyRuntimeError::new_err(e.to_string()))?;
-
-            serde_json::to_string(&associations).map_err(|e| PyRuntimeError::new_err(e.to_string()))
-        })
-    }
-
-    /// List all session-board associations. Returns JSON array.
-    fn list_session_board_associations(&self, py: Python<'_>) -> PyResult<String> {
-        let client = Arc::clone(&self.client);
-
-        py.detach(|| {
-            let mut executor = self.executor.lock().unwrap();
-            let task =
-                executor.spawn_on_any(async move { client.list_session_board_associations().await });
-            let associations = future::block_on(task)
-                .map_err(|e| PyRuntimeError::new_err(format!("executor error: {:?}", e)))?
-                .map_err(|e| PyRuntimeError::new_err(e.to_string()))?;
-
-            serde_json::to_string(&associations).map_err(|e| PyRuntimeError::new_err(e.to_string()))
         })
     }
 }
@@ -1761,11 +665,7 @@ impl Supervisor {
     ///
     /// Returns:
     ///     Awaitable that resolves to JSON string with process info
-    fn get_process<'py>(
-        &self,
-        py: Python<'py>,
-        process_id: &str,
-    ) -> PyResult<Bound<'py, PyAny>> {
+    fn get_process<'py>(&self, py: Python<'py>, process_id: &str) -> PyResult<Bound<'py, PyAny>> {
         let supervisor = Arc::clone(&self.inner);
         let process_id = process_id.to_string();
 
@@ -1841,7 +741,9 @@ impl Supervisor {
         let since_dt = since.map(|ts| {
             let secs = ts as i64;
             let nanos = ((ts - secs as f64) * 1_000_000_000.0) as u32;
-            Utc.timestamp_opt(secs, nanos).single().unwrap_or_else(Utc::now)
+            Utc.timestamp_opt(secs, nanos)
+                .single()
+                .unwrap_or_else(Utc::now)
         });
 
         let pattern_str = pattern.map(|s| s.to_string());
@@ -1997,8 +899,8 @@ impl Supervisor {
         // If callback is provided, wrap it in an Arc for thread-safe sharing
         let rust_callback: Option<balloons_supervisor::OutputCallback> = callback.map(|cb| {
             // Create a Rust closure that acquires the GIL and calls the Python callback
-            let callback_fn: balloons_supervisor::OutputCallback = Arc::new(
-                move |process_id: &str, source: &str, content: &str| {
+            let callback_fn: balloons_supervisor::OutputCallback =
+                Arc::new(move |process_id: &str, source: &str, content: &str| {
                     // Acquire GIL to call Python
                     // Note: try_attach returns None if we can't get the GIL (e.g., during shutdown)
                     if let Some(()) = Python::try_attach(|py| {
@@ -2008,8 +910,7 @@ impl Supervisor {
                     }) {
                         // Successfully called
                     }
-                },
-            );
+                });
             callback_fn
         });
 
@@ -2059,12 +960,6 @@ fn recover_database(py: Python<'_>, source_path: &str, target_path: &str) -> PyR
             dict.set_item("skipped", result.skipped)?;
             dict.set_item("failed", result.failed)?;
             dict.set_item("history_entries", result.history_entries)?;
-            dict.set_item("goals_recovered", result.goals_recovered)?;
-            dict.set_item("plans_recovered", result.plans_recovered)?;
-            dict.set_item("todos_recovered", result.todos_recovered)?;
-            dict.set_item("links_recovered", result.links_recovered)?;
-            dict.set_item("dependencies_recovered", result.dependencies_recovered)?;
-            dict.set_item("bindings_recovered", result.bindings_recovered)?;
             Ok(dict.into())
         })
     })
@@ -2102,7 +997,10 @@ fn create_backup(
 
         Python::attach(|py| {
             let dict = pyo3::types::PyDict::new(py);
-            dict.set_item("backup_path", result.backup_path.to_string_lossy().to_string())?;
+            dict.set_item(
+                "backup_path",
+                result.backup_path.to_string_lossy().to_string(),
+            )?;
             dict.set_item("timestamp", result.timestamp)?;
             dict.set_item("size_bytes", result.size_bytes)?;
             dict.set_item("files_copied", result.files_copied)?;
@@ -2136,7 +1034,10 @@ fn export_to_json(py: Python<'_>, source_path: &str, export_path: &str) -> PyRes
 
         Python::attach(|py| {
             let dict = pyo3::types::PyDict::new(py);
-            dict.set_item("export_path", result.export_path.to_string_lossy().to_string())?;
+            dict.set_item(
+                "export_path",
+                result.export_path.to_string_lossy().to_string(),
+            )?;
             dict.set_item("timestamp", result.timestamp)?;
             dict.set_item("sessions_exported", result.sessions_exported)?;
             dict.set_item("turns_exported", result.turns_exported)?;
@@ -2169,7 +1070,10 @@ fn import_from_json(py: Python<'_>, export_path: &str, target_path: &str) -> PyR
 
         Python::attach(|py| {
             let dict = pyo3::types::PyDict::new(py);
-            dict.set_item("target_path", result.target_path.to_string_lossy().to_string())?;
+            dict.set_item(
+                "target_path",
+                result.target_path.to_string_lossy().to_string(),
+            )?;
             dict.set_item("sessions_imported", result.sessions_imported)?;
             dict.set_item("sessions_skipped", result.sessions_skipped)?;
             dict.set_item("turns_imported", result.turns_imported)?;
@@ -2235,7 +1139,10 @@ fn list_backups(py: Python<'_>, source_path: &str) -> PyResult<Py<PyAny>> {
             let list = pyo3::types::PyList::empty(py);
             for backup in backups {
                 let dict = pyo3::types::PyDict::new(py);
-                dict.set_item("backup_path", backup.backup_path.to_string_lossy().to_string())?;
+                dict.set_item(
+                    "backup_path",
+                    backup.backup_path.to_string_lossy().to_string(),
+                )?;
                 dict.set_item("timestamp", backup.timestamp)?;
                 dict.set_item("size_bytes", backup.size_bytes)?;
                 dict.set_item("files_copied", backup.files_copied)?;
@@ -2271,7 +1178,10 @@ fn restore_from_backup(
 
         Python::attach(|py| {
             let dict = pyo3::types::PyDict::new(py);
-            dict.set_item("backup_path", result.backup_path.to_string_lossy().to_string())?;
+            dict.set_item(
+                "backup_path",
+                result.backup_path.to_string_lossy().to_string(),
+            )?;
             dict.set_item("timestamp", result.timestamp)?;
             dict.set_item("size_bytes", result.size_bytes)?;
             dict.set_item("files_copied", result.files_copied)?;
@@ -2396,12 +1306,7 @@ impl BrowserConfig {
     ///     webdriver_url: Optional WebDriver URL to connect to
     #[new]
     #[pyo3(signature = (browser_type="firefox", headless=false, port=4444, webdriver_url=None))]
-    fn new(
-        browser_type: &str,
-        headless: bool,
-        port: u16,
-        webdriver_url: Option<String>,
-    ) -> Self {
+    fn new(browser_type: &str, headless: bool, port: u16, webdriver_url: Option<String>) -> Self {
         let mut config = RustBrowserConfig {
             browser_type: browser_type.to_string(),
             headless,
@@ -2705,7 +1610,12 @@ impl Browser {
     ///
     /// Returns:
     ///     Awaitable that resolves to None on success.
-    fn fill<'py>(&self, py: Python<'py>, selector: &str, text: &str) -> PyResult<Bound<'py, PyAny>> {
+    fn fill<'py>(
+        &self,
+        py: Python<'py>,
+        selector: &str,
+        text: &str,
+    ) -> PyResult<Bound<'py, PyAny>> {
         let inner = Arc::clone(&self.inner);
         let selector = selector.to_string();
         let text = text.to_string();
@@ -2725,7 +1635,12 @@ impl Browser {
     ///
     /// Returns:
     ///     Awaitable that resolves to None on success.
-    fn type_text<'py>(&self, py: Python<'py>, selector: &str, text: &str) -> PyResult<Bound<'py, PyAny>> {
+    fn type_text<'py>(
+        &self,
+        py: Python<'py>,
+        selector: &str,
+        text: &str,
+    ) -> PyResult<Bound<'py, PyAny>> {
         let inner = Arc::clone(&self.inner);
         let selector = selector.to_string();
         let text = text.to_string();
@@ -2845,7 +1760,12 @@ impl Browser {
     ///
     /// Returns:
     ///     Awaitable that resolves to None on success.
-    fn set_input<'py>(&self, py: Python<'py>, index: usize, value: &str) -> PyResult<Bound<'py, PyAny>> {
+    fn set_input<'py>(
+        &self,
+        py: Python<'py>,
+        index: usize,
+        value: &str,
+    ) -> PyResult<Bound<'py, PyAny>> {
         let inner = Arc::clone(&self.inner);
         let value = value.to_string();
         pyo3_async_runtimes::smol::future_into_py(py, async move {
@@ -3224,10 +2144,9 @@ impl Browser {
             let browser = guard
                 .as_ref()
                 .ok_or_else(|| PyRuntimeError::new_err("Browser was closed"))?;
-            let handle: balloons_browser::WindowHandle =
-                std::borrow::Cow::from(handle_str)
-                    .try_into()
-                    .map_err(|e| PyRuntimeError::new_err(format!("Invalid window handle: {:?}", e)))?;
+            let handle: balloons_browser::WindowHandle = std::borrow::Cow::from(handle_str)
+                .try_into()
+                .map_err(|e| PyRuntimeError::new_err(format!("Invalid window handle: {:?}", e)))?;
             browser
                 .switch_to_window(handle)
                 .await
@@ -3500,7 +2419,8 @@ fn git_commit(py: Python<'_>, repo_path: &str, message: &str) -> PyResult<String
         let repo = balloons_git::GitRepo::open(repo_path)
             .map_err(|e| PyRuntimeError::new_err(format!("Git error: {}", e)))?;
 
-        let result = repo.commit(&message)
+        let result = repo
+            .commit(&message)
             .map_err(|e| PyRuntimeError::new_err(format!("Git error: {}", e)))?;
 
         // Return as JSON
@@ -3543,7 +2463,8 @@ fn git_staged_files(py: Python<'_>, repo_path: &str) -> PyResult<String> {
         let repo = balloons_git::GitRepo::open(repo_path)
             .map_err(|e| PyRuntimeError::new_err(format!("Git error: {}", e)))?;
 
-        let files = repo.staged_files()
+        let files = repo
+            .staged_files()
             .map_err(|e| PyRuntimeError::new_err(format!("Git error: {}", e)))?;
 
         serde_json::to_string(&files)

@@ -1120,8 +1120,9 @@ Example: Get full details
 # Names of debug tools
 DEBUG_TOOL_NAMES = {"debug_log_query", "debug_log_config", "debug_log_tail"}
 
-# Import goal tools
-from .goal_tools import GOAL_TOOLS, GOAL_TOOL_NAMES
+# Goal tools removed from Python core
+GOAL_TOOLS: list[dict] = []
+GOAL_TOOL_NAMES: set[str] = set()
 
 # Import LSP tools
 from .lsp_tools import LSP_TOOLS, LSP_TOOL_NAMES

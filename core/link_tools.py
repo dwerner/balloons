@@ -11,8 +11,7 @@ import json
 from dataclasses import asdict
 from typing import Any, Callable
 
-from core.async_storage import GoalStorage, AsyncStorage
-from core.kanban_service import KanbanService
+from core.async_storage import AsyncStorage
 from session import Session
 
 
@@ -362,37 +361,6 @@ async def _execute_session_info(session: Session) -> tuple[str, bool]:
             "status": block.status,
         })
     result["forked_to"] = forked_to
-
-    # Get kanban board associations for this session (with tasks)
-    try:
-        storage = AsyncStorage()
-        kanban = KanbanService(storage)
-        board_tuples = await kanban.get_boards_for_session(session.id)
-        if board_tuples:
-            boards_info = []
-            for assoc, board in board_tuples:
-                # Get full board state to include tasks
-                board_state = await kanban.get_board_state(board.id)
-                if board_state:
-                    # Include full board state - columns contain their tasks
-                    boards_info.append(asdict(board_state))
-            if boards_info:
-                result["boards"] = boards_info
-    except Exception:
-        # Don't fail session_info if kanban lookup fails
-        pass
-
-    # Get session binding if any
-    goal_storage = GoalStorage()
-    bindings = await goal_storage.get_bindings_for_session(session.id, active_only=True)
-    if bindings:
-        # Use the most recent active binding
-        binding = bindings[-1]
-        result["binding"] = {
-            "entity_type": binding.entity_type,
-            "entity_id": binding.entity_id,
-            "role": binding.role,
-        }
 
     return json.dumps(result, indent=2), False
 

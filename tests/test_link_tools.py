@@ -363,19 +363,6 @@ class TestExecuteLinkTool:
             released_at=None,
         )
 
-        with patch('core.link_tools.GoalStorage') as MockStorage:
-            mock_instance = MockStorage.return_value
-            mock_instance.get_bindings_for_session = AsyncMock(return_value=[binding])
-            result, is_error = await execute_link_tool("session_info", {}, session)
-
-        assert not is_error
-        data = json.loads(result)
-
-        # Check binding is present
-        assert "binding" in data
-        assert data["binding"]["entity_type"] == "todo"
-        assert data["binding"]["entity_id"] == "todo-456"
-        assert data["binding"]["role"] == "implementation"
 
     @pytest.mark.asyncio
     async def test_session_info_no_binding(self):
@@ -394,16 +381,6 @@ class TestExecuteLinkTool:
         session.get_all_fork_blocks.return_value = []
         session.get_merged_to_block.return_value = None
 
-        with patch('core.link_tools.GoalStorage') as MockStorage:
-            mock_instance = MockStorage.return_value
-            mock_instance.get_bindings_for_session = AsyncMock(return_value=[])  # No bindings
-            result, is_error = await execute_link_tool("session_info", {}, session)
-
-        assert not is_error
-        data = json.loads(result)
-
-        # Check binding is NOT present (omitted, not null)
-        assert "binding" not in data
 
     @pytest.mark.asyncio
     async def test_follow_link_with_session_id(self):

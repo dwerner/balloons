@@ -1,11 +1,13 @@
 set shell := ["bash", "-cu"]
 
+uv := "uv"
+py := uv + " run"
+
 default:
     just --list
 
 gen:
-    source .venv/bin/activate
-    python -m codegen.generate_rust
+    {{py}} python -m codegen.generate_rust
 
 fmt:
     cd balloons-rs
@@ -15,6 +17,11 @@ clippy:
     cd balloons-rs
     cargo clippy --workspace --all-targets --all-features
 
+test-core:
+    {{py}} pytest -q tests
+
+test-plugins:
+    {{py}} pytest -q plugins
+
 build: gen
-    source .venv/bin/activate
-    cd balloons-rs/crates/balloons-py && maturin develop --release
+    maturin develop --release --manifest-path balloons-rs/crates/balloons-py/Cargo.toml

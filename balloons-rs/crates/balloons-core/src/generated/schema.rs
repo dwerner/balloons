@@ -2,7 +2,7 @@
 //!
 //! Generated from Python domain entities marked with @rust_schema.
 //! Source: models.py and other domain modules
-//! Generated: 2026-05-17T12:55:46.948776
+//! Generated: 2026-05-17T13:43:38.178839
 //!
 //! To regenerate:
 //!     python -m codegen.generate_rust
@@ -10,7 +10,6 @@
 //! To add new types, add @rust_schema decorator to dataclasses in your domain modules.
 
 use serde::{Deserialize, Serialize};
-
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ForkChildData {
@@ -164,85 +163,6 @@ pub struct ReviewData {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct GoalData {
-    pub id: String,
-    pub title: String,
-    pub description: String,
-    pub weight: i64,
-    pub status: String,
-    #[serde(default)]
-    pub acceptance_criteria: Vec<String>,
-    pub created_at: String,
-    pub updated_at: String,
-    #[serde(default)]
-    pub completed_at: Option<String>,
-    #[serde(default)]
-    pub supersedes_id: Option<String>,
-    #[serde(default)]
-    pub parent_goal_id: Option<String>,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct PlanData {
-    pub id: String,
-    pub goal_id: String,
-    pub title: String,
-    pub description: String,
-    pub status: String,
-    pub created_at: String,
-    pub updated_at: String,
-    #[serde(default)]
-    pub completed_at: Option<String>,
-    #[serde(default)]
-    pub postmortem: Option<String>,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct TodoData {
-    pub id: String,
-    pub title: String,
-    pub description: String,
-    pub status: String,
-    pub is_spike: bool,
-    pub created_at: String,
-    pub updated_at: String,
-    #[serde(default)]
-    pub completed_at: Option<String>,
-    #[serde(default)]
-    pub timebox_minutes: Option<i64>,
-    #[serde(default)]
-    pub completed_by_session: Option<String>,
-    #[serde(default)]
-    pub completed_by: Option<String>,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct TodoPlanLink {
-    pub todo_id: String,
-    pub plan_id: String,
-    pub created_at: String,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct TodoDependency {
-    pub todo_id: String,
-    pub depends_on_id: String,
-    pub created_at: String,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct SessionBinding {
-    pub id: String,
-    pub session_id: String,
-    pub entity_type: String,
-    pub entity_id: String,
-    pub role: String,
-    pub created_at: String,
-    #[serde(default)]
-    pub released_at: Option<String>,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct WatcherRelation {
     pub id: String,
     pub watcher_session_id: String,
@@ -269,61 +189,5 @@ pub struct UserData {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct UserPrefs {
     #[serde(default)]
-    pub goal_tree_collapsed_ids: Vec<String>,
-    #[serde(default)]
     pub pinned_session_ids: Vec<String>,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct TaskData {
-    pub id: String,
-    pub title: String,
-    pub description: String,
-    #[serde(default)]
-    pub resolution: String,
-    #[serde(default)]
-    pub created_at: String,
-    #[serde(default)]
-    pub updated_at: String,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct BoardData {
-    pub id: String,
-    pub name: String,
-    pub default_column_id: String,
-    pub created_at: String,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct ColumnData {
-    pub id: String,
-    pub name: String,
-    pub position: i64,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct EdgeData {
-    pub id: String,
-    pub source_type: String,
-    pub source_id: String,
-    pub target_type: String,
-    pub target_id: String,
-    pub relationship: String,
-    #[serde(default)]
-    pub position: Option<i64>,
-    #[serde(default)]
-    pub created_at: String,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct SessionBoardAssociation {
-    pub id: String,
-    pub session_id: String,
-    pub board_id: String,
-    pub role: String,
-    pub created_at: String,
-    pub created_by: String,
-    #[serde(default)]
-    pub inherited_from: Option<String>,
 }
