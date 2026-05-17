@@ -29,7 +29,7 @@ from typing import TYPE_CHECKING, Optional
 
 # Import the Rust storage module
 try:
-    import balloons_storage
+    import balloons_py
     RUST_STORAGE_AVAILABLE = True
 except ImportError:
     RUST_STORAGE_AVAILABLE = False
@@ -51,7 +51,7 @@ _shared_storage = None
 _shared_storage_path = None
 
 
-def _get_shared_storage(db_path: Path) -> "balloons_storage.Storage":
+def _get_shared_storage(db_path: Path) -> "balloons_py.Storage":
     """Get or create a shared storage handle.
 
     LMDB doesn't allow multiple opens with different options, so we need
@@ -64,12 +64,12 @@ def _get_shared_storage(db_path: Path) -> "balloons_storage.Storage":
 
     if not RUST_STORAGE_AVAILABLE:
         raise RuntimeError(
-            "balloons_storage module not available. "
+            "balloons_py module not available. "
             "Run 'maturin develop' in balloons-rs/ to build it."
         )
 
     db_path.parent.mkdir(parents=True, exist_ok=True)
-    _shared_storage = balloons_storage.Storage(str(db_path))
+    _shared_storage = balloons_py.Storage(str(db_path))
     _shared_storage_path = db_path
     return _shared_storage
 
@@ -77,7 +77,7 @@ def _get_shared_storage(db_path: Path) -> "balloons_storage.Storage":
 class AsyncStorage:
     """Async wrapper for Rust storage backend.
 
-    Wraps the synchronous balloons_storage.Storage class with async methods,
+    Wraps the synchronous balloons_py.Storage class with async methods,
     using a ThreadPoolExecutor to avoid blocking the asyncio event loop.
 
     The executor is shared across all AsyncStorage instances to limit thread usage.
@@ -614,6 +614,11 @@ class AsyncStorage:
             "merge_message": session.merge_message,
             "backend_name": session.backend_name,
             "cached_context_tokens": session.cached_context_tokens,
+            "prompt_files": session.prompt_files,
+            "enabled_tools": session.enabled_tools,
+            "concluded": session.concluded,
+            "concluded_at": session.concluded_at,
+            "concluded_reason": session.concluded_reason,
             "message_queue": session.message_queue.to_dict() if session.message_queue else {},
             "loaded_domains": session.loaded_domains,
         }
@@ -842,6 +847,11 @@ class AsyncStorage:
             merge_message=data.get("merge_message", ""),
             backend_name=data.get("backend_name", ""),
             cached_context_tokens=data.get("cached_context_tokens", 0),
+            prompt_files=data.get("prompt_files", []),
+            enabled_tools=data.get("enabled_tools", []),
+            concluded=data.get("concluded", False),
+            concluded_at=data.get("concluded_at"),
+            concluded_reason=data.get("concluded_reason", ""),
             message_queue=MessageQueue.from_dict(data.get("message_queue", {})),
             loaded_domains=data.get("loaded_domains", []),
         )
@@ -2009,7 +2019,7 @@ class LmdbUserStorage:
     """User storage backed by LMDB via Rust.
 
     Implements the UserStorage protocol from user_auth.py, using the
-    Rust balloons_storage module for persistence.
+    Rust balloons_py module for persistence.
 
     Thread-safe via the underlying Rust LMDB implementation.
     """

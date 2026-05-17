@@ -14,7 +14,7 @@ import sys
 
 sys.path.insert(0, '/home/dan/Development/balloons/balloons-rs/target/release')
 
-import balloons_storage as bs
+import balloons_py as bs
 
 
 async def main():

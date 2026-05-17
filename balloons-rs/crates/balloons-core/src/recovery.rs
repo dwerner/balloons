@@ -284,7 +284,13 @@ mod tests {
             merge_message: String::new(),
             backend_name: String::new(),
             cached_context_tokens: 0,
+            prompt_files: vec![],
+            enabled_tools: vec![],
+            concluded: false,
+            concluded_at: None,
+            concluded_reason: String::new(),
             message_queue: serde_json::json!({}),
+            loaded_domains: vec![],
         }
     }
 

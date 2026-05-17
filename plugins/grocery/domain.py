@@ -1787,10 +1787,10 @@ Browser types:
             return ToolResult("Browser already running. Use grocery_browser_stop first.", is_error=True)
 
         try:
-            import balloons_storage as bs
+            import balloons_py as bs
         except ImportError:
             return ToolResult(
-                "balloons_storage not available. Browser automation requires the Rust extension.",
+                "balloons_py not available. Browser automation requires the Rust extension.",
                 is_error=True
             )
 

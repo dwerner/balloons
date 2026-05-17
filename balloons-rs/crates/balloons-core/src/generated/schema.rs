@@ -2,7 +2,7 @@
 //!
 //! Generated from Python domain entities marked with @rust_schema.
 //! Source: models.py and other domain modules
-//! Generated: 2026-03-23T11:00:22.378034
+//! Generated: 2026-05-17T12:19:39.919254
 //!
 //! To regenerate:
 //!     python -m codegen.generate_rust
@@ -85,6 +85,16 @@ pub struct SessionData {
     pub backend_name: String,
     #[serde(default)]
     pub cached_context_tokens: i64,
+    #[serde(default)]
+    pub prompt_files: Vec<String>,
+    #[serde(default)]
+    pub enabled_tools: Vec<String>,
+    #[serde(default)]
+    pub concluded: bool,
+    #[serde(default)]
+    pub concluded_at: Option<String>,
+    #[serde(default)]
+    pub concluded_reason: String,
     #[serde(default)]
     pub message_queue: serde_json::Value,
     #[serde(default)]

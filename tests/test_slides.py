@@ -248,7 +248,7 @@ class TestSlideSaveLoad:
         import session as session_module
 
         if not is_rust_storage_available():
-            pytest.skip("Rust balloons_storage module not available")
+            pytest.skip("Rust balloons_py module not available")
 
         db_path = tmp_path / "test_sessions.db"
         temp_storage = AsyncStorage(db_path)

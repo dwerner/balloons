@@ -14,7 +14,7 @@ from models import Turn, TextBlock, ToolUseBlock, ToolResultBlock, ContextMode
 # Skip all tests if Rust storage is not available
 pytestmark = pytest.mark.skipif(
     not is_rust_storage_available(),
-    reason="Rust balloons_storage module not available"
+    reason="Rust balloons_py module not available"
 )
 
 
@@ -72,6 +72,12 @@ def sample_session():
     session.total_input_tokens = 50
     session.total_output_tokens = 35
     session.total_cost = 0.001
+    session.prompt_files = ["/tmp/project-prompt.md"]
+    session.loaded_domains = ["chess"]
+    session.enabled_tools = ["ask_user", "browser_list"]
+    session.concluded = True
+    session.concluded_at = "2026-01-01T00:00:00"
+    session.concluded_reason = "done"
 
     return session
 
@@ -94,7 +100,34 @@ async def test_save_and_load_session(temp_db, sample_session):
     assert loaded.working_directories == sample_session.working_directories
     assert loaded.total_input_tokens == sample_session.total_input_tokens
     assert loaded.total_output_tokens == sample_session.total_output_tokens
+    assert loaded.prompt_files == sample_session.prompt_files
+    assert loaded.loaded_domains == sample_session.loaded_domains
+    assert loaded.enabled_tools == sample_session.enabled_tools
+    assert loaded.concluded == sample_session.concluded
+    assert loaded.concluded_at == sample_session.concluded_at
+    assert loaded.concluded_reason == sample_session.concluded_reason
     assert len(loaded.turns) == len(sample_session.turns)
+
+
+def test_session_legacy_json_round_trip_metadata(sample_session):
+    """Legacy Python session JSON helpers preserve session-specific fields."""
+    wire = sample_session._build_save_data()
+
+    assert wire["prompt_files"] == sample_session.prompt_files
+    assert wire["loaded_domains"] == sample_session.loaded_domains
+    assert wire["enabled_tools"] == sample_session.enabled_tools
+    assert wire["concluded"] == sample_session.concluded
+    assert wire["concluded_at"] == sample_session.concluded_at
+    assert wire["concluded_reason"] == sample_session.concluded_reason
+
+    restored = Session._build_session_from_data(wire)
+
+    assert restored.prompt_files == sample_session.prompt_files
+    assert restored.loaded_domains == sample_session.loaded_domains
+    assert restored.enabled_tools == sample_session.enabled_tools
+    assert restored.concluded == sample_session.concluded
+    assert restored.concluded_at == sample_session.concluded_at
+    assert restored.concluded_reason == sample_session.concluded_reason
 
 
 @pytest.mark.asyncio
@@ -225,7 +258,7 @@ async def test_fork_fields_preserved(temp_db):
     session.fork_name = "test-fork"
     session.fork_status = "active"
     session.fork_point_turn = 5
-    session.children = [{"session_id": "child-1", "status": "active"}]
+    session.children = [{"session_id": "child-1", "status": "active", "return_condition": "manual", "prompt": "", "name": "", "fork_point": -1, "merge_point": -1}]
 
     await storage.save_session(session)
     loaded = await storage.load_session(session.id)
@@ -234,7 +267,7 @@ async def test_fork_fields_preserved(temp_db):
     assert loaded.fork_name == "test-fork"
     assert loaded.fork_status == "active"
     assert loaded.fork_point_turn == 5
-    assert loaded.children == [{"session_id": "child-1", "status": "active"}]
+    assert loaded.children == [{"session_id": "child-1", "status": "active", "return_condition": "manual", "prompt": "", "name": "", "fork_point": -1, "merge_point": -1}]
 
 
 @pytest.mark.asyncio

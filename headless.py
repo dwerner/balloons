@@ -74,13 +74,13 @@ def _initialize_supervisor() -> None:
     with supervisor_tools for use by LLM tools.
     """
     try:
-        import balloons_storage
-        supervisor = balloons_storage.Supervisor()
+        import balloons_py
+        supervisor = balloons_py.Supervisor()
         set_supervisor(supervisor)
         debug_log.info("Process supervisor initialized", category=Category.LIFECYCLE)
     except ImportError:
         debug_log.warning(
-            "balloons_storage not available, supervisor disabled",
+            "balloons_py not available, supervisor disabled",
             category=Category.LIFECYCLE,
         )
     except Exception as e:

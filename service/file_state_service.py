@@ -22,7 +22,7 @@ from codegen import ws_service, ws_expose, ws_event, ws_type
 
 # Import the Rust binding
 try:
-    from balloons_storage import list_directory as rust_list_directory
+    from balloons_py import list_directory as rust_list_directory
 except ImportError:
     rust_list_directory = None
 
@@ -224,7 +224,7 @@ class FileStateService:
             ValueError: If path doesn't exist or isn't a directory
         """
         if rust_list_directory is None:
-            raise RuntimeError("balloons_storage module not available")
+            raise RuntimeError("balloons_py module not available")
 
         # Validate path before calling Rust
         if not os.path.exists(path):
@@ -792,7 +792,7 @@ class FileStateService:
             Operation result with success/failure status
         """
         try:
-            from balloons_storage import git_stage_files
+            from balloons_py import git_stage_files
             import json
 
             if not paths:
@@ -824,7 +824,7 @@ class FileStateService:
             Operation result with success/failure status
         """
         try:
-            from balloons_storage import git_unstage_files
+            from balloons_py import git_unstage_files
             import json
 
             if not paths:
@@ -855,7 +855,7 @@ class FileStateService:
             Operation result with success/failure status
         """
         try:
-            from balloons_storage import git_stage_all
+            from balloons_py import git_stage_all
 
             count = git_stage_all(git_root)
             return FileOperationResult(
@@ -880,7 +880,7 @@ class FileStateService:
             Operation result with success/failure status and commit hash
         """
         try:
-            from balloons_storage import git_commit, git_has_staged_changes
+            from balloons_py import git_commit, git_has_staged_changes
             import json
 
             if not message.strip():
@@ -1007,7 +1007,7 @@ class FileStateService:
             A suggested commit message
         """
         try:
-            from balloons_storage import git_staged_files
+            from balloons_py import git_staged_files
             import json
 
             files_json = git_staged_files(git_root)

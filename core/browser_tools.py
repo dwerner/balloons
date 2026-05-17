@@ -1,7 +1,7 @@
 """Browser automation tools for LLM web interactions.
 
 Provides tools for browser automation via the surfer-rs bindings.
-The Browser class from balloons_storage provides async web automation.
+The Browser class from balloons_py provides async web automation.
 
 Tools are defined in prompts/tools/openai/browser_*.json and loaded
 via the tool_schemas module.
@@ -521,7 +521,7 @@ async def _browser_start(
 
     # Legacy fallback: store browser on session
     try:
-        from balloons_storage import Browser, BrowserConfig
+        from balloons_py import Browser, BrowserConfig
 
         # X11 display detection is handled by surfer-rs when spawning the WebDriver process.
         # It will auto-detect DISPLAY and XAUTHORITY for non-headless mode.

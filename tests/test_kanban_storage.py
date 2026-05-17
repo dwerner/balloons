@@ -20,7 +20,7 @@ from core.async_storage import is_rust_storage_available
 # Skip all tests if Rust storage is not available
 pytestmark = pytest.mark.skipif(
     not is_rust_storage_available(),
-    reason="Rust balloons_storage module not available"
+    reason="Rust balloons_py module not available"
 )
 
 
@@ -34,7 +34,7 @@ def temp_db():
 @pytest.fixture
 def storage(temp_db):
     """Create a storage instance."""
-    from balloons_storage import Storage
+    from balloons_py import Storage
     return Storage(str(temp_db))
 
 

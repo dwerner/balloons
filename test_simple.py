@@ -2,7 +2,7 @@
 import sys
 print("Script starting", flush=True)
 sys.path.insert(0, '/home/dan/Development/balloons/balloons-rs/target/release')
-import balloons_storage as bs
+import balloons_py as bs
 import asyncio
 
 async def main():

@@ -98,6 +98,17 @@ class SessionData:
     backend_name: str = ""
     cached_context_tokens: int = 0
 
+    # Session-specific prompt files (absolute paths included in system prompt)
+    prompt_files: list[str] = field(default_factory=list)
+
+    # Enabled tools for this session (empty list = defaults)
+    enabled_tools: list[str] = field(default_factory=list)
+
+    # Conclude metadata
+    concluded: bool = False
+    concluded_at: Optional[str] = None
+    concluded_reason: str = ""
+
     # Message queue (stored as dict for flexibility)
     message_queue: dict = field(default_factory=dict)
 
@@ -140,6 +151,8 @@ class SessionMetadata:
     children: list[ForkChildData] = field(default_factory=list)
     # Loaded domain plugins for this session
     loaded_domains: list[str] = field(default_factory=list)
+    # Backend configuration used by this session
+    backend_name: str = ""
 
 
 @rust_schema

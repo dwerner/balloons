@@ -19,7 +19,7 @@ from core.async_storage import is_rust_storage_available
 # Skip all tests if Rust storage is not available
 pytestmark = pytest.mark.skipif(
     not is_rust_storage_available(),
-    reason="Rust balloons_storage module not available"
+    reason="Rust balloons_py module not available"
 )
 
 

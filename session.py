@@ -1386,7 +1386,11 @@ class Session:
         return data
 
     def _build_save_data(self) -> dict:
-        """Build the data dict for saving."""
+        """Build the legacy JSON-style data dict for saving/debugging.
+
+        The canonical persisted session metadata schema lives in
+        core.async_storage.AsyncStorage._session_to_wire.
+        """
         self.last_modified = datetime.now().isoformat()
         return {
             "id": self.id,
@@ -1419,6 +1423,8 @@ class Session:
             "cached_context_tokens": self.cached_context_tokens,
             "message_queue": self.message_queue.to_dict() if self.message_queue else {},
             "prompt_files": self.prompt_files,
+            "loaded_domains": self.loaded_domains,
+            "enabled_tools": self.enabled_tools,
         }
 
     async def save(self):
@@ -1683,6 +1689,8 @@ class Session:
             cached_context_tokens=data.get("cached_context_tokens", 0),
             message_queue=MessageQueue.from_dict(data.get("message_queue", {})),
             prompt_files=data.get("prompt_files", []),
+            loaded_domains=data.get("loaded_domains", []),
+            enabled_tools=data.get("enabled_tools", []),
         )
 
         # Load turns (new format)

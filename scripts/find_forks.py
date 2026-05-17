@@ -10,9 +10,9 @@ PROJECT_ROOT = Path(__file__).parent.parent
 sys.path.insert(0, str(PROJECT_ROOT))
 
 try:
-    import balloons_storage
+    import balloons_py
 except ImportError:
-    print("Error: balloons_storage not available", file=sys.stderr)
+    print("Error: balloons_py not available", file=sys.stderr)
     print("Run: cd balloons-rs && maturin develop", file=sys.stderr)
     sys.exit(1)
 
@@ -20,7 +20,7 @@ DEFAULT_DB_PATH = Path.home() / ".balloons" / "sessions.lmdb"
 
 
 def main():
-    storage = balloons_storage.Storage(str(DEFAULT_DB_PATH))
+    storage = balloons_py.Storage(str(DEFAULT_DB_PATH))
 
     # List all sessions
     sessions_json = storage.list_sessions()

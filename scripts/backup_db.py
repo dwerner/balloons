@@ -41,9 +41,9 @@ PROJECT_ROOT = Path(__file__).parent.parent
 sys.path.insert(0, str(PROJECT_ROOT))
 
 try:
-    import balloons_storage
+    import balloons_py
 except ImportError:
-    print("Error: balloons_storage not available", file=sys.stderr)
+    print("Error: balloons_py not available", file=sys.stderr)
     print("Run: cd balloons-rs && maturin develop", file=sys.stderr)
     sys.exit(1)
 
@@ -68,7 +68,7 @@ def cmd_health(args):
     db_path = str(args.db_path)
 
     try:
-        report = balloons_storage.health_check(db_path)
+        report = balloons_py.health_check(db_path)
     except Exception as e:
         print(f"Error: {e}", file=sys.stderr)
         sys.exit(1)
@@ -115,7 +115,7 @@ def cmd_backup(args):
     print(f"Creating backup of: {db_path}")
 
     try:
-        result = balloons_storage.create_backup(db_path, backup_dir)
+        result = balloons_py.create_backup(db_path, backup_dir)
     except Exception as e:
         print(f"Error: {e}", file=sys.stderr)
         sys.exit(1)
@@ -136,7 +136,7 @@ def cmd_list_backups(args):
     db_path = str(args.db_path)
 
     try:
-        backups = balloons_storage.list_backups(db_path)
+        backups = balloons_py.list_backups(db_path)
     except Exception as e:
         print(f"Error: {e}", file=sys.stderr)
         sys.exit(1)
@@ -176,7 +176,7 @@ def cmd_restore(args):
     print(f"To: {target_path}")
 
     try:
-        result = balloons_storage.restore_from_backup(backup_path, target_path)
+        result = balloons_py.restore_from_backup(backup_path, target_path)
     except Exception as e:
         print(f"Error: {e}", file=sys.stderr)
         sys.exit(1)
@@ -206,7 +206,7 @@ def cmd_export(args):
     print(f"To: {export_path}")
 
     try:
-        result = balloons_storage.export_to_json(db_path, export_path)
+        result = balloons_py.export_to_json(db_path, export_path)
     except Exception as e:
         print(f"Error: {e}", file=sys.stderr)
         sys.exit(1)
@@ -230,7 +230,7 @@ def cmd_import(args):
     print(f"To: {target_path}")
 
     try:
-        result = balloons_storage.import_from_json(export_path, target_path)
+        result = balloons_py.import_from_json(export_path, target_path)
     except Exception as e:
         print(f"Error: {e}", file=sys.stderr)
         sys.exit(1)
@@ -253,7 +253,7 @@ def cmd_recover(args):
     print(f"To: {target_path}")
 
     try:
-        result = balloons_storage.recover_database(source_path, target_path)
+        result = balloons_py.recover_database(source_path, target_path)
     except Exception as e:
         print(f"Error: {e}", file=sys.stderr)
         sys.exit(1)

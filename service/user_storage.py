@@ -173,9 +173,9 @@ _user_storage_instance: UserStorage | None = None
 def _lmdb_available() -> bool:
     """Check if LMDB storage is available."""
     try:
-        import balloons_storage
+        import balloons_py
         # Check if the user methods exist
-        return hasattr(balloons_storage.Storage, 'save_user')
+        return hasattr(balloons_py.Storage, 'save_user')
     except ImportError:
         return False
 

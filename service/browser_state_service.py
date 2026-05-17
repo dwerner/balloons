@@ -143,7 +143,7 @@ class BrowserInstance:
     def __init__(
         self,
         name: str,
-        browser: Any,  # balloons_storage.Browser
+        browser: Any,  # balloons_py.Browser
         browser_type: str,
         headless: bool,
     ):
@@ -375,7 +375,7 @@ class BrowserStateService:
         global _default_browser_name
 
         try:
-            from balloons_storage import Browser, BrowserConfig
+            from balloons_py import Browser, BrowserConfig
 
             # Generate name if not provided
             if not name:

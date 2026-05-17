@@ -43,7 +43,7 @@ def set_supervisor(supervisor) -> None:
     Called by the app during startup after initializing the Rust supervisor.
 
     Args:
-        supervisor: The balloons_storage.Supervisor instance
+        supervisor: The balloons_py.Supervisor instance
     """
     global _supervisor
     _supervisor = supervisor

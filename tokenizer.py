@@ -1,7 +1,7 @@
 """Token counting utilities.
 
 Provides both synchronous (blocking) and asynchronous token counting.
-Uses the Rust tiktoken-rs implementation via balloons_storage for performance.
+Uses the Rust tiktoken-rs implementation via balloons_py for performance.
 Falls back to Python tiktoken if Rust module unavailable.
 """
 
@@ -9,7 +9,7 @@ from typing import Optional
 
 # Try to use Rust tokenizer (much faster, releases GIL)
 try:
-    from balloons_storage import Tokenizer as RustTokenizer
+    from balloons_py import Tokenizer as RustTokenizer
     _rust_tokenizer: Optional[RustTokenizer] = RustTokenizer()
 except ImportError:
     _rust_tokenizer = None
