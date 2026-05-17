@@ -90,6 +90,7 @@ export function PushToTalkInput({
   const sessionIdRef = useRef(0);
   // The session ID that was active when we set up the current WebSocket message handler
   const activeSessionIdRef = useRef(0);
+  const audioPacketsSentRef = useRef(0);
 
   const wsRef = useRef<WebSocket | null>(null);
   const streamRef = useRef<MediaStream | null>(null);

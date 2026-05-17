@@ -116,9 +116,10 @@ function AnsiText({ text }: { text: string }) {
     return null;
   }
 
-  if (spans.length === 1 && Object.keys(spans[0].style).length === 0) {
+  const firstSpan = spans[0];
+  if (spans.length === 1 && firstSpan && Object.keys(firstSpan.style).length === 0) {
     // No styling needed, return plain text
-    return <>{spans[0].text}</>;
+    return <>{firstSpan.text}</>;
   }
 
   return (

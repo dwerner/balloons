@@ -366,7 +366,7 @@ export function StreamingTurnsView({ sessionId, client, onSelectSession, onScrol
         exchangeId,
         items: currentGroup,
         colorIndex: exchangeId ? (exchangeColorMap.get(exchangeId) ?? 0) : 0,
-        key: `exchange-${exchangeId || 'no-exchange'}-${firstItemKey}-${lastItemKey}`,
+        key: `exchange-${exchangeId || firstItemKey}`,
       });
       currentGroup = [];
       currentExchangeId = undefined;
@@ -925,7 +925,9 @@ export function StreamingTurnsView({ sessionId, client, onSelectSession, onScrol
   // Also: if a new user turn arrives while we're already at the bottom, re-enter follow mode
   // so we don't incorrectly show the "scroll to bottom" affordance.
   const prevRenderedTurnCountRef = useRef(turnsOrGroups.length);
-  const prevLastTurnRoleRef = useRef<string | undefined>(turnsOrGroups[turnsOrGroups.length - 1]?.turns[turnsOrGroups[turnsOrGroups.length - 1]?.turns.length - 1]?.role);
+  const initialLastGroup = turnsOrGroups[turnsOrGroups.length - 1];
+  const initialLastTurn = initialLastGroup?.turns[initialLastGroup.turns.length - 1];
+  const prevLastTurnRoleRef = useRef<string | undefined>(initialLastTurn?.role);
   const prevSessionIdForScrollRef = useRef(sessionId);
   useEffect(() => {
     // Reset previous counts when session changes
@@ -988,7 +990,7 @@ export function StreamingTurnsView({ sessionId, client, onSelectSession, onScrol
         animateScrollTo(targetPos);
       });
     });
-  }, [turnsOrGroups, animateScrollTo, isInitialLoadComplete, sessionId, checkAtBottom]);
+  }, [turnsOrGroups, isStreaming, pendingAssistantTurns.length, streamingProgress, animateScrollTo, isInitialLoadComplete, sessionId, checkAtBottom]);
 
   // Early returns AFTER all hooks have been called
   if (!sessionId) {

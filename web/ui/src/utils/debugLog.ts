@@ -70,7 +70,7 @@ export function debugLog(
   // Send to 'client' category (which has a dedicated buffer on the server)
   // Include the component category in the details for filtering
   if (_client?.isConnected) {
-    _client.debugLog.info(message, 'client', '', { ...data, source: 'web', component: category } ?? null).catch(() => {
+    _client.debugLog.info(message, 'client', '', { ...(data ?? {}), source: 'web', component: category }).catch(() => {
       // Silently ignore WebSocket errors
     });
   }

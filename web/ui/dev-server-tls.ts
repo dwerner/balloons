@@ -18,7 +18,7 @@ const { values: args } = parseArgs({
   strict: false,
 });
 
-const port = parseInt(args.port || "3030", 10);
+const port = parseInt(typeof args.port === "string" ? args.port : "3030", 10);
 const noWatch = args["no-watch"] || false;
 
 const projectDir = import.meta.dir;
@@ -370,12 +370,13 @@ function getLocalIP(): string {
 const localIP = getLocalIP();
 
 const watchStatus = noWatch ? "disabled" : "enabled";
+const serverPort = server.port ?? port;
 console.log(`
 ╔══════════════════════════════════════════════════════════════╗
 ║  Balloons Web UI Dev Server (TLS)                           ║
 ╠══════════════════════════════════════════════════════════════╣
-║  Local:   https://localhost:${server.port.toString().padEnd(5)}                        ║
-║  LAN:     https://${localIP}:${server.port.toString().padEnd(5)}                   ║
+║  Local:   https://localhost:${serverPort.toString().padEnd(5)}                        ║
+║  LAN:     https://${localIP}:${serverPort.toString().padEnd(5)}                   ║
 ║                                                              ║
 ║  Using self-signed cert from ~/.balloons/certs/              ║
 ║  File watching: ${watchStatus.padEnd(43)}║

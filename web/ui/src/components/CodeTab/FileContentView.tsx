@@ -9,6 +9,7 @@
  */
 
 import React, { memo, useState, useCallback, useRef, useEffect, useMemo, useDeferredValue } from 'react';
+import type { CSSProperties } from 'react';
 import { Prism as PrismHighlighter } from 'react-syntax-highlighter';
 import { oneDark, oneLight } from 'react-syntax-highlighter/dist/esm/styles/prism';
 import type { CodeReviewComment, ReviewState } from './types';
@@ -55,10 +56,10 @@ const LONG_PRESS_MS = 400;
 const log = createLogger('FileContentView');
 
 // Custom dark theme for file viewer - matches the app's green-tinted UI
-const customDarkTheme = {
-  ...oneDark,
+const customDarkTheme: Record<string, CSSProperties> = {
+  ...(oneDark as Record<string, CSSProperties>),
   'pre[class*="language-"]': {
-    ...oneDark['pre[class*="language-"]'],
+    ...((oneDark as Record<string, CSSProperties>)['pre[class*="language-"]'] ?? {}),
     background: 'transparent',
     margin: 0,
     padding: 0,
@@ -69,7 +70,7 @@ const customDarkTheme = {
     overflowWrap: 'break-word',
   },
   'code[class*="language-"]': {
-    ...oneDark['code[class*="language-"]'],
+    ...((oneDark as Record<string, CSSProperties>)['code[class*="language-"]'] ?? {}),
     background: 'transparent',
     fontSize: '12px',
     lineHeight: '1.5',
@@ -80,10 +81,10 @@ const customDarkTheme = {
 };
 
 // Custom light theme
-const customLightTheme = {
-  ...oneLight,
+const customLightTheme: Record<string, CSSProperties> = {
+  ...(oneLight as Record<string, CSSProperties>),
   'pre[class*="language-"]': {
-    ...oneLight['pre[class*="language-"]'],
+    ...((oneLight as Record<string, CSSProperties>)['pre[class*="language-"]'] ?? {}),
     background: 'transparent',
     margin: 0,
     padding: 0,
@@ -94,7 +95,7 @@ const customLightTheme = {
     overflowWrap: 'break-word',
   },
   'code[class*="language-"]': {
-    ...oneLight['code[class*="language-"]'],
+    ...((oneLight as Record<string, CSSProperties>)['code[class*="language-"]'] ?? {}),
     background: 'transparent',
     fontSize: '12px',
     lineHeight: '1.5',

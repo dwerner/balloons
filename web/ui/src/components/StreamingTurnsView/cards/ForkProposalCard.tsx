@@ -78,11 +78,14 @@ function parseResultProposal(resultContent: string): {
     return {
       name: data.name || '',
       description: data.description || '',
-      contextPlan: rawContextPlan.map((cp: Record<string, unknown>) => ({
-        exchangeRange: (cp.exchange_range as string) || '',
-        mode: ((cp.mode as string) || 'compress').toLowerCase() as ContextMode,
-        reason: (cp.reason as string) || '',
-      })),
+      contextPlan: rawContextPlan.map((cp) => {
+        const contextPlanItem = (cp && typeof cp === 'object' ? cp : {}) as Record<string, unknown>;
+        return {
+          exchangeRange: (contextPlanItem.exchange_range as string) || '',
+          mode: ((contextPlanItem.mode as string) || 'compress').toLowerCase() as ContextMode,
+          reason: (contextPlanItem.reason as string) || '',
+        };
+      }),
       initialPrompt: data.initial_prompt || '',
       bindTo: bindToRaw && typeof bindToRaw === 'object' ? {
         entityType: bindToRaw.entity_type || '',
