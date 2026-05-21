@@ -52,7 +52,7 @@ const SCHEMA_VERSION_KEY: &str = "__schema_version__";
 /// Version history:
 /// - 1: Initial schema with goal system tables
 /// - 2: Schema with goals and kanban removed
-const CURRENT_SCHEMA_VERSION: u32 = 2;
+const CURRENT_SCHEMA_VERSION: u32 = 1;
 
 /// Result of checking the database schema version against the application's expected version.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
