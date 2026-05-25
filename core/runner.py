@@ -1192,6 +1192,7 @@ class SessionRunner:
                     "input_tokens": event.input_tokens,
                     "output_tokens": event.output_tokens,
                     "total_cost": event.total_cost_usd,
+                    "session_total_tokens": self.session.total_tokens,
                 })]
 
             elif isinstance(event, ContextTokensEvent):

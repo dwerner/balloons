@@ -429,12 +429,55 @@
   min-width: 0; /* Allow text truncation */
 }
 
+.kanban-task-card__header {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 8px;
+  margin-bottom: 4px;
+}
+
 .kanban-task-card__title {
   font-size: 13px;
   font-weight: 500;
   color: var(--color-text-primary);
-  margin-bottom: 4px;
   word-break: break-word;
+  flex: 1;
+}
+
+.kanban-task-card__priority {
+  flex-shrink: 0;
+  font-size: 10px;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  padding: 2px 6px;
+  border-radius: 999px;
+  border: 1px solid transparent;
+}
+
+.kanban-task-card__priority--low {
+  color: #93c5fd;
+  background: rgba(59, 130, 246, 0.12);
+  border-color: rgba(59, 130, 246, 0.28);
+}
+
+.kanban-task-card__priority--medium {
+  color: #fcd34d;
+  background: rgba(245, 158, 11, 0.12);
+  border-color: rgba(245, 158, 11, 0.28);
+}
+
+.kanban-task-card__priority--high {
+  color: #fb923c;
+  background: rgba(249, 115, 22, 0.12);
+  border-color: rgba(249, 115, 22, 0.28);
+}
+
+.kanban-task-card__priority--urgent {
+  color: #fca5a5;
+  background: rgba(239, 68, 68, 0.12);
+  border-color: rgba(239, 68, 68, 0.32);
 }
 
 .kanban-task-card__description {

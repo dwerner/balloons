@@ -291,6 +291,7 @@ class Config:
     editor: Optional[str] = None  # Editor command (falls back to $VISUAL, $EDITOR, vi)
     last_view_session_id: Optional[str] = None  # Last viewed session ID
     last_view_turn_index: Optional[int] = None  # Last viewed turn index (0-based)
+    session_token_kill_switch: int = 0  # Stop streaming when a session's total tokens meet/exceed this threshold (0 = disabled)
     tts: TTSConfig = field(default_factory=TTSConfig)  # TTS configuration
     sounds: SoundsConfig = field(default_factory=SoundsConfig)  # Sound notifications
     reports: ReportsConfig = field(default_factory=ReportsConfig)  # Reports configuration
@@ -452,6 +453,7 @@ class Config:
             editor=data.get("editor"),
             last_view_session_id=last_view.get("session_id") if last_view else None,
             last_view_turn_index=last_view.get("turn_index") if last_view else None,
+            session_token_kill_switch=data.get("session_token_kill_switch", 0) or 0,
             tts=tts_config,
             sounds=sounds_config,
             reports=reports_config,
@@ -524,6 +526,12 @@ class Config:
         # Save default_enabled_tools
         if self.default_enabled_tools:
             data["default_enabled_tools"] = list(self.default_enabled_tools)
+
+        # Save session token kill switch
+        if self.session_token_kill_switch:
+            data["session_token_kill_switch"] = int(self.session_token_kill_switch)
+        elif "session_token_kill_switch" in data:
+            del data["session_token_kill_switch"]
 
         return data
 

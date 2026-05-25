@@ -32,81 +32,6 @@ if TYPE_CHECKING:
 log = PluginLogger("kanban")
 
 
-# Global in-memory cache for boards and associations
-_boards: dict[str, Board] = {}  # board_id -> Board
-_associations: dict[str, SessionBoardAssociation] = {}  # assoc_id -> Association
-_boards_loaded: bool = False
-
-# Persistent storage
-_board_storage: JsonFileStorage | None = None
-_assoc_storage: JsonFileStorage | None = None
-
-
-def _get_board_storage() -> JsonFileStorage:
-    """Get the persistent storage for boards."""
-    global _board_storage
-    if _board_storage is None:
-        _board_storage = JsonFileStorage("kanban/boards")
-    return _board_storage
-
-
-def _get_assoc_storage() -> JsonFileStorage:
-    """Get the persistent storage for associations."""
-    global _assoc_storage
-    if _assoc_storage is None:
-        _assoc_storage = JsonFileStorage("kanban/associations")
-    return _assoc_storage
-
-
-async def _load_all_data() -> None:
-    """Load all boards and associations from storage."""
-    global _boards_loaded
-    if _boards_loaded:
-        return
-
-    # Load boards
-    board_storage = _get_board_storage()
-    board_ids = await board_storage.list_keys()
-    for board_id in board_ids:
-        board_data = await board_storage.load(board_id)
-        if board_data:
-            _boards[board_id] = Board.from_dict(board_data)
-
-    # Load associations
-    assoc_storage = _get_assoc_storage()
-    assoc_ids = await assoc_storage.list_keys()
-    for assoc_id in assoc_ids:
-        assoc_data = await assoc_storage.load(assoc_id)
-        if assoc_data:
-            _associations[assoc_id] = SessionBoardAssociation.from_dict(assoc_data)
-
-    _boards_loaded = True
-
-
-async def _save_board(board: Board) -> None:
-    """Save a single board to storage."""
-    storage = _get_board_storage()
-    await storage.save(board.id, board.to_dict())
-
-
-async def _delete_board_file(board_id: str) -> None:
-    """Delete a board's storage file."""
-    storage = _get_board_storage()
-    await storage.delete(board_id)
-
-
-async def _save_association(assoc: SessionBoardAssociation) -> None:
-    """Save an association to storage."""
-    storage = _get_assoc_storage()
-    await storage.save(assoc.id, assoc.to_dict())
-
-
-async def _delete_association_file(assoc_id: str) -> None:
-    """Delete an association's storage file."""
-    storage = _get_assoc_storage()
-    await storage.delete(assoc_id)
-
-
 def _is_uuid(s: str) -> bool:
     """Check if a string looks like a UUID."""
     return len(s) == 36 and s.count('-') == 4
@@ -137,6 +62,17 @@ class KanbanDomain(DecoratedStatefulDomain):
         - board_state_sync: Full state sync (reconnection)
     """
 
+    def __init__(self):
+        """Initialize the kanban domain with fresh state."""
+        # In-memory cache for boards and associations
+        self._boards: dict[str, Board] = {}  # board_id -> Board
+        self._associations: dict[str, SessionBoardAssociation] = {}  # assoc_id -> Association
+        self._boards_loaded: bool = False
+
+        # Persistent storage (lazily initialized)
+        self._board_storage: JsonFileStorage | None = None
+        self._assoc_storage: JsonFileStorage | None = None
+
     @property
     def id(self) -> str:
         return "kanban"
@@ -148,6 +84,72 @@ class KanbanDomain(DecoratedStatefulDomain):
     @property
     def version(self) -> str:
         return "0.1.0"
+
+    def _get_board_storage(self) -> JsonFileStorage:
+        """Get the persistent storage for boards."""
+        if self._board_storage is None:
+            self._board_storage = JsonFileStorage("kanban/boards")
+        return self._board_storage
+
+    def _get_assoc_storage(self) -> JsonFileStorage:
+        """Get the persistent storage for associations."""
+        if self._assoc_storage is None:
+            self._assoc_storage = JsonFileStorage("kanban/associations")
+        return self._assoc_storage
+
+    async def _load_all_data(self) -> None:
+        """Load all boards and associations from storage."""
+        if self._boards_loaded:
+            return
+
+        # Load boards
+        board_storage = self._get_board_storage()
+        board_ids = await board_storage.list_keys()
+        for board_id in board_ids:
+            board_data = await board_storage.load(board_id)
+            if board_data:
+                self._boards[board_id] = Board.from_dict(board_data)
+
+        # Load associations
+        assoc_storage = self._get_assoc_storage()
+        assoc_ids = await assoc_storage.list_keys()
+        for assoc_id in assoc_ids:
+            assoc_data = await assoc_storage.load(assoc_id)
+            if assoc_data:
+                self._associations[assoc_id] = SessionBoardAssociation.from_dict(assoc_data)
+
+        self._boards_loaded = True
+
+    async def _save_board(self, board: Board) -> None:
+        """Save a single board to storage."""
+        storage = self._get_board_storage()
+        board_data = board.to_dict()
+        sample_task = next(iter(board_data.get("tasks", {}).values()), None)
+        log.info(
+            "Saving kanban board",
+            details={
+                "board_id": board.id,
+                "task_count": len(board_data.get("tasks", {})),
+                "sample_task_keys": sorted(sample_task.keys()) if isinstance(sample_task, dict) else [],
+                "sample_task_priority": sample_task.get("priority") if isinstance(sample_task, dict) else None,
+            },
+        )
+        await storage.save(board.id, board_data)
+
+    async def _delete_board_file(self, board_id: str) -> None:
+        """Delete a board's storage file."""
+        storage = self._get_board_storage()
+        await storage.delete(board_id)
+
+    async def _save_association(self, assoc: SessionBoardAssociation) -> None:
+        """Save an association to storage."""
+        storage = self._get_assoc_storage()
+        await storage.save(assoc.id, assoc.to_dict())
+
+    async def _delete_association_file(self, assoc_id: str) -> None:
+        """Delete an association's storage file."""
+        storage = self._get_assoc_storage()
+        await storage.delete(assoc_id)
 
     def get_prompt(self) -> str:
         """Load prompt from prompt.md file."""
@@ -183,11 +185,11 @@ Boards are session-scoped and persist across turns."""
 
     async def _get_boards_for_session(self, session_id: str) -> list[tuple[SessionBoardAssociation, Board]]:
         """Get all boards associated with a session."""
-        await _load_all_data()
+        await self._load_all_data()
         result = []
-        for assoc in _associations.values():
+        for assoc in self._associations.values():
             if assoc.session_id == session_id:
-                board = _boards.get(assoc.board_id)
+                board = self._boards.get(assoc.board_id)
                 if board:
                     result.append((assoc, board))
         return result
@@ -261,7 +263,7 @@ If no boards exist, you can create one with kanban_create_board."""
     )
     async def kanban_get_boards(self, session: "Session" = None) -> ToolResult:
         """Get boards for the current session."""
-        await _load_all_data()
+        await self._load_all_data()
 
         boards = await self._get_boards_for_session(session.id)
 
@@ -300,19 +302,19 @@ After finding a board, use kanban_link_board to associate it with this session."
     )
     async def kanban_list_all_boards(self, session: "Session" = None) -> ToolResult:
         """List all boards in the system."""
-        await _load_all_data()
+        await self._load_all_data()
 
-        if not _boards:
+        if not self._boards:
             return ToolResult("No boards exist. Use kanban_create_board to create one.")
 
         # Sort boards by creation date (newest first)
-        sorted_boards = sorted(_boards.values(), key=lambda b: b.created_at, reverse=True)
+        sorted_boards = sorted(self._boards.values(), key=lambda b: b.created_at, reverse=True)
 
-        result_lines = [f"Found {len(_boards)} board(s) in the system:\n"]
+        result_lines = [f"Found {len(self._boards)} board(s) in the system:\n"]
         board_summaries = []
         for board in sorted_boards:
             # Count sessions using this board
-            session_count = sum(1 for a in _associations.values() if a.board_id == board.id)
+            session_count = sum(1 for a in self._associations.values() if a.board_id == board.id)
             task_count = len(board.tasks)
             result_lines.append(f"- {board.name}")
             result_lines.append(f"  ID: {board.id}")
@@ -351,14 +353,14 @@ but not its ID. After finding the board, use kanban_link_board to associate it."
     )
     async def kanban_find_board(self, name: str, session: "Session" = None) -> ToolResult:
         """Find a board by name."""
-        await _load_all_data()
+        await self._load_all_data()
 
         name_lower = name.lower().strip()
         if not name_lower:
             return ToolResult("Error: name is required", is_error=True)
 
         matches = []
-        for board in _boards.values():
+        for board in self._boards.values():
             if name_lower in board.name.lower():
                 matches.append(board)
 
@@ -367,7 +369,7 @@ but not its ID. After finding the board, use kanban_link_board to associate it."
 
         result_lines = [f"Found {len(matches)} board(s) matching '{name}':\n"]
         for board in matches:
-            session_count = sum(1 for a in _associations.values() if a.board_id == board.id)
+            session_count = sum(1 for a in self._associations.values() if a.board_id == board.id)
             task_count = len(board.tasks)
             result_lines.append(f"- {board.name}")
             result_lines.append(f"  ID: {board.id}")
@@ -399,16 +401,16 @@ Use this when:
         session: "Session" = None,
     ) -> ToolResult:
         """Link an existing board to this session."""
-        await _load_all_data()
+        await self._load_all_data()
 
         board_id = board_id.strip()
         if not board_id:
             return ToolResult("Error: board_id is required", is_error=True)
 
         # Find the board (support prefix matching)
-        board = _boards.get(board_id)
+        board = self._boards.get(board_id)
         if not board:
-            for bid, b in _boards.items():
+            for bid, b in self._boards.items():
                 if bid.startswith(board_id):
                     board = b
                     board_id = bid
@@ -418,7 +420,7 @@ Use this when:
             return ToolResult(f"Error: Board {board_id} not found", is_error=True)
 
         # Check if already linked
-        for assoc in _associations.values():
+        for assoc in self._associations.values():
             if assoc.session_id == session.id and assoc.board_id == board.id:
                 return ToolResult(f"Board '{board.name}' is already linked to this session")
 
@@ -429,8 +431,8 @@ Use this when:
             role=role or "primary",
             created_by="llm",
         )
-        _associations[assoc.id] = assoc
-        await _save_association(assoc)
+        self._associations[assoc.id] = assoc
+        await self._save_association(assoc)
 
         log.info(f"Linked board: {board.name}", session_id=session.id, details={"board_id": board.id})
 
@@ -472,24 +474,24 @@ Use this when:
         session: "Session" = None,
     ) -> ToolResult:
         """Unlink a board from this session."""
-        await _load_all_data()
+        await self._load_all_data()
 
         board_id = board_id.strip()
         if not board_id:
             return ToolResult("Error: board_id is required", is_error=True)
 
         # Find the board (support prefix matching and name matching)
-        board = _boards.get(board_id)
+        board = self._boards.get(board_id)
         if not board:
             # Try prefix match
-            for bid, b in _boards.items():
+            for bid, b in self._boards.items():
                 if bid.startswith(board_id):
                     board = b
                     board_id = bid
                     break
             # Try name match
             if not board:
-                for bid, b in _boards.items():
+                for bid, b in self._boards.items():
                     if b.name.lower() == board_id.lower():
                         board = b
                         board_id = bid
@@ -500,7 +502,7 @@ Use this when:
 
         # Find and remove the association
         assoc_to_remove = None
-        for assoc_id, assoc in _associations.items():
+        for assoc_id, assoc in self._associations.items():
             if assoc.session_id == session.id and assoc.board_id == board.id:
                 assoc_to_remove = assoc_id
                 break
@@ -508,8 +510,8 @@ Use this when:
         if not assoc_to_remove:
             return ToolResult(f"Board '{board.name}' is not linked to this session")
 
-        del _associations[assoc_to_remove]
-        await _delete_association_file(assoc_to_remove)
+        del self._associations[assoc_to_remove]
+        await self._delete_association_file(assoc_to_remove)
 
         log.info(f"Unlinked board: {board.name}", session_id=session.id, details={"board_id": board.id})
 
@@ -542,7 +544,7 @@ Use this when:
     )
     async def kanban_create_board(self, name: str, session: "Session" = None) -> ToolResult:
         """Create a new board and associate with session."""
-        await _load_all_data()
+        await self._load_all_data()
 
         name = name.strip()
         if not name:
@@ -551,8 +553,8 @@ Use this when:
 
         # Create the board
         board = Board.create(name)
-        _boards[board.id] = board
-        await _save_board(board)
+        self._boards[board.id] = board
+        await self._save_board(board)
         log.info(f"Created board: {board.name}", session_id=session.id, details={"board_id": board.id})
 
         # Create association
@@ -562,8 +564,8 @@ Use this when:
             role="primary",
             created_by="llm",
         )
-        _associations[assoc.id] = assoc
-        await _save_association(assoc)
+        self._associations[assoc.id] = assoc
+        await self._save_association(assoc)
 
         columns = ", ".join(col.name for col in board.columns)
 
@@ -600,6 +602,7 @@ Use this when:
         params={
             "title": Param(str, "Short title for the task (max 100 chars)"),
             "description": Param(str, "Optional detailed description of the task", required=False),
+            "priority": Param(str, "Priority: low, medium, high, or urgent", required=False),
             "board_id": Param(str, "Board ID to add the task to. If omitted, uses the session's primary board.", required=False),
             "column_id": Param(str, "Column ID to place the task in. If omitted, uses the board's default column.", required=False),
         }
@@ -608,12 +611,13 @@ Use this when:
         self,
         title: str,
         description: str = "",
+        priority: str = "medium",
         board_id: str | None = None,
         column_id: str | None = None,
         session: "Session" = None,
     ) -> ToolResult:
         """Create a new task on a board."""
-        await _load_all_data()
+        await self._load_all_data()
 
         title = title.strip()
         if not title:
@@ -621,7 +625,7 @@ Use this when:
 
         # Get the board
         if board_id:
-            board = _boards.get(board_id)
+            board = self._boards.get(board_id)
             if not board:
                 return ToolResult(f"Error: Board {board_id} not found", is_error=True)
         else:
@@ -647,11 +651,14 @@ Use this when:
             return ToolResult("Error: No columns in board", is_error=True)
 
         # Create the task
-        task = Task.create(title, description.strip())
+        priority = (priority or "medium").strip().lower()
+        if priority not in {"low", "medium", "high", "urgent"}:
+            return ToolResult("Error: priority must be one of low, medium, high, urgent", is_error=True)
+        task = Task.create(title, description.strip(), priority)
         board.tasks[task.id] = task
         target_col.task_ids.append(task.id)
 
-        await _save_board(board)
+        await self._save_board(board)
         log.info(
             f"Created task: {task.title}",
             session_id=session.id,
@@ -697,6 +704,7 @@ Use this when:
             "title": Param(str, "New title for the task", required=False),
             "description": Param(str, "New description for the task", required=False),
             "resolution": Param(str, "What was done to complete/resolve this task. Write this when moving to Done.", required=False),
+            "priority": Param(str, "New priority: low, medium, high, or urgent", required=False),
         }
     )
     async def kanban_update_task(
@@ -705,18 +713,19 @@ Use this when:
         title: str | None = None,
         description: str | None = None,
         resolution: str | None = None,
+        priority: str | None = None,
         session: "Session" = None,
     ) -> ToolResult:
         """Update an existing task."""
-        await _load_all_data()
+        await self._load_all_data()
 
         task_id = task_id.strip()
         if not task_id:
             return ToolResult("Error: task_id is required", is_error=True)
 
-        if title is None and description is None and resolution is None:
+        if title is None and description is None and resolution is None and priority is None:
             return ToolResult(
-                "Error: At least one of title, description, or resolution must be provided",
+                "Error: At least one of title, description, resolution, or priority must be provided",
                 is_error=True,
             )
 
@@ -731,11 +740,16 @@ Use this when:
             task.description = description.strip()
         if resolution is not None:
             task.resolution = resolution.strip()
+        if priority is not None:
+            normalized_priority = priority.strip().lower()
+            if normalized_priority not in {"low", "medium", "high", "urgent"}:
+                return ToolResult("Error: priority must be one of low, medium, high, urgent", is_error=True)
+            task.priority = normalized_priority
 
         from .models import _now
         task.updated_at = _now()
 
-        await _save_board(board)
+        await self._save_board(board)
 
         event = DomainEvent(
             type="task_updated",
@@ -778,7 +792,7 @@ Use this when:
         session: "Session" = None,
     ) -> ToolResult:
         """Move a task to a different column."""
-        await _load_all_data()
+        await self._load_all_data()
 
         task_ref = task.strip()
         to_column_ref = to_column.strip()
@@ -811,7 +825,7 @@ Use this when:
             to_col.task_ids.append(task_obj.id)
             position = len(to_col.task_ids) - 1
 
-        await _save_board(board)
+        await self._save_board(board)
 
         event = DomainEvent(
             type="task_moved",
@@ -851,7 +865,7 @@ Use this when:
         session: "Session" = None,
     ) -> ToolResult:
         """Delete a task."""
-        await _load_all_data()
+        await self._load_all_data()
 
         task_id = task_id.strip()
         if not task_id:
@@ -869,7 +883,7 @@ Use this when:
         # Remove from board
         del board.tasks[task.id]
 
-        await _save_board(board)
+        await self._save_board(board)
 
         event = DomainEvent(
             type="task_deleted",
@@ -902,11 +916,11 @@ If no board_id is specified, uses the primary board for this session.""",
         session: "Session" = None,
     ) -> ToolResult:
         """List tasks from a board."""
-        await _load_all_data()
+        await self._load_all_data()
 
         # Get the board
         if board_id:
-            board = _boards.get(board_id)
+            board = self._boards.get(board_id)
             if not board:
                 return ToolResult(f"Error: Board {board_id} not found", is_error=True)
         else:
@@ -959,11 +973,11 @@ If no board_id is specified, uses the primary board for this session.""",
         session: "Session" = None,
     ) -> ToolResult:
         """Get full board state."""
-        await _load_all_data()
+        await self._load_all_data()
 
         # Get the board
         if board_id:
-            board = _boards.get(board_id)
+            board = self._boards.get(board_id)
             if not board:
                 return ToolResult(f"Error: Board {board_id} not found", is_error=True)
         else:
@@ -1033,7 +1047,7 @@ Use this when:
         session: "Session" = None,
     ) -> ToolResult:
         """Delete a column from a board."""
-        await _load_all_data()
+        await self._load_all_data()
 
         column_ref = column.strip()
         if not column_ref:
@@ -1057,7 +1071,7 @@ Use this when:
         # Remove column from board
         board.columns = [c for c in board.columns if c.id != col.id]
 
-        await _save_board(board)
+        await self._save_board(board)
 
         event = DomainEvent(
             type="column_deleted",
@@ -1081,7 +1095,7 @@ Use this when:
 
     async def get_state(self, session: "Session") -> dict[str, Any] | None:
         """Return current board state for a session."""
-        await _load_all_data()
+        await self._load_all_data()
         boards = await self._get_boards_for_session(session.id)
         if not boards:
             return None
@@ -1102,21 +1116,21 @@ Use this when:
 
     async def load_state(self, session: "Session", state: dict[str, Any]) -> None:
         """Load state from persistent storage."""
-        await _load_all_data()
+        await self._load_all_data()
 
     async def clear_state(self, session: "Session") -> None:
         """Clear boards for a session (removes associations only, not boards)."""
-        await _load_all_data()
+        await self._load_all_data()
 
         # Remove associations for this session
         assocs_to_remove = [
             assoc_id
-            for assoc_id, assoc in _associations.items()
+            for assoc_id, assoc in self._associations.items()
             if assoc.session_id == session.id
         ]
         for assoc_id in assocs_to_remove:
-            del _associations[assoc_id]
-            await _delete_association_file(assoc_id)
+            del self._associations[assoc_id]
+            await self._delete_association_file(assoc_id)
 
 
 def create_domain() -> KanbanDomain:

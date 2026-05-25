@@ -21,11 +21,12 @@ class Task:
     title: str
     description: str
     resolution: str  # What was done to complete/resolve the task
+    priority: str  # low, medium, high, urgent
     created_at: str
     updated_at: str
 
     @classmethod
-    def create(cls, title: str, description: str = "") -> "Task":
+    def create(cls, title: str, description: str = "", priority: str = "medium") -> "Task":
         """Create a new task with a unique ID."""
         now = _now()
         return cls(
@@ -33,6 +34,7 @@ class Task:
             title=title,
             description=description,
             resolution="",
+            priority=priority,
             created_at=now,
             updated_at=now,
         )
@@ -44,6 +46,7 @@ class Task:
             "title": self.title,
             "description": self.description,
             "resolution": self.resolution,
+            "priority": self.priority,
             "createdAt": self.created_at,
             "updatedAt": self.updated_at,
         }
@@ -56,6 +59,7 @@ class Task:
             title=data["title"],
             description=data.get("description", ""),
             resolution=data.get("resolution", ""),
+            priority=data.get("priority", "medium"),
             created_at=data.get("createdAt") or data.get("created_at", _now()),
             updated_at=data.get("updatedAt") or data.get("updated_at", _now()),
         )

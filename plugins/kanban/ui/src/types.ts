@@ -7,6 +7,7 @@ export interface Task {
   title: string;
   description: string;
   resolution: string;
+  priority: 'low' | 'medium' | 'high' | 'urgent';
   createdAt: string;
   updatedAt: string;
 }

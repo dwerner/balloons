@@ -35,7 +35,7 @@ export function KanbanTab({
   const [newTaskTitle, setNewTaskTitle] = useState('');
   const [newTaskColumn, setNewTaskColumn] = useState<string | null>(null);
   const [editingTask, setEditingTask] = useState<Task | null>(null);
-  const [editForm, setEditForm] = useState({ title: '', description: '', resolution: '' });
+  const [editForm, setEditForm] = useState({ title: '', description: '', resolution: '', priority: 'medium' });
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [showBoardForm, setShowBoardForm] = useState(false);
   const [showBoardPicker, setShowBoardPicker] = useState(false);
@@ -338,14 +338,18 @@ export function KanbanTab({
         title: editForm.title.trim() || undefined,
         description: editForm.description.trim() || undefined,
         resolution: editForm.resolution.trim() || undefined,
+        priority: editForm.priority || undefined,
       });
+      if (requestDomainState) {
+        await requestDomainState('kanban');
+      }
       setEditingTask(null);
     } catch (e) {
       console.error('[KanbanTab] Failed to update task:', e);
     } finally {
       setIsSubmitting(false);
     }
-  }, [callDomainMethod, editingTask, editForm]);
+  }, [callDomainMethod, editingTask, editForm, requestDomainState]);
 
   // Handle deleting a task
   const handleDeleteTask = useCallback(async (taskId: string, taskTitle: string) => {
@@ -409,6 +413,35 @@ export function KanbanTab({
       return '';
     }
   }, []);
+
+  const getPriorityRank = useCallback((priority?: Task['priority']) => {
+    switch (priority || 'medium') {
+      case 'urgent':
+        return 0;
+      case 'high':
+        return 1;
+      case 'medium':
+        return 2;
+      case 'low':
+        return 3;
+      default:
+        return 2;
+    }
+  }, []);
+
+  const getSortedTaskIds = useCallback((column: Column) => {
+    return [...column.taskIds].sort((a, b) => {
+      const taskA = activeBoard?.tasks[a];
+      const taskB = activeBoard?.tasks[b];
+
+      if (!taskA || !taskB) return 0;
+
+      const priorityDelta = getPriorityRank(taskA.priority) - getPriorityRank(taskB.priority);
+      if (priorityDelta !== 0) return priorityDelta;
+
+      return column.taskIds.indexOf(a) - column.taskIds.indexOf(b);
+    });
+  }, [activeBoard, getPriorityRank]);
 
   // Handle moving a task between columns
   const handleMoveTask = useCallback(async (taskId: string, toColumnId: string, position?: number) => {
@@ -541,6 +574,7 @@ export function KanbanTab({
       title: task.title,
       description: task.description,
       resolution: task.resolution,
+      priority: task.priority || 'medium',
     });
   }, []);
 
@@ -874,11 +908,12 @@ export function KanbanTab({
                       {taskCount === 0 && !(isCreatingTask && newTaskColumn === column.id) ? (
                         <div className="kanban-accordion-empty">No tasks</div>
                       ) : (
-                        column.taskIds.map((taskId, index) => {
+                        getSortedTaskIds(column).map((taskId, index) => {
                           const task = activeBoard.tasks[taskId];
                           if (!task) return null;
 
                           const isDragging = dragState?.taskId === taskId;
+                          const priority = task.priority || 'medium';
 
                           return (
                             <div
@@ -889,7 +924,9 @@ export function KanbanTab({
                               onDragEnd={handleDragEnd}
                               onClick={() => openEditForm(task)}
                             >
-                              <div className="kanban-task-title">{task.title}</div>
+                              <div className="kanban-task-header">
+                                <div className="kanban-task-title">{task.title}</div>
+                              </div>
                               {task.description && (
                                 <div className="kanban-task-description">
                                   {task.description.length > 60
@@ -905,6 +942,12 @@ export function KanbanTab({
                                     : task.resolution}
                                 </div>
                               )}
+                              <div className="kanban-task-footer">
+                                <div className="kanban-task-spacer" />
+                                <span className={`kanban-task-priority kanban-task-priority--${priority}`}>
+                                  {priority}
+                                </span>
+                              </div>
                               {/* Quick move buttons - horizontal row */}
                               <div className="kanban-task-quick-actions">
                                 {activeBoard.columns
@@ -963,6 +1006,18 @@ export function KanbanTab({
                   placeholder="Optional description"
                   rows={3}
                 />
+              </div>
+              <div className="kanban-form-group">
+                <label>Priority</label>
+                <select
+                  value={editForm.priority}
+                  onChange={e => setEditForm(f => ({ ...f, priority: e.target.value as 'low' | 'medium' | 'high' | 'urgent' }))}
+                >
+                  <option value="low">Low</option>
+                  <option value="medium">Medium</option>
+                  <option value="high">High</option>
+                  <option value="urgent">Urgent</option>
+                </select>
               </div>
               <div className="kanban-form-group">
                 <label>Resolution</label>

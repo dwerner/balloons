@@ -146,6 +146,8 @@ class StreamDoneEvent:
     exchange_id: str
     input_tokens: int = 0
     output_tokens: int = 0
+    stopped_by_kill_switch: bool = False
+    stop_reason: str = ""
 
 
 @dataclass

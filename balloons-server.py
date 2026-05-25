@@ -2,14 +2,15 @@
 """Balloons Server Manager - Start/stop headless instances and UI server.
 
 Usage:
-    python balloons-server.py start [--port PORT]   # Start instance on port
-    python balloons-server.py stop [--port PORT]    # Stop instance on port
-    python balloons-server.py list                  # List running instances
-    python balloons-server.py restart [--port PORT] # Restart instance
-    python balloons-server.py ui start              # Start bun dev server (TLS)
-    python balloons-server.py ui stop               # Stop bun dev server
-    python balloons-server.py ui restart            # Restart bun dev server
-    python balloons-server.py ui log                # Tail bun dev server log
+    python balloons-server.py start [--port PORT]    # Start instance on port
+    python balloons-server.py stop [--port PORT]     # Stop instance on port
+    python balloons-server.py list                   # List running instances
+    python balloons-server.py restart [--port PORT]  # Restart instance
+    python balloons-server.py truncate-logs          # Truncate all managed log files
+    python balloons-server.py ui start               # Start bun dev server (TLS)
+    python balloons-server.py ui stop                # Stop bun dev server
+    python balloons-server.py ui restart             # Restart bun dev server
+    python balloons-server.py ui log                 # Tail bun dev server log
 
 Default ports:
     A: 8700 (primary backend)
@@ -142,6 +143,27 @@ def stop_instance(port: int) -> bool:
     except PermissionError:
         print(f"Permission denied stopping PID {pid}")
         return False
+
+
+def truncate_logs() -> None:
+    """Truncate all managed log files without removing them."""
+    log_files = [
+        get_log_file(SLOT_A_PORT),
+        get_log_file(SLOT_B_PORT),
+        UI_LOG_FILE,
+    ]
+
+    LOG_DIR.mkdir(parents=True, exist_ok=True)
+
+    truncated = 0
+    for log_file in log_files:
+        log_file.touch(exist_ok=True)
+        with open(log_file, "w"):
+            pass
+        print(f"Truncated {log_file}")
+        truncated += 1
+
+    print(f"Truncated {truncated} log file(s)")
 
 
 # ============================================================================
@@ -392,6 +414,9 @@ Examples:
     # List command
     subparsers.add_parser("list", help="List running instances")
 
+    # Truncate logs command
+    subparsers.add_parser("truncate-logs", help="Truncate all managed log files")
+
     # UI command (for bun dev server)
     ui_parser = subparsers.add_parser("ui", help="Manage the bun dev server (UI)")
     ui_subparsers = ui_parser.add_subparsers(dest="ui_command", required=True)
@@ -422,6 +447,9 @@ Examples:
 
     elif args.command == "list":
         list_instances()
+
+    elif args.command == "truncate-logs":
+        truncate_logs()
 
     elif args.command == "ui":
         if args.ui_command == "start":

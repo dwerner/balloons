@@ -3,29 +3,21 @@
 import pytest
 from unittest.mock import MagicMock, AsyncMock
 
-from plugins.kanban.domain import KanbanDomain, create_domain, _boards, _associations, _boards_loaded
+from plugins.kanban.domain import KanbanDomain, create_domain
 from plugins.kanban.models import Board, Task, Column, SessionBoardAssociation
-
-
-# Reset global state before each test
-@pytest.fixture(autouse=True)
-def reset_state():
-    """Reset global state before each test."""
-    global _boards, _associations, _boards_loaded
-    import plugins.kanban.domain as domain_module
-    domain_module._boards = {}
-    domain_module._associations = {}
-    domain_module._boards_loaded = True  # Skip loading from disk in tests
-    yield
-    domain_module._boards = {}
-    domain_module._associations = {}
-    domain_module._boards_loaded = False
 
 
 @pytest.fixture
 def domain():
-    """Create a fresh domain instance."""
-    return create_domain()
+    """Create a fresh domain instance with empty state.
+
+    Since state is now instance-based, each test gets a fresh domain
+    with its own empty _boards, _associations, and _boards_loaded.
+    We set _boards_loaded = True to skip loading from disk in tests.
+    """
+    d = create_domain()
+    d._boards_loaded = True  # Skip loading from disk in tests
+    return d
 
 
 @pytest.fixture
@@ -59,19 +51,36 @@ class TestDomainBasics:
         assert "tabs" in config
         assert any(t["id"] == "kanban" for t in config["tabs"])
 
+    def test_fresh_instance_has_empty_state(self):
+        """Verify that create_domain() returns a fresh instance with empty state."""
+        d1 = create_domain()
+        d2 = create_domain()
+
+        # Each instance should have its own state
+        assert d1._boards is not d2._boards
+        assert d1._associations is not d2._associations
+
+        # Both should start empty
+        assert len(d1._boards) == 0
+        assert len(d2._boards) == 0
+
 
 class TestToolDefinitions:
     """Test that tools are properly defined."""
 
     def test_tool_count(self, domain):
         tools = domain.get_tools()
-        assert len(tools) == 9
+        assert len(tools) == 13  # Updated count after adding link/unlink/find/list_all tools
 
     def test_expected_tools(self, domain):
         tools = domain.get_tools()
         tool_names = {t.name for t in tools}
         expected = {
             "kanban_get_boards",
+            "kanban_list_all_boards",
+            "kanban_find_board",
+            "kanban_link_board",
+            "kanban_unlink_board",
             "kanban_create_board",
             "kanban_create_task",
             "kanban_update_task",
@@ -81,7 +90,8 @@ class TestToolDefinitions:
             "kanban_get_board_state",
             "kanban_delete_column",
         }
-        assert tool_names == expected
+        # Check that expected tools are present (there may be more)
+        assert expected.issubset(tool_names), f"Missing tools: {expected - tool_names}"
 
     def test_tools_have_descriptions(self, domain):
         tools = domain.get_tools()

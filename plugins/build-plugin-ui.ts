@@ -31,6 +31,12 @@ interface PluginBuildResult {
   css?: string;
 }
 
+interface PluginPackageJson {
+  name?: string;
+  version?: string;
+  private?: boolean;
+}
+
 /**
  * Find all plugins with UI directories
  */
@@ -54,6 +60,21 @@ function findPluginsWithUI(): string[] {
   return plugins;
 }
 
+function getPluginVersion(pluginId: string): string {
+  const packageJsonPath = join(pluginsDir, pluginId, "ui", "package.json");
+  if (!existsSync(packageJsonPath)) {
+    return "0.1.0";
+  }
+
+  try {
+    const packageJsonText = require("fs").readFileSync(packageJsonPath, "utf-8");
+    const packageJson = JSON.parse(packageJsonText) as PluginPackageJson;
+    return packageJson.version || "0.1.0";
+  } catch {
+    return "0.1.0";
+  }
+}
+
 /**
  * Build a single plugin's UI
  */
@@ -75,6 +96,8 @@ async function buildPlugin(pluginId: string): Promise<PluginBuildResult> {
   console.log(`        Entry: ${entrypoint}`);
 
   try {
+    const pluginVersion = getPluginVersion(pluginId);
+
     // Change to web/ui directory to resolve React from its node_modules
     const originalDir = process.cwd();
     process.chdir(webUiDir);
@@ -212,7 +235,7 @@ async function buildPlugin(pluginId: string): Promise<PluginBuildResult> {
     // Generate manifest
     const manifest = {
       pluginId,
-      version: "0.1.0",
+      version: pluginVersion,
       builtAt: new Date().toISOString(),
       files: {
         js: "bundle.js",

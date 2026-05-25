@@ -18,6 +18,12 @@ default_backend: claude
 # Falls back to $VISUAL, then $EDITOR, then vi
 # editor: nvim
 
+# Session safety kill switch
+# Stop an agent stream when cumulative session token usage reaches this limit.
+# Uses session total_input_tokens + total_output_tokens.
+# Set to 0 to disable.
+# session_token_kill_switch: 200000
+
 # Sound notifications (files in ~/.balloons/sounds/)
 # Uses sounds from https://github.com/akx/Notifications (CC0/CC-BY-3.0)
 # sounds:

@@ -67,7 +67,12 @@ const TaskCardDesktop = memo(function TaskCardDesktop({
       onDragStart={(e) => onDragStart(e, task)}
       onDragEnd={onDragEnd}
     >
-      <div className="kanban-task-card__title">{task.title}</div>
+      <div className="kanban-task-card__header">
+        <div className="kanban-task-card__title">{task.title}</div>
+        <span className={`kanban-task-card__priority kanban-task-card__priority--${task.priority || 'medium'}`}>
+          {task.priority || 'medium'}
+        </span>
+      </div>
       {task.description && (
         <div className="kanban-task-card__description">{task.description}</div>
       )}
@@ -132,7 +137,12 @@ const TaskCardMobile = memo(function TaskCardMobile({
   return (
     <div className="kanban-task-card kanban-task-card--mobile">
       <div className="kanban-task-card__content">
-        <div className="kanban-task-card__title">{task.title}</div>
+        <div className="kanban-task-card__header">
+          <div className="kanban-task-card__title">{task.title}</div>
+          <span className={`kanban-task-card__priority kanban-task-card__priority--${task.priority || 'medium'}`}>
+            {task.priority || 'medium'}
+          </span>
+        </div>
         {task.description && (
           <div className="kanban-task-card__description">{task.description}</div>
         )}

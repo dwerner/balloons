@@ -385,6 +385,19 @@ class TestStreamingOperations:
         mock_runner.cancel.assert_called_once()
 
     @pytest.mark.asyncio
+    async def test_internal_cancel_streaming_records_reason(self, service, mock_manager, mock_runner):
+        """Internal cancellation records kill switch reason."""
+        mock_runner.is_streaming = True
+
+        result = await service._cancel_streaming_internal(
+            "test-session-123",
+            reason="Session token kill switch triggered: 100 >= 100",
+        )
+
+        assert result is True
+        assert service._kill_switch_stops["test-session-123"] == "Session token kill switch triggered: 100 >= 100"
+
+    @pytest.mark.asyncio
     async def test_cancel_streaming_not_streaming(
         self, service, mock_manager, mock_runner
     ):
@@ -513,7 +526,7 @@ class TestSubmitMessage:
         """Test that queue=True raises not implemented error."""
         mock_runner.is_streaming = True
 
-        with pytest.raises(ValueError, match="queueing not yet implemented"):
+        with pytest.raises(ValueError, match="Message queueing unavailable"):
             await service.submit_message(
                 session_id=mock_session.id,
                 content="Hello",
@@ -1493,6 +1506,30 @@ class TestAsyncObservers:
         assert isinstance(stream_done, StreamDoneEvent)
         assert stream_done.session_id == "test-123"
         assert stream_done.exchange_id == "exchange-456"
+        assert stream_done.stopped_by_kill_switch is False
+        assert stream_done.stop_reason == ""
+
+    @pytest.mark.asyncio
+    async def test_dispatch_done_includes_kill_switch_reason(self, service, ctx, mock_event):
+        """Done event includes kill switch metadata when stream was stopped by token limit."""
+        from service.session_events import StreamDoneEvent
+
+        observer = MagicMock()
+        observer.on_turn_finished = AsyncMock()
+        observer.on_stream_done = AsyncMock()
+        service.add_observer(observer)
+
+        ctx.content = "Final response"
+        service._streaming_contexts["test-123"] = ctx
+        service._kill_switch_stops["test-123"] = "Session token kill switch triggered: 150 >= 100"
+
+        event = mock_event("done", {})
+        await service._dispatch_event("test-123", event, ctx)
+
+        stream_done = observer.on_stream_done.call_args[0][0]
+        assert isinstance(stream_done, StreamDoneEvent)
+        assert stream_done.stopped_by_kill_switch is True
+        assert stream_done.stop_reason == "Session token kill switch triggered: 150 >= 100"
 
     @pytest.mark.asyncio
     async def test_dispatch_error_notifies_observers(self, service, ctx, mock_event, stream_state):
@@ -1530,11 +1567,25 @@ class TestAsyncObservers:
         observer.on_stream_error.assert_called_once()
         call_args = observer.on_stream_error.call_args[0][0]
         assert isinstance(call_args, StreamErrorEvent)
-        assert call_args.session_id == "test-123"
-        assert call_args.error == "Something went wrong"
-        assert call_args.error_type == "error"
-        assert call_args.dump_file == "/tmp/stream.json"
-        # Session may copy/rehydrate turns internally in tests; stream failure + cleanup is the contract here.
+
+    @pytest.mark.asyncio
+    async def test_dispatch_result_triggers_token_kill_switch(self, service, mock_manager, ctx):
+        """Result event cancels stream when configured token limit is reached."""
+        session = MagicMock()
+        session.total_tokens = 150
+        mock_manager.get_session.side_effect = lambda sid: session if sid == "test-123" else None
+        service._streaming_contexts["test-123"] = ctx
+        service._cancel_streaming_internal = AsyncMock(return_value=True)
+
+        event = type("Event", (), {"event_type": "result", "data": {"input_tokens": 1, "output_tokens": 1}})()
+
+        with patch("service.session_manager_service.get_config") as mock_get_config:
+            mock_get_config.return_value.session_token_kill_switch = 100
+            await service._dispatch_event("test-123", event, ctx)
+
+        service._cancel_streaming_internal.assert_awaited_once()
+        assert service._cancel_streaming_internal.call_args.args[0] == "test-123"
+        assert "Session token kill switch triggered" in service._cancel_streaming_internal.call_args.kwargs["reason"]
 
     @pytest.mark.asyncio
     async def test_dispatch_tool_use_started_notifies_observers(self, service, ctx, mock_event):

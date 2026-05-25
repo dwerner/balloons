@@ -46,6 +46,7 @@ from codegen import ws_service, ws_expose, ws_event, ws_type
 from core.debug_log import debug_log, Category
 from core.context import ContextBuilder
 from tokenizer import count_tokens
+from config import get_config
 from core.fork import ForkManager, ForkResult, MergeResult, ForkData, DeriveResult, DeriveData, SwitchResult, ForkProposal, MergeProposal
 from core.tool_executor import parse_fork_proposal, parse_merge_proposal
 from core.manager import SessionManager
@@ -632,6 +633,8 @@ class SessionManagerService:
         self._pump_interval = 0.05  # 50ms polling interval
         # Track streaming context per session (exchange_id, accumulated content, etc.)
         self._streaming_contexts: dict[str, _StreamingContext] = {}
+        # Track sessions stopped by the configured token kill switch during current stream
+        self._kill_switch_stops: dict[str, str] = {}
 
         # Helper runner state (for background LLM tasks)
         # Imported here to avoid circular imports
@@ -2589,6 +2592,22 @@ class SessionManagerService:
                 output_tokens=output_tokens,  # Only update output tokens from API
             )
 
+            session = self._manager.get_session(session_id)
+            if session:
+                kill_switch_limit = get_config().session_token_kill_switch
+                if kill_switch_limit > 0 and session.total_tokens >= kill_switch_limit:
+                    reason = (
+                        f"Session token kill switch triggered: "
+                        f"{session.total_tokens} >= {kill_switch_limit}"
+                    )
+                    debug_log.warning(
+                        reason,
+                        category=Category.RUNNER,
+                        session_id=session_id,
+                    )
+                    await self._cancel_streaming_internal(session_id, reason=reason)
+                    return
+
         elif event_type == "done":
             # Stream complete - emit final turn_finished and clean up
             # Only emit turn_finished if there's unflushed content.
@@ -2633,6 +2652,8 @@ class SessionManagerService:
                     ),
                 )
 
+            kill_switch_reason = self._kill_switch_stops.pop(session_id, "")
+
             # Always emit stream_done
             await self._notify_observers(
                 "on_stream_done",
@@ -2641,6 +2662,8 @@ class SessionManagerService:
                     exchange_id=ctx.exchange_id,
                     input_tokens=input_tokens,
                     output_tokens=output_tokens,
+                    stopped_by_kill_switch=bool(kill_switch_reason),
+                    stop_reason=kill_switch_reason,
                 ),
             )
 
@@ -2690,6 +2713,7 @@ class SessionManagerService:
                 ),
             )
 
+            self._kill_switch_stops.pop(session_id, None)
             self._stream_state.fail_stream(ctx.exchange_id, error_msg)
 
             # The runner has already added an ErrorBlock turn to the session
@@ -6274,9 +6298,24 @@ Summary:""")
         Returns:
             True if streaming was cancelled, False if session wasn't streaming
         """
+        return await self._cancel_streaming_internal(session_id)
+
+    async def _cancel_streaming_internal(self, session_id: str, reason: str | None = None) -> bool:
+        """Internal streaming cancellation helper.
+
+        Args:
+            session_id: ID of the session to cancel
+            reason: Optional reason to record for stream completion/error handling
+
+        Returns:
+            True if streaming was cancelled, False if session wasn't streaming
+        """
         runner = self._manager.get_runner(session_id)
         if not runner or not runner.is_streaming:
             return False
+
+        if reason:
+            self._kill_switch_stops[session_id] = reason
 
         runner.cancel()
 

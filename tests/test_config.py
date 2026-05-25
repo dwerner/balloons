@@ -50,6 +50,18 @@ class TestConfigAsync:
         assert config.backends["test-backend"].type == "openai"
 
     @pytest.mark.asyncio
+    async def test_load_async_session_token_kill_switch(self, temp_config_dir, sample_config_data):
+        """Test async config loading of session token kill switch."""
+        config_file = temp_config_dir / "config.yaml"
+        sample_config_data["session_token_kill_switch"] = 12345
+        config_file.write_text(yaml.safe_dump(sample_config_data))
+
+        with patch.dict("os.environ", {"BALLOONS_CONFIG": str(config_file)}):
+            config = await Config.load_async()
+
+        assert config.session_token_kill_switch == 12345
+
+    @pytest.mark.asyncio
     async def test_load_async_default_when_no_file(self, tmp_path):
         """Test async load returns default config when no file exists."""
         with patch.dict("os.environ", {"BALLOONS_CONFIG": ""}):
@@ -69,6 +81,7 @@ class TestConfigAsync:
             backends={"claude": BackendConfig(name="claude")},
             last_view_session_id="test-session-123",
             last_view_turn_index=5,
+            session_token_kill_switch=200000,
             _config_path=config_file,
         )
 
@@ -78,6 +91,7 @@ class TestConfigAsync:
         data = yaml.safe_load(config_file.read_text())
         assert data["last_view"]["session_id"] == "test-session-123"
         assert data["last_view"]["turn_index"] == 5
+        assert data["session_token_kill_switch"] == 200000
 
     @pytest.mark.asyncio
     async def test_save_async_preserves_existing_data(self, temp_config_dir):

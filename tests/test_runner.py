@@ -130,6 +130,7 @@ class TestStreamProcessing:
         assert results[0].event_type == "result"
         assert session.total_input_tokens == 100
         assert session.total_output_tokens == 50
+        assert results[0].data["session_total_tokens"] == 150
 
     def test_process_raw_event(self, runner):
         """RawEvent is passed through."""

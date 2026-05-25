@@ -212,7 +212,7 @@ async def run_server(host: str | None = None, port: int | None = None) -> None:
         session_service.stop_event_pump()
         await ws_server.stop()
         await http_auth_server.stop()
-        await shutdown_supervisor()
+        shutdown_supervisor()
 
 
 def main() -> None:
