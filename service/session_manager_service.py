@@ -7106,12 +7106,34 @@ Summary:""")
 
         categories = discover_tool_categories()
         core_tools = sorted(get_core_tool_names())
-        all_tools = sorted(get_all_tools())
+        all_tools = set(get_all_tools())
+
+        try:
+            from plugins.registry import get_registry
+            registry = get_registry()
+            domain_tools: dict[str, list[str]] = {}
+            for domain_id in registry.loaded_domains:
+                domain = registry.get_domain(domain_id)
+                if not domain:
+                    continue
+                tools = [tool.name for tool in domain.get_tools()]
+                if tools:
+                    domain_tools[domain_id] = sorted(tools)
+                    all_tools.update(tools)
+
+            if domain_tools:
+                categories = dict(categories)
+                categories["domain_plugins"] = sorted(
+                    {tool for tools in domain_tools.values() for tool in tools}
+                )
+        except ImportError:
+            domain_tools = {}
 
         return {
             "core": core_tools,
             "categories": categories,
-            "all": all_tools,
+            "all": sorted(all_tools),
+            "domain_tools": domain_tools,
         }
 
     @ws_expose

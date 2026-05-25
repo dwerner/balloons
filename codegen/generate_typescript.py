@@ -366,23 +366,26 @@ def main():
     """Generate TypeScript code from registered Python schemas."""
     # Import modules containing @ws_service decorated classes
     # Add imports here for any module with services to export to TypeScript
-    try:
-        import service.queue_state_service  # QueueStateService
-        import service.session_manager_service  # SessionManagerService
-        import service.task_state_service  # TaskStateService
-        import service.session_data_service  # SessionDataService
-        import service.image_service  # ImageService
-        import service.file_state_service  # FileStateService
-        import service.debug_log_service  # DebugLogService
-        import service.goal_tree_state_service  # GoalTreeStateService
-        import service.sound_service  # SoundService
-        import service.supervisor_state_service  # SupervisorStateService
-        import service.browser_state_service  # BrowserStateService
-        import service.lsp_service  # LSPService
-        import service.kanban_ws_service  # KanbanWebSocketService
-        import plugins.rpc_service  # DomainRpcService - for plugin @ws_expose methods
-    except ImportError as e:
-        print(f"Warning: Could not import service modules: {e}")
+    modules_to_import = [
+        ("service.queue_state_service", "QueueStateService"),
+        ("service.session_manager_service", "SessionManagerService"),
+        ("service.task_state_service", "TaskStateService"),
+        ("service.session_data_service", "SessionDataService"),
+        ("service.image_service", "ImageService"),
+        ("service.file_state_service", "FileStateService"),
+        ("service.debug_log_service", "DebugLogService"),
+        ("service.sound_service", "SoundService"),
+        ("service.supervisor_state_service", "SupervisorStateService"),
+        ("service.browser_state_service", "BrowserStateService"),
+        ("service.lsp_service", "LSPService"),
+        ("plugins.rpc_service", "DomainRpcService"),
+    ]
+
+    for module_name, label in modules_to_import:
+        try:
+            __import__(module_name)
+        except ImportError as e:
+            print(f"Warning: Could not import {label} from {module_name}: {e}")
 
     services = WsExposeRegistry.get_services()
     types = WsExposeRegistry.get_types()

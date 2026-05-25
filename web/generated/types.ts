@@ -1,7 +1,7 @@
 // AUTO-GENERATED CODE - DO NOT EDIT
 //
 // Generated from Python @ws_expose and @ws_type decorators.
-// Generated: 2026-05-25T09:36:32.330236
+// Generated: 2026-05-25T10:27:04.351209
 //
 // To regenerate:
 //     python -m codegen.generate_typescript
@@ -1156,5 +1156,263 @@ export interface ServerIdentityInfo {
   port: number;
   pid: number;
   startTime: string;
+}
+
+export interface SoundInfo {
+  filename: string;
+  mediaType: string;
+  sizeBytes: number;
+  isBuiltin?: boolean;
+}
+
+export interface SoundData {
+  filename: string;
+  mediaType: string;
+  dataBase64: string;
+}
+
+export interface SoundUploadResult {
+  filename: string;
+  mediaType: string;
+  sizeBytes: number;
+  success: boolean;
+  error?: string | null;
+}
+
+export interface SoundEventData {
+  eventType: string;
+  filename: string;
+  data?: Record<string, unknown>;
+}
+
+export interface HostInfo {
+  name: string;
+  type: string;
+  host?: string | null;
+  user?: string | null;
+  port?: number;
+  tags?: string[];
+  description?: string | null;
+  status?: string;
+  latencyMs?: number | null;
+  error?: string | null;
+}
+
+export interface ProcessInfo {
+  processId: string;
+  command: string;
+  name: string | null;
+  host: string;
+  sessionId: string;
+  status: string;
+  exitCode?: number | null;
+  startedAt?: string | null;
+  runtimeSeconds?: number | null;
+  processType?: string;
+}
+
+export interface ProcessOutput {
+  processId: string;
+  source: string;
+  content: string;
+  ts: number;
+}
+
+export interface ProcessLogEntry {
+  ts: number;
+  source: string;
+  content: string;
+}
+
+export interface ProcessOutputBatch {
+  processId: string;
+  entries: ProcessLogEntry[];
+  totalCount: number;
+  hasMore: boolean;
+}
+
+export interface BackendHostMapping {
+  backendName: string;
+  hostName: string;
+}
+
+export interface SupervisorState {
+  hosts: HostInfo[];
+  processes: ProcessInfo[];
+  backendHosts: BackendHostMapping[];
+}
+
+export interface HostQueryResult {
+  hosts: HostInfo[];
+}
+
+export interface HostStatusResult {
+  host: string;
+  type: string;
+  status: string;
+  latencyMs?: number | null;
+  error?: string | null;
+}
+
+export interface ProcessListResult {
+  summary: string;
+  processes: ProcessInfo[];
+}
+
+export interface HostUpdateRequest {
+  name: string;
+  type?: string;
+  host?: string | null;
+  user?: string | null;
+  port?: number;
+  tags?: string[];
+  description?: string | null;
+  originalName?: string | null;
+}
+
+export interface ConfigUpdateResult {
+  success: boolean;
+  error?: string | null;
+}
+
+export interface SupervisorEvent {
+  ts: number;
+  type: string;
+  data: Record<string, unknown>;
+}
+
+export interface EventHistoryResult {
+  events: SupervisorEvent[];
+  totalBuffered: number;
+}
+
+export interface BrowserInfo {
+  name: string;
+  browserId: string;
+  browserType: string;
+  headless: boolean;
+  status: string;
+  currentUrl?: string | null;
+  currentTitle?: string | null;
+  createdAt?: number;
+  error?: string | null;
+}
+
+export interface BrowserListResult {
+  browsers: BrowserInfo[];
+  defaultBrowser?: string | null;
+}
+
+export interface BrowserCreateRequest {
+  name?: string | null;
+  browserType?: string;
+  headless?: boolean;
+  webdriverUrl?: string | null;
+  port?: number | null;
+  setAsDefault?: boolean;
+}
+
+export interface BrowserResult {
+  success: boolean;
+  browser?: BrowserInfo | null;
+  error?: string | null;
+  data?: string | null;
+}
+
+export interface BrowserNavigateResult {
+  success: boolean;
+  url?: string | null;
+  title?: string | null;
+  error?: string | null;
+}
+
+export interface BrowserScreenshotResult {
+  success: boolean;
+  dataUrl?: string | null;
+  filePath?: string | null;
+  error?: string | null;
+}
+
+export interface BrowserSeeResult {
+  success: boolean;
+  content?: string | null;
+  error?: string | null;
+}
+
+export interface TabInfo {
+  handle: string;
+  isActive: boolean;
+  url?: string | null;
+  title?: string | null;
+}
+
+export interface TabListResult {
+  success: boolean;
+  tabs?: TabInfo[];
+  activeTab?: string | null;
+  error?: string | null;
+}
+
+export interface BrowserEvent {
+  browserName: string;
+  eventType: string;
+  browser?: BrowserInfo | null;
+  url?: string | null;
+  title?: string | null;
+  ts?: number;
+}
+
+export interface LSPServerConfig {
+  name: string;
+  command: string;
+  extensions: string[];
+  languages: string[];
+  idleTimeoutSeconds: number;
+}
+
+export interface LSPServerInstance {
+  key: string;
+  serverName: string;
+  workspace: string;
+  processId: string;
+  initialized: boolean;
+  idleSeconds: number;
+  pendingRequests: number;
+  processStatus: string;
+}
+
+export interface LSPStatusResult {
+  configuredServers: LSPServerConfig[];
+  runningInstances: LSPServerInstance[];
+}
+
+export interface LSPActionResult {
+  success: boolean;
+  action: string;
+  key: string;
+  server: string;
+  workspace: string;
+  processId?: string | null;
+  error?: string | null;
+}
+
+export interface LSPDocumentSymbol {
+  name: string;
+  kind: number;
+  kindName: string;
+  filePath: string;
+  lineStart: number;
+  lineEnd: number;
+  characterStart: number;
+  characterEnd: number;
+  detail?: string | null;
+  children?: LSPDocumentSymbol[];
+}
+
+export interface LSPDocumentSymbolsResult {
+  success: boolean;
+  filePath: string;
+  symbols?: LSPDocumentSymbol[];
+  error?: string | null;
 }
 

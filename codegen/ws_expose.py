@@ -32,6 +32,7 @@ import inspect
 import re
 from dataclasses import dataclass, field, is_dataclass, fields
 from typing import Callable, TypeVar, get_type_hints, get_origin, get_args, Union, Any
+import types
 from functools import wraps
 
 from codegen.rust_schema import rust_schema, RustSchemaRegistry
@@ -371,8 +372,8 @@ def python_to_ts_type(py_type: Any) -> str:
 
     origin = get_origin(py_type)
 
-    # Handle Optional[T] (which is Union[T, None])
-    if origin is Union:
+    # Handle Optional[T] / unions, including PEP 604 syntax (T | None)
+    if origin is Union or origin is types.UnionType:
         args = get_args(py_type)
         non_none_args = [a for a in args if a is not type(None)]
         if len(non_none_args) == 1 and type(None) in args:
@@ -380,8 +381,8 @@ def python_to_ts_type(py_type: Any) -> str:
             return f"{inner_type} | null"
         else:
             # General union
-            types = [python_to_ts_type(a) for a in args]
-            return " | ".join(types)
+            union_types = [python_to_ts_type(a) for a in args]
+            return " | ".join(union_types)
 
     # Handle list[T]
     if origin is list:
@@ -405,8 +406,8 @@ def python_to_ts_type(py_type: Any) -> str:
     if origin is tuple:
         args = get_args(py_type)
         if args:
-            types = [python_to_ts_type(a) for a in args]
-            return f"[{', '.join(types)}]"
+            tuple_types = [python_to_ts_type(a) for a in args]
+            return f"[{', '.join(tuple_types)}]"
         return "unknown[]"
 
     # Handle basic types

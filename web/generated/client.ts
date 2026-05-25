@@ -1,7 +1,7 @@
 // AUTO-GENERATED CODE - DO NOT EDIT
 //
 // Generated from Python @ws_expose and @ws_event decorators.
-// Generated: 2026-05-25T09:36:32.334108
+// Generated: 2026-05-25T10:27:04.356154
 //
 // To regenerate:
 //     python -m codegen.generate_typescript
@@ -3730,6 +3730,1266 @@ export class DebugLogServiceClient implements DebugLogService {
 
   async warning(message: string, category?: string, sessionId?: string, details?: Record<string, unknown> | null): Promise<Types.LogResult> {
     return this.call('warning', { message: message, category: category, sessionId: sessionId, details: details });
+  }
+
+}
+
+/**
+ * WebSocket-exposed service for sound file management.
+ * 
+ * Handles listing available sounds, retrieving sound data for browser playback,
+ * and uploading custom sounds.
+ */
+export interface SoundService {
+  /**
+   * Delete a sound file.
+   * 
+   * Args:
+   * filename: Name of the sound file to delete
+   * 
+   * Returns:
+   * True if deleted, False if not found
+   */
+  deleteSound(filename: string): Promise<boolean>;
+
+  /**
+   * Get sound file data for browser playback.
+   * 
+   * Args:
+   * filename: Name of the sound file
+   * 
+   * Returns:
+   * SoundData with base64-encoded audio, or None if not found
+   */
+  getSoundData(filename: string): Promise<Types.SoundData | null>;
+
+  /**
+   * Get the sounds directory path.
+   * 
+   * Returns:
+   * Absolute path to sounds directory
+   */
+  getSoundsDir(): Promise<string>;
+
+  /**
+   * List all available sound files.
+   * 
+   * Returns:
+   * List of SoundInfo objects for each sound file.
+   */
+  listSounds(): Promise<Types.SoundInfo[]>;
+
+  /**
+   * Upload a custom sound file.
+   * 
+   * Args:
+   * data_base64: Base64-encoded audio data
+   * filename: Desired filename
+   * media_type: MIME type (audio/ogg, audio/mpeg, etc.)
+   * 
+   * Returns:
+   * SoundUploadResult with success status
+   */
+  uploadSound(dataBase64: string, filename: string, mediaType: string): Promise<Types.SoundUploadResult>;
+
+}
+
+export interface SoundEvents {
+  /**
+   * Emitted when a sound is deleted.
+   */
+  onSoundDeleted(callback: (data: Types.SoundEventData) => void): Unsubscribe;
+
+  /**
+   * Emitted when a sound is uploaded.
+   */
+  onSoundUploaded(callback: (data: Types.SoundEventData) => void): Unsubscribe;
+
+}
+
+export class SoundServiceClient implements SoundService {
+  private ws: WebSocket;
+  private pending: Map<string, { resolve: (v: any) => void; reject: (e: Error) => void }> = new Map();
+  private eventHandlers: Map<string, Set<(data: any) => void>> = new Map();
+
+  constructor(ws: WebSocket) {
+    this.ws = ws;
+    this.ws.addEventListener('message', this.handleMessage.bind(this));
+  }
+
+  private handleMessage(event: MessageEvent): void {
+    const msg = JSON.parse(event.data);
+    if (msg.id && this.pending.has(msg.id)) {
+      const { resolve, reject } = this.pending.get(msg.id)!;
+      this.pending.delete(msg.id);
+      if (msg.error) {
+        reject(new Error(msg.error.message));
+      } else {
+        resolve(msg.result);
+      }
+    } else if (msg.event) {
+      const handlers = this.eventHandlers.get(msg.event);
+      if (handlers) {
+        handlers.forEach(h => h(msg.data));
+      }
+    }
+  }
+
+  private async call<T>(method: string, params: Record<string, unknown>): Promise<T> {
+    const id = generateRequestId();
+    return new Promise((resolve, reject) => {
+      this.pending.set(id, { resolve, reject });
+      this.ws.send(JSON.stringify({ id, method, params }));
+    });
+  }
+
+  private subscribe(event: string, callback: (data: any) => void): Unsubscribe {
+    if (!this.eventHandlers.has(event)) {
+      this.eventHandlers.set(event, new Set());
+    }
+    this.eventHandlers.get(event)!.add(callback);
+    return () => {
+      this.eventHandlers.get(event)?.delete(callback);
+    };
+  }
+
+  async deleteSound(filename: string): Promise<boolean> {
+    return this.call('deleteSound', { filename: filename });
+  }
+
+  async getSoundData(filename: string): Promise<Types.SoundData | null> {
+    return this.call('getSoundData', { filename: filename });
+  }
+
+  async getSoundsDir(): Promise<string> {
+    return this.call('getSoundsDir', {  });
+  }
+
+  async listSounds(): Promise<Types.SoundInfo[]> {
+    return this.call('listSounds', {  });
+  }
+
+  async uploadSound(dataBase64: string, filename: string, mediaType: string): Promise<Types.SoundUploadResult> {
+    return this.call('uploadSound', { dataBase64: dataBase64, filename: filename, mediaType: mediaType });
+  }
+
+  onSoundDeleted(callback: (data: Types.SoundEventData) => void): Unsubscribe {
+    return this.subscribe('soundDeleted', callback);
+  }
+
+  onSoundUploaded(callback: (data: Types.SoundEventData) => void): Unsubscribe {
+    return this.subscribe('soundUploaded', callback);
+  }
+
+}
+
+/**
+ * WebSocket-exposed service for supervisor state management.
+ * 
+ * Provides:
+ * - Host configuration and status queries
+ * - Process listing and management
+ * - Real-time status updates via events
+ */
+export interface SupervisorStateService {
+  /**
+   * Add a new host to the configuration.
+   * 
+   * Args:
+   * request: Host configuration
+   * 
+   * Returns:
+   * Success/failure result
+   */
+  addHost(request: Types.HostUpdateRequest | Record<string, unknown>): Promise<Types.ConfigUpdateResult>;
+
+  /**
+   * Check connectivity status of a host.
+   * 
+   * For SSH hosts, performs a quick connection test.
+   * For local, always returns ready.
+   * 
+   * Args:
+   * host_name: Name of the host to check
+   * 
+   * Returns:
+   * Status result with connectivity info
+   */
+  checkHostStatus(hostName: string): Promise<Types.HostStatusResult>;
+
+  /**
+   * Get historical output from a process.
+   * 
+   * Supports pagination - entries are returned in chronological order.
+   * Use offset to fetch older entries.
+   * 
+   * Args:
+   * process_id: The process ID to get output from
+   * limit: Maximum entries to return (default 100, max 500)
+   * offset: Number of entries to skip from the end (for pagination)
+   * source: Filter to specific source ("stdout", "stderr", "stdin", "system")
+   * 
+   * Returns:
+   * Batch of log entries with pagination info
+   */
+  getProcessOutput(processId: string, limit?: number, offset?: number, source?: string | null): Promise<Types.ProcessOutputBatch>;
+
+  /**
+   * Get the status of backend and UI servers.
+   * 
+   * Returns:
+   * Dict with backend_a, backend_b, and ui server status
+   */
+  getServerStatus(): Promise<Record<string, unknown>>;
+
+  /**
+   * Get the complete supervisor state.
+   * 
+   * Returns all hosts, processes, and backend mappings.
+   */
+  getState(): Promise<Types.SupervisorState>;
+
+  /**
+   * Query hosts by tags and/or type.
+   * 
+   * Args:
+   * tags: Filter to hosts with ALL specified tags
+   * host_type: Filter to hosts of this type ("local" or "ssh")
+   * 
+   * Returns:
+   * List of matching hosts
+   */
+  listHosts(tags?: string[] | null, hostType?: string | null): Promise<Types.HostQueryResult>;
+
+  /**
+   * List supervised processes.
+   * 
+   * Args:
+   * session_id: Filter to processes for this session
+   * host: Filter to processes on this host
+   * process_type: Filter by type: "general", "lsp", or None for all
+   * 
+   * Returns:
+   * List of processes with summary
+   */
+  listProcesses(sessionId?: string | null, host?: string | null, processType?: string | null): Promise<Types.ProcessListResult>;
+
+  /**
+   * Reload supervisor configuration from disk.
+   * 
+   * Returns:
+   * True if reload succeeded
+   */
+  reloadConfig(): Promise<boolean>;
+
+  /**
+   * Remove a backend-to-host mapping.
+   * 
+   * Args:
+   * backend_name: Name of the backend to unmap
+   * 
+   * Returns:
+   * Success/failure result
+   */
+  removeBackendHost(backendName: string): Promise<Types.ConfigUpdateResult>;
+
+  /**
+   * Remove a host from the configuration.
+   * 
+   * Args:
+   * host_name: Name of the host to remove
+   * 
+   * Returns:
+   * Success/failure result
+   */
+  removeHost(hostName: string): Promise<Types.ConfigUpdateResult>;
+
+  /**
+   * Restart a backend server slot.
+   * 
+   * Args:
+   * slot: "a" or "b" for slot A or B
+   * 
+   * Returns:
+   * Success/failure result
+   * 
+   * Note: This triggers a restart of the server via balloons-server.py.
+   * The WebSocket connection will be lost and the client should reconnect.
+   */
+  restartBackend(slot: string): Promise<Types.ConfigUpdateResult>;
+
+  /**
+   * Restart the bun dev server (UI).
+   * 
+   * Returns:
+   * Success/failure result
+   */
+  restartUi(): Promise<Types.ConfigUpdateResult>;
+
+  /**
+   * Send input to a running process's stdin.
+   * 
+   * Args:
+   * process_id: The process ID to send input to
+   * data: The input data to send (newline is appended automatically)
+   * 
+   * Returns:
+   * Success/failure result
+   */
+  sendProcessInput(processId: string, data: string): Promise<Types.ConfigUpdateResult>;
+
+  /**
+   * Map a backend to a host.
+   * 
+   * Args:
+   * backend_name: Name of the LLM backend
+   * host_name: Name of the host it runs on
+   * 
+   * Returns:
+   * Success/failure result
+   */
+  setBackendHost(backendName: string, hostName: string): Promise<Types.ConfigUpdateResult>;
+
+  /**
+   * Stop a running supervised process.
+   * 
+   * Args:
+   * process_id: The process ID to stop
+   * 
+   * Returns:
+   * Success/failure result
+   */
+  stopProcess(processId: string): Promise<Types.ConfigUpdateResult>;
+
+  /**
+   * Update an existing host in the configuration.
+   * 
+   * Args:
+   * request: Host configuration (name must exist, or originalName for rename)
+   * 
+   * Returns:
+   * Success/failure result
+   */
+  updateHost(request: Types.HostUpdateRequest | Record<string, unknown>): Promise<Types.ConfigUpdateResult>;
+
+}
+
+export interface SupervisorStateEvents {
+  /**
+   * Fired when a host's status changes.
+   */
+  hostStatusChanged(callback: (data: Types.HostInfo) => void): Unsubscribe;
+
+  /**
+   * Fired when a process emits output (stdout/stderr).
+   */
+  processOutput(callback: (data: Types.ProcessOutput) => void): Unsubscribe;
+
+  /**
+   * Fired when a new process starts.
+   */
+  processStarted(callback: (data: Types.ProcessInfo) => void): Unsubscribe;
+
+  /**
+   * Fired when a process stops.
+   */
+  processStopped(callback: (data: Types.ProcessInfo) => void): Unsubscribe;
+
+  /**
+   * Fired when supervisor state changes (processes started/stopped, etc).
+   */
+  supervisorStateUpdated(callback: (data: Types.SupervisorState) => void): Unsubscribe;
+
+}
+
+export class SupervisorStateServiceClient implements SupervisorStateService {
+  private ws: WebSocket;
+  private pending: Map<string, { resolve: (v: any) => void; reject: (e: Error) => void }> = new Map();
+  private eventHandlers: Map<string, Set<(data: any) => void>> = new Map();
+
+  constructor(ws: WebSocket) {
+    this.ws = ws;
+    this.ws.addEventListener('message', this.handleMessage.bind(this));
+  }
+
+  private handleMessage(event: MessageEvent): void {
+    const msg = JSON.parse(event.data);
+    if (msg.id && this.pending.has(msg.id)) {
+      const { resolve, reject } = this.pending.get(msg.id)!;
+      this.pending.delete(msg.id);
+      if (msg.error) {
+        reject(new Error(msg.error.message));
+      } else {
+        resolve(msg.result);
+      }
+    } else if (msg.event) {
+      const handlers = this.eventHandlers.get(msg.event);
+      if (handlers) {
+        handlers.forEach(h => h(msg.data));
+      }
+    }
+  }
+
+  private async call<T>(method: string, params: Record<string, unknown>): Promise<T> {
+    const id = generateRequestId();
+    return new Promise((resolve, reject) => {
+      this.pending.set(id, { resolve, reject });
+      this.ws.send(JSON.stringify({ id, method, params }));
+    });
+  }
+
+  private subscribe(event: string, callback: (data: any) => void): Unsubscribe {
+    if (!this.eventHandlers.has(event)) {
+      this.eventHandlers.set(event, new Set());
+    }
+    this.eventHandlers.get(event)!.add(callback);
+    return () => {
+      this.eventHandlers.get(event)?.delete(callback);
+    };
+  }
+
+  async addHost(request: Types.HostUpdateRequest | Record<string, unknown>): Promise<Types.ConfigUpdateResult> {
+    return this.call('addHost', { request: request });
+  }
+
+  async checkHostStatus(hostName: string): Promise<Types.HostStatusResult> {
+    return this.call('checkHostStatus', { hostName: hostName });
+  }
+
+  async getProcessOutput(processId: string, limit?: number, offset?: number, source?: string | null): Promise<Types.ProcessOutputBatch> {
+    return this.call('getProcessOutput', { processId: processId, limit: limit, offset: offset, source: source });
+  }
+
+  async getServerStatus(): Promise<Record<string, unknown>> {
+    return this.call('getServerStatus', {  });
+  }
+
+  async getState(): Promise<Types.SupervisorState> {
+    return this.call('getState', {  });
+  }
+
+  async listHosts(tags?: string[] | null, hostType?: string | null): Promise<Types.HostQueryResult> {
+    return this.call('listHosts', { tags: tags, hostType: hostType });
+  }
+
+  async listProcesses(sessionId?: string | null, host?: string | null, processType?: string | null): Promise<Types.ProcessListResult> {
+    return this.call('listProcesses', { sessionId: sessionId, host: host, processType: processType });
+  }
+
+  async reloadConfig(): Promise<boolean> {
+    return this.call('reloadConfig', {  });
+  }
+
+  async removeBackendHost(backendName: string): Promise<Types.ConfigUpdateResult> {
+    return this.call('removeBackendHost', { backendName: backendName });
+  }
+
+  async removeHost(hostName: string): Promise<Types.ConfigUpdateResult> {
+    return this.call('removeHost', { hostName: hostName });
+  }
+
+  async restartBackend(slot: string): Promise<Types.ConfigUpdateResult> {
+    return this.call('restartBackend', { slot: slot });
+  }
+
+  async restartUi(): Promise<Types.ConfigUpdateResult> {
+    return this.call('restartUi', {  });
+  }
+
+  async sendProcessInput(processId: string, data: string): Promise<Types.ConfigUpdateResult> {
+    return this.call('sendProcessInput', { processId: processId, data: data });
+  }
+
+  async setBackendHost(backendName: string, hostName: string): Promise<Types.ConfigUpdateResult> {
+    return this.call('setBackendHost', { backendName: backendName, hostName: hostName });
+  }
+
+  async stopProcess(processId: string): Promise<Types.ConfigUpdateResult> {
+    return this.call('stopProcess', { processId: processId });
+  }
+
+  async updateHost(request: Types.HostUpdateRequest | Record<string, unknown>): Promise<Types.ConfigUpdateResult> {
+    return this.call('updateHost', { request: request });
+  }
+
+  hostStatusChanged(callback: (data: Types.HostInfo) => void): Unsubscribe {
+    return this.subscribe('hostStatusChanged', callback);
+  }
+
+  processOutput(callback: (data: Types.ProcessOutput) => void): Unsubscribe {
+    return this.subscribe('processOutput', callback);
+  }
+
+  processStarted(callback: (data: Types.ProcessInfo) => void): Unsubscribe {
+    return this.subscribe('processStarted', callback);
+  }
+
+  processStopped(callback: (data: Types.ProcessInfo) => void): Unsubscribe {
+    return this.subscribe('processStopped', callback);
+  }
+
+  supervisorStateUpdated(callback: (data: Types.SupervisorState) => void): Unsubscribe {
+    return this.subscribe('supervisorStateUpdated', callback);
+  }
+
+}
+
+/**
+ * WebSocket-exposed service for browser management.
+ * 
+ * Provides:
+ * - Browser lifecycle: create, destroy, list, rename
+ * - Browser control: goto, see, click, fill, screenshot
+ * - Real-time events for browser state changes
+ */
+export interface BrowserStateService {
+  /**
+   * Navigate back.
+   * 
+   * Args:
+   * name: Browser name (uses default if not specified)
+   * 
+   * Returns:
+   * BrowserResult indicating success/failure
+   */
+  back(name?: string | null): Promise<Types.BrowserResult>;
+
+  /**
+   * Get all button elements.
+   * 
+   * Args:
+   * name: Browser name (uses default if not specified)
+   * 
+   * Returns:
+   * BrowserResult with button elements as JSON in data field
+   */
+  buttons(name?: string | null): Promise<Types.BrowserResult>;
+
+  /**
+   * Click an element.
+   * 
+   * Args:
+   * selector: CSS selector for element to click
+   * name: Browser name (uses default if not specified)
+   * 
+   * Returns:
+   * BrowserResult indicating success/failure
+   */
+  click(selector: string, name?: string | null): Promise<Types.BrowserResult>;
+
+  /**
+   * Click a button by index.
+   * 
+   * Args:
+   * index: Button index (from buttons() result)
+   * name: Browser name (uses default if not specified)
+   * 
+   * Returns:
+   * BrowserResult indicating success/failure
+   */
+  clickButton(index: number, name?: string | null): Promise<Types.BrowserResult>;
+
+  /**
+   * Close the current tab.
+   * 
+   * Args:
+   * name: Browser name (uses default if not specified)
+   * 
+   * Returns:
+   * BrowserResult indicating success/failure
+   * 
+   * Note:
+   * If this is the last tab, the browser will be closed.
+   */
+  closeTab(name?: string | null): Promise<Types.BrowserResult>;
+
+  /**
+   * Create a new browser instance.
+   * 
+   * Args:
+   * name: Browser name (auto-generated if not provided)
+   * browser_type: Browser type ("chrome", "firefox")
+   * headless: Run in headless mode
+   * webdriver_url: Optional WebDriver URL
+   * port: Optional port for WebDriver
+   * set_as_default: Set this browser as the default
+   * 
+   * Returns:
+   * BrowserResult with the created browser info
+   */
+  createBrowser(name?: string | null, browserType?: string, headless?: boolean, webdriverUrl?: string | null, port?: number | null, setAsDefault?: boolean): Promise<Types.BrowserResult>;
+
+  /**
+   * Destroy a browser instance.
+   * 
+   * Args:
+   * name: Browser name to destroy
+   * 
+   * Returns:
+   * BrowserResult indicating success/failure
+   */
+  destroyBrowser(name: string): Promise<Types.BrowserResult>;
+
+  /**
+   * Execute JavaScript.
+   * 
+   * Args:
+   * script: JavaScript code to execute
+   * name: Browser name (uses default if not specified)
+   * 
+   * Returns:
+   * BrowserResult with result in data field
+   */
+  executeJs(script: string, name?: string | null): Promise<Types.BrowserResult>;
+
+  /**
+   * Fill an input field.
+   * 
+   * Args:
+   * selector: CSS selector for input
+   * text: Text to fill
+   * name: Browser name (uses default if not specified)
+   * 
+   * Returns:
+   * BrowserResult indicating success/failure
+   */
+  fill(selector: string, text: string, name?: string | null): Promise<Types.BrowserResult>;
+
+  /**
+   * Navigate forward.
+   * 
+   * Args:
+   * name: Browser name (uses default if not specified)
+   * 
+   * Returns:
+   * BrowserResult indicating success/failure
+   */
+  forward(name?: string | null): Promise<Types.BrowserResult>;
+
+  /**
+   * Get a specific browser by name.
+   * 
+   * Args:
+   * name: Browser name
+   * 
+   * Returns:
+   * BrowserResult with the browser info
+   */
+  getBrowser(name: string): Promise<Types.BrowserResult>;
+
+  /**
+   * Get page title.
+   * 
+   * Args:
+   * name: Browser name (uses default if not specified)
+   * 
+   * Returns:
+   * BrowserResult with title in data field
+   */
+  getTitle(name?: string | null): Promise<Types.BrowserResult>;
+
+  /**
+   * Get current URL.
+   * 
+   * Args:
+   * name: Browser name (uses default if not specified)
+   * 
+   * Returns:
+   * BrowserResult with URL in data field
+   */
+  getUrl(name?: string | null): Promise<Types.BrowserResult>;
+
+  /**
+   * Navigate to a URL.
+   * 
+   * Args:
+   * url: URL to navigate to
+   * name: Browser name (uses default if not specified)
+   * 
+   * Returns:
+   * BrowserNavigateResult with current URL and title
+   */
+  goto(url: string, name?: string | null): Promise<Types.BrowserNavigateResult>;
+
+  /**
+   * Get all input elements.
+   * 
+   * Args:
+   * name: Browser name (uses default if not specified)
+   * 
+   * Returns:
+   * BrowserResult with input elements as JSON in data field
+   */
+  inputs(name?: string | null): Promise<Types.BrowserResult>;
+
+  /**
+   * Get all links.
+   * 
+   * Args:
+   * limit: Maximum number of links to return
+   * name: Browser name (uses default if not specified)
+   * 
+   * Returns:
+   * BrowserResult with links as JSON in data field
+   */
+  links(limit?: number | null, name?: string | null): Promise<Types.BrowserResult>;
+
+  /**
+   * List all browser instances.
+   * 
+   * Returns:
+   * BrowserListResult with all browsers and default browser name
+   */
+  listBrowsers(): Promise<Types.BrowserListResult>;
+
+  /**
+   * List all tabs in a browser.
+   * 
+   * Args:
+   * name: Browser name (uses default if not specified)
+   * 
+   * Returns:
+   * TabListResult with list of tabs
+   */
+  listTabs(name?: string | null): Promise<Types.TabListResult>;
+
+  /**
+   * Open a new tab.
+   * 
+   * Args:
+   * url: URL to navigate to (optional)
+   * name: Browser name (uses default if not specified)
+   * 
+   * Returns:
+   * BrowserResult with the new tab handle in data field
+   */
+  newTab(url?: string | null, name?: string | null): Promise<Types.BrowserResult>;
+
+  /**
+   * Refresh the page.
+   * 
+   * Args:
+   * name: Browser name (uses default if not specified)
+   * 
+   * Returns:
+   * BrowserResult indicating success/failure
+   */
+  refresh(name?: string | null): Promise<Types.BrowserResult>;
+
+  /**
+   * Rename a browser instance.
+   * 
+   * Args:
+   * old_name: Current browser name
+   * new_name: New browser name
+   * 
+   * Returns:
+   * BrowserResult with updated browser info
+   */
+  renameBrowser(oldName: string, newName: string): Promise<Types.BrowserResult>;
+
+  /**
+   * Take a screenshot.
+   * 
+   * Args:
+   * name: Browser name (uses default if not specified)
+   * save_to_file: If True, save to a temp file and return path instead of data URL
+   * 
+   * Returns:
+   * BrowserScreenshotResult with base64-encoded PNG data URL or file path
+   */
+  screenshot(name?: string | null, saveToFile?: boolean): Promise<Types.BrowserScreenshotResult>;
+
+  /**
+   * Get structured page content.
+   * 
+   * Args:
+   * name: Browser name (uses default if not specified)
+   * 
+   * Returns:
+   * BrowserSeeResult with page structure as JSON
+   */
+  see(name?: string | null): Promise<Types.BrowserSeeResult>;
+
+  /**
+   * Set the default browser.
+   * 
+   * Args:
+   * name: Browser name to set as default
+   * 
+   * Returns:
+   * BrowserResult indicating success/failure
+   */
+  setDefault(name: string): Promise<Types.BrowserResult>;
+
+  /**
+   * Set an input value by index.
+   * 
+   * Args:
+   * index: Input index (from inputs() result)
+   * value: Value to set
+   * name: Browser name (uses default if not specified)
+   * 
+   * Returns:
+   * BrowserResult indicating success/failure
+   */
+  setInput(index: number, value: string, name?: string | null): Promise<Types.BrowserResult>;
+
+  /**
+   * Switch to a specific tab.
+   * 
+   * Args:
+   * handle: Window handle of the tab to switch to
+   * name: Browser name (uses default if not specified)
+   * 
+   * Returns:
+   * BrowserResult indicating success/failure
+   */
+  switchTab(handle: string, name?: string | null): Promise<Types.BrowserResult>;
+
+}
+
+export interface BrowserStateEvents {
+  /**
+   * Fired when a new browser is created.
+   */
+  browserCreated(callback: (data: Types.BrowserInfo) => void): Unsubscribe;
+
+  /**
+   * Fired when a browser is destroyed.
+   */
+  browserDestroyed(callback: (data: Types.BrowserInfo) => void): Unsubscribe;
+
+  /**
+   * Fired when browser state changes (created, destroyed, navigated, etc).
+   */
+  browserEvent(callback: (data: Types.BrowserEvent) => void): Unsubscribe;
+
+  /**
+   * Fired when a browser navigates to a new URL.
+   */
+  browserNavigated(callback: (data: Types.BrowserInfo) => void): Unsubscribe;
+
+}
+
+export class BrowserStateServiceClient implements BrowserStateService {
+  private ws: WebSocket;
+  private pending: Map<string, { resolve: (v: any) => void; reject: (e: Error) => void }> = new Map();
+  private eventHandlers: Map<string, Set<(data: any) => void>> = new Map();
+
+  constructor(ws: WebSocket) {
+    this.ws = ws;
+    this.ws.addEventListener('message', this.handleMessage.bind(this));
+  }
+
+  private handleMessage(event: MessageEvent): void {
+    const msg = JSON.parse(event.data);
+    if (msg.id && this.pending.has(msg.id)) {
+      const { resolve, reject } = this.pending.get(msg.id)!;
+      this.pending.delete(msg.id);
+      if (msg.error) {
+        reject(new Error(msg.error.message));
+      } else {
+        resolve(msg.result);
+      }
+    } else if (msg.event) {
+      const handlers = this.eventHandlers.get(msg.event);
+      if (handlers) {
+        handlers.forEach(h => h(msg.data));
+      }
+    }
+  }
+
+  private async call<T>(method: string, params: Record<string, unknown>): Promise<T> {
+    const id = generateRequestId();
+    return new Promise((resolve, reject) => {
+      this.pending.set(id, { resolve, reject });
+      this.ws.send(JSON.stringify({ id, method, params }));
+    });
+  }
+
+  private subscribe(event: string, callback: (data: any) => void): Unsubscribe {
+    if (!this.eventHandlers.has(event)) {
+      this.eventHandlers.set(event, new Set());
+    }
+    this.eventHandlers.get(event)!.add(callback);
+    return () => {
+      this.eventHandlers.get(event)?.delete(callback);
+    };
+  }
+
+  async back(name?: string | null): Promise<Types.BrowserResult> {
+    return this.call('back', { name: name });
+  }
+
+  async buttons(name?: string | null): Promise<Types.BrowserResult> {
+    return this.call('buttons', { name: name });
+  }
+
+  async click(selector: string, name?: string | null): Promise<Types.BrowserResult> {
+    return this.call('click', { selector: selector, name: name });
+  }
+
+  async clickButton(index: number, name?: string | null): Promise<Types.BrowserResult> {
+    return this.call('clickButton', { index: index, name: name });
+  }
+
+  async closeTab(name?: string | null): Promise<Types.BrowserResult> {
+    return this.call('closeTab', { name: name });
+  }
+
+  async createBrowser(name?: string | null, browserType?: string, headless?: boolean, webdriverUrl?: string | null, port?: number | null, setAsDefault?: boolean): Promise<Types.BrowserResult> {
+    return this.call('createBrowser', { name: name, browserType: browserType, headless: headless, webdriverUrl: webdriverUrl, port: port, setAsDefault: setAsDefault });
+  }
+
+  async destroyBrowser(name: string): Promise<Types.BrowserResult> {
+    return this.call('destroyBrowser', { name: name });
+  }
+
+  async executeJs(script: string, name?: string | null): Promise<Types.BrowserResult> {
+    return this.call('executeJs', { script: script, name: name });
+  }
+
+  async fill(selector: string, text: string, name?: string | null): Promise<Types.BrowserResult> {
+    return this.call('fill', { selector: selector, text: text, name: name });
+  }
+
+  async forward(name?: string | null): Promise<Types.BrowserResult> {
+    return this.call('forward', { name: name });
+  }
+
+  async getBrowser(name: string): Promise<Types.BrowserResult> {
+    return this.call('getBrowser', { name: name });
+  }
+
+  async getTitle(name?: string | null): Promise<Types.BrowserResult> {
+    return this.call('getTitle', { name: name });
+  }
+
+  async getUrl(name?: string | null): Promise<Types.BrowserResult> {
+    return this.call('getUrl', { name: name });
+  }
+
+  async goto(url: string, name?: string | null): Promise<Types.BrowserNavigateResult> {
+    return this.call('goto', { url: url, name: name });
+  }
+
+  async inputs(name?: string | null): Promise<Types.BrowserResult> {
+    return this.call('inputs', { name: name });
+  }
+
+  async links(limit?: number | null, name?: string | null): Promise<Types.BrowserResult> {
+    return this.call('links', { limit: limit, name: name });
+  }
+
+  async listBrowsers(): Promise<Types.BrowserListResult> {
+    return this.call('listBrowsers', {  });
+  }
+
+  async listTabs(name?: string | null): Promise<Types.TabListResult> {
+    return this.call('listTabs', { name: name });
+  }
+
+  async newTab(url?: string | null, name?: string | null): Promise<Types.BrowserResult> {
+    return this.call('newTab', { url: url, name: name });
+  }
+
+  async refresh(name?: string | null): Promise<Types.BrowserResult> {
+    return this.call('refresh', { name: name });
+  }
+
+  async renameBrowser(oldName: string, newName: string): Promise<Types.BrowserResult> {
+    return this.call('renameBrowser', { oldName: oldName, newName: newName });
+  }
+
+  async screenshot(name?: string | null, saveToFile?: boolean): Promise<Types.BrowserScreenshotResult> {
+    return this.call('screenshot', { name: name, saveToFile: saveToFile });
+  }
+
+  async see(name?: string | null): Promise<Types.BrowserSeeResult> {
+    return this.call('see', { name: name });
+  }
+
+  async setDefault(name: string): Promise<Types.BrowserResult> {
+    return this.call('setDefault', { name: name });
+  }
+
+  async setInput(index: number, value: string, name?: string | null): Promise<Types.BrowserResult> {
+    return this.call('setInput', { index: index, value: value, name: name });
+  }
+
+  async switchTab(handle: string, name?: string | null): Promise<Types.BrowserResult> {
+    return this.call('switchTab', { handle: handle, name: name });
+  }
+
+  browserCreated(callback: (data: Types.BrowserInfo) => void): Unsubscribe {
+    return this.subscribe('browserCreated', callback);
+  }
+
+  browserDestroyed(callback: (data: Types.BrowserInfo) => void): Unsubscribe {
+    return this.subscribe('browserDestroyed', callback);
+  }
+
+  browserEvent(callback: (data: Types.BrowserEvent) => void): Unsubscribe {
+    return this.subscribe('browserEvent', callback);
+  }
+
+  browserNavigated(callback: (data: Types.BrowserInfo) => void): Unsubscribe {
+    return this.subscribe('browserNavigated', callback);
+  }
+
+}
+
+/**
+ * WebSocket-exposed service for LSP server management.
+ */
+export interface LSPService {
+  /**
+   * Get all symbols in a document.
+   * 
+   * Uses the LSP textDocument/documentSymbol request.
+   * The language server is automatically started if needed.
+   * 
+   * Args:
+   * file_path: Absolute path to the file
+   * 
+   * Returns:
+   * List of document symbols (hierarchical)
+   */
+  getDocumentSymbols(filePath: string): Promise<Types.LSPDocumentSymbolsResult>;
+
+  /**
+   * Get complete LSP status.
+   * 
+   * Returns configured servers and all running instances.
+   */
+  getStatus(): Promise<Types.LSPStatusResult>;
+
+  /**
+   * Restart an LSP server.
+   * 
+   * Args:
+   * language: Language server name
+   * workspace: Workspace root
+   * key: Instance key (alternative to language+workspace)
+   * 
+   * Returns:
+   * Action result with status
+   */
+  restartServer(language?: string | null, workspace?: string | null, key?: string | null): Promise<Types.LSPActionResult>;
+
+  /**
+   * Start an LSP server.
+   * 
+   * Args:
+   * language: Language server name (e.g., "python")
+   * workspace: Workspace root (defaults to cwd)
+   * 
+   * Returns:
+   * Action result with status
+   */
+  startServer(language: string, workspace?: string | null): Promise<Types.LSPActionResult>;
+
+  /**
+   * Stop all running LSP servers.
+   * 
+   * Returns:
+   * Number of servers stopped
+   */
+  stopAllServers(): Promise<number>;
+
+  /**
+   * Stop an LSP server.
+   * 
+   * Can specify by language+workspace or by key.
+   * 
+   * Args:
+   * language: Language server name
+   * workspace: Workspace root
+   * key: Instance key (alternative to language+workspace)
+   * 
+   * Returns:
+   * Action result with status
+   */
+  stopServer(language?: string | null, workspace?: string | null, key?: string | null): Promise<Types.LSPActionResult>;
+
+}
+
+export interface LSPEvents {
+  /**
+   * Fired when an LSP server restarts.
+   */
+  lspServerRestarted(callback: (data: Record<string, unknown>) => void): Unsubscribe;
+
+  /**
+   * Fired when an LSP server starts.
+   */
+  lspServerStarted(callback: (data: Record<string, unknown>) => void): Unsubscribe;
+
+  /**
+   * Fired when an LSP server stops.
+   */
+  lspServerStopped(callback: (data: Record<string, unknown>) => void): Unsubscribe;
+
+}
+
+export class LSPServiceClient implements LSPService {
+  private ws: WebSocket;
+  private pending: Map<string, { resolve: (v: any) => void; reject: (e: Error) => void }> = new Map();
+  private eventHandlers: Map<string, Set<(data: any) => void>> = new Map();
+
+  constructor(ws: WebSocket) {
+    this.ws = ws;
+    this.ws.addEventListener('message', this.handleMessage.bind(this));
+  }
+
+  private handleMessage(event: MessageEvent): void {
+    const msg = JSON.parse(event.data);
+    if (msg.id && this.pending.has(msg.id)) {
+      const { resolve, reject } = this.pending.get(msg.id)!;
+      this.pending.delete(msg.id);
+      if (msg.error) {
+        reject(new Error(msg.error.message));
+      } else {
+        resolve(msg.result);
+      }
+    } else if (msg.event) {
+      const handlers = this.eventHandlers.get(msg.event);
+      if (handlers) {
+        handlers.forEach(h => h(msg.data));
+      }
+    }
+  }
+
+  private async call<T>(method: string, params: Record<string, unknown>): Promise<T> {
+    const id = generateRequestId();
+    return new Promise((resolve, reject) => {
+      this.pending.set(id, { resolve, reject });
+      this.ws.send(JSON.stringify({ id, method, params }));
+    });
+  }
+
+  private subscribe(event: string, callback: (data: any) => void): Unsubscribe {
+    if (!this.eventHandlers.has(event)) {
+      this.eventHandlers.set(event, new Set());
+    }
+    this.eventHandlers.get(event)!.add(callback);
+    return () => {
+      this.eventHandlers.get(event)?.delete(callback);
+    };
+  }
+
+  async getDocumentSymbols(filePath: string): Promise<Types.LSPDocumentSymbolsResult> {
+    return this.call('getDocumentSymbols', { filePath: filePath });
+  }
+
+  async getStatus(): Promise<Types.LSPStatusResult> {
+    return this.call('getStatus', {  });
+  }
+
+  async restartServer(language?: string | null, workspace?: string | null, key?: string | null): Promise<Types.LSPActionResult> {
+    return this.call('restartServer', { language: language, workspace: workspace, key: key });
+  }
+
+  async startServer(language: string, workspace?: string | null): Promise<Types.LSPActionResult> {
+    return this.call('startServer', { language: language, workspace: workspace });
+  }
+
+  async stopAllServers(): Promise<number> {
+    return this.call('stopAllServers', {  });
+  }
+
+  async stopServer(language?: string | null, workspace?: string | null, key?: string | null): Promise<Types.LSPActionResult> {
+    return this.call('stopServer', { language: language, workspace: workspace, key: key });
+  }
+
+  lspServerRestarted(callback: (data: Record<string, unknown>) => void): Unsubscribe {
+    return this.subscribe('lspServerRestarted', callback);
+  }
+
+  lspServerStarted(callback: (data: Record<string, unknown>) => void): Unsubscribe {
+    return this.subscribe('lspServerStarted', callback);
+  }
+
+  lspServerStopped(callback: (data: Record<string, unknown>) => void): Unsubscribe {
+    return this.subscribe('lspServerStopped', callback);
+  }
+
+}
+
+/**
+ * WebSocket RPC service for domain plugin methods.
+ * 
+ * This service dynamically exposes domain methods marked with @ws_expose.
+ * Methods are registered when domains are loaded and unregistered when unloaded.
+ */
+export interface DomainRpcService {
+  /**
+   * Call a domain method by wire name.
+   * 
+   * This is the generic dispatch endpoint. The generated client will also
+   * create typed methods for each registered domain method.
+   * 
+   * Args:
+   * method_name: The camelCase wire name of the method
+   * session_id: The session ID for context
+   * params: Method parameters
+   * 
+   * Returns:
+   * {result: str} on success, {error: str} on failure
+   */
+  callDomainMethod(methodName: string, sessionId: string, params?: Record<string, unknown> | null): Promise<Record<string, unknown>>;
+
+}
+
+export class DomainRpcServiceClient implements DomainRpcService {
+  private ws: WebSocket;
+  private pending: Map<string, { resolve: (v: any) => void; reject: (e: Error) => void }> = new Map();
+  private eventHandlers: Map<string, Set<(data: any) => void>> = new Map();
+
+  constructor(ws: WebSocket) {
+    this.ws = ws;
+    this.ws.addEventListener('message', this.handleMessage.bind(this));
+  }
+
+  private handleMessage(event: MessageEvent): void {
+    const msg = JSON.parse(event.data);
+    if (msg.id && this.pending.has(msg.id)) {
+      const { resolve, reject } = this.pending.get(msg.id)!;
+      this.pending.delete(msg.id);
+      if (msg.error) {
+        reject(new Error(msg.error.message));
+      } else {
+        resolve(msg.result);
+      }
+    } else if (msg.event) {
+      const handlers = this.eventHandlers.get(msg.event);
+      if (handlers) {
+        handlers.forEach(h => h(msg.data));
+      }
+    }
+  }
+
+  private async call<T>(method: string, params: Record<string, unknown>): Promise<T> {
+    const id = generateRequestId();
+    return new Promise((resolve, reject) => {
+      this.pending.set(id, { resolve, reject });
+      this.ws.send(JSON.stringify({ id, method, params }));
+    });
+  }
+
+  private subscribe(event: string, callback: (data: any) => void): Unsubscribe {
+    if (!this.eventHandlers.has(event)) {
+      this.eventHandlers.set(event, new Set());
+    }
+    this.eventHandlers.get(event)!.add(callback);
+    return () => {
+      this.eventHandlers.get(event)?.delete(callback);
+    };
+  }
+
+  async callDomainMethod(methodName: string, sessionId: string, params?: Record<string, unknown> | null): Promise<Record<string, unknown>> {
+    return this.call('callDomainMethod', { methodName: methodName, sessionId: sessionId, params: params });
   }
 
 }

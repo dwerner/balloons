@@ -22,6 +22,8 @@ setup:
 gen: setup
     @just banner {{quote(blue)}} 'gen: regenerating Rust schema'
     {{py}} python -m codegen.generate_rust
+    @just banner {{quote(blue)}} 'gen: regenerating typescript types'
+    {{py}} python -m codegen.generate_typescript
 
 fmt:
     cd balloons-rs

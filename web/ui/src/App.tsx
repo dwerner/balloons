@@ -1,6 +1,6 @@
 import React, { useState, useEffect, useCallback, useRef, memo, useMemo, forwardRef, useImperativeHandle } from 'react';
 import { BalloonsClient } from '../../generated/balloons-client';
-import type { ConnectionState, SessionInfo, TurnInfo, TaskInfo, Unsubscribe, ToolUseStartedEvent, ToolInputDeltaEvent, ToolResultEvent, GoalTreeStateServiceClient, TurnSnapshot, SessionHistoryChunkEvent, SessionHistoryCompleteEvent } from '../../generated/balloons-client';
+import type { ConnectionState, SessionInfo, TurnInfo, TaskInfo, Unsubscribe, ToolUseStartedEvent, ToolInputDeltaEvent, ToolResultEvent, TurnSnapshot, SessionHistoryChunkEvent, SessionHistoryCompleteEvent } from '../../generated/balloons-client';
 import { MarkdownContent } from './MarkdownContent';
 import { AppLayout, useLayout, useTheme, ThemeProvider, usePreferences, PreferencesProvider, MarkdownThemeApplicator } from './components/layout';
 import { SessionTreeView } from './components/SessionTreeView';
@@ -21,7 +21,6 @@ import { CodeTab, type CodeReview, type CodeTabHandle, type GitStatusInfo } from
 import { SessionStatusBar } from './components/SessionStatusBar';
 import { StreamingStatusBar } from './components/StreamingStatusBar';
 import { ForkProposalTurn } from './components/ForkProposalTurn';
-import { CreateTodoModal, type CreateTodoResult } from './components/CreateTodoModal';
 import { SessionReviewModal, type SessionReview, type BackendInfo } from './components/SessionReviewModal';
 import { PropertiesTab } from './components/PropertiesTab';
 import { StreamingTurnsView, type StreamingProgress } from './components/StreamingTurnsView';
@@ -1279,13 +1278,6 @@ function AppContent() {
   const [sendAction, setSendAction] = useState<SendAction>('send'); // Current action for send button dropdown
   const [gitStatus, setGitStatus] = useState<GitStatusInfo | null>(null);
 
-  // Modal state for CreateTodoModal
-  const [createTodoModalState, setCreateTodoModalState] = useState<{
-    isOpen: boolean;
-    planId: string;
-    planTitle: string;
-  }>({ isOpen: false, planId: '', planTitle: '' });
-
   // Modal state for SessionReviewModal
   const [reviewModalState, setReviewModalState] = useState<{
     isOpen: boolean;
@@ -1342,16 +1334,6 @@ function AppContent() {
         };
       });
     }
-  }, []);
-
-  // Memoized handlers for CreateTodoModal to prevent re-renders when App state changes
-  // Without these, every streaming update would cause modal re-render and typing lag
-  const handleCloseTodoModal = useCallback(() => {
-    setCreateTodoModalState({ isOpen: false, planId: '', planTitle: '' });
-  }, []);
-
-  const handleTodoSubmit = useCallback((result: CreateTodoResult) => {
-    console.log('Todo created:', result);
   }, []);
 
   // Memoized handlers for SessionReviewModal
@@ -2983,9 +2965,6 @@ function AppContent() {
           onTogglePin={handleTogglePin}
           onLoadTurns={handleLoadTurns}
           isLoadingTurns={isLoadingTurns}
-          onOpenCreateTodoModal={(planId, planTitle) => {
-            setCreateTodoModalState({ isOpen: true, planId, planTitle });
-          }}
           creatingSessionFor={creatingSessionFor}
           onDeleteTurn={async (sessionId, turnIdx) => {
             const client = clientRef.current;
@@ -3206,120 +3185,6 @@ function AppContent() {
             } catch (error) {
               debugLog('Failed to create new session', { error: String(error) });
               console.error('Failed to create new session:', error);
-            }
-          }}
-          onNewBoundSession={async (entityType, entityId) => {
-            const client = clientRef.current;
-            const goalsClient = client?.goals;
-            if (!client || !goalsClient || connectionState !== 'connected') {
-              console.error('Cannot create session: client not connected');
-              return;
-            }
-
-            // Set loading state
-            const loadingKey = `${entityType}:${entityId}`;
-            setCreatingSessionFor(loadingKey);
-
-            try {
-              // Determine default role based on entity type
-              const defaultRole = entityType === 'todo' ? 'implementation' : 'planning';
-
-              // Load entity data for naming and initial prompt
-              let entityTitle = '';
-              let entityDescription = '';
-              let parentGoalTitle = '';
-              let parentPlanTitle = '';
-
-              if (entityType === 'goal') {
-                const goal = await goalsClient.getGoal(entityId);
-                entityTitle = goal?.title || 'Unknown Goal';
-                entityDescription = goal?.description || '';
-              } else if (entityType === 'plan') {
-                const plan = await goalsClient.getPlan(entityId);
-                entityTitle = plan?.title || 'Unknown Plan';
-                entityDescription = plan?.description || '';
-                if (plan?.goalId) {
-                  const parentGoal = await goalsClient.getGoal(plan.goalId);
-                  parentGoalTitle = parentGoal?.title || '';
-                }
-              } else if (entityType === 'todo') {
-                const todo = await goalsClient.getTodo(entityId);
-                entityTitle = todo?.title || 'Unknown Todo';
-                entityDescription = todo?.description || '';
-                // Get parent plan for context
-                if (todo?.planIds && todo.planIds.length > 0) {
-                  const firstPlanId = todo.planIds[0];
-                  if (firstPlanId) {
-                    const plan = await goalsClient.getPlan(firstPlanId);
-                    parentPlanTitle = plan?.title || '';
-                    if (plan?.goalId) {
-                      const parentGoal = await goalsClient.getGoal(plan.goalId);
-                      parentGoalTitle = parentGoal?.title || '';
-                    }
-                  }
-                }
-              }
-
-              // Create a new session
-              const newSession = await client.sessions.createSession();
-
-              // Generate session title: "[role-abbrev] Entity Title"
-              const roleAbbrev: Record<string, string> = {
-                implementation: 'impl',
-                planning: 'plan',
-                interview: 'int',
-                postmortem: 'post',
-                exploration: 'exp',
-              };
-              const abbrev = roleAbbrev[defaultRole] || defaultRole.slice(0, 4);
-              let sessionTitle = `[${abbrev}] ${entityTitle}`;
-              if (sessionTitle.length > 60) {
-                sessionTitle = sessionTitle.slice(0, 57) + '...';
-              }
-
-              // Bind the session to the entity
-              await goalsClient.bindSession(
-                entityType,
-                entityId,
-                newSession.id,
-                sessionTitle,
-                defaultRole,
-                0,      // tokenCount
-                false,  // isCurrent
-                false,  // isStreaming
-                undefined // forkStatus
-              );
-
-              // Generate initial prompt based on entity type and role
-              let initialPrompt = '';
-              const context = parentPlanTitle
-                ? `Plan: ${parentPlanTitle}${parentGoalTitle ? `\nGoal: ${parentGoalTitle}` : ''}`
-                : parentGoalTitle
-                  ? `Goal: ${parentGoalTitle}`
-                  : '';
-
-              if (defaultRole === 'implementation') {
-                initialPrompt = `Let's implement this task:\n\n**${entityTitle}**\n\n${entityDescription || '(No description provided)'}\n\n${context}\n\nI'm ready to start. Please begin the implementation.`;
-              } else if (defaultRole === 'planning') {
-                initialPrompt = `Let's create a plan for this ${entityType}:\n\n**${entityTitle}**\n\n${entityDescription || '(No description provided)'}\n\n${context}\n\nPlease help me break this down into concrete steps.`;
-              }
-
-              // Submit the initial prompt to start the conversation
-              if (initialPrompt) {
-                await client.sessions.submitMessage(newSession.id, initialPrompt);
-              }
-
-              // Refresh the session list
-              const sessionList = await client.sessionData.getAllSessions();
-              setSessions(sessionList);
-
-              // Switch to the new session
-              handleSelectSession(newSession.id);
-            } catch (err) {
-              console.error('Failed to create bound session:', err);
-              setError(`Failed to create session: ${err}`);
-            } finally {
-              setCreatingSessionFor(null);
             }
           }}
           archivingTurnIds={archivingTurnIds}
@@ -4095,67 +3960,6 @@ function AppContent() {
         </div>
       </AppLayout.Detail>
 
-      {/* CreateTodoModal - rendered at App level for portal */}
-      <CreateTodoModal
-        isOpen={createTodoModalState.isOpen}
-        onClose={handleCloseTodoModal}
-        planId={createTodoModalState.planId}
-        planTitle={createTodoModalState.planTitle}
-        goalsClient={connectionState === 'connected' ? clientRef.current?.goals : undefined}
-        onSubmit={handleTodoSubmit}
-        onBeginSession={async (todoId, todoTitle, todoDescription, planId, planTitle, isSpike, timeboxMinutes) => {
-          const client = clientRef.current;
-          const goalsClient = client?.goals;
-          if (!client || !goalsClient || connectionState !== 'connected') {
-            console.error('Cannot create session: client not connected');
-            return;
-          }
-
-          try {
-            // Determine role: exploration for spikes, implementation for normal todos
-            const role = isSpike ? 'exploration' : 'implementation';
-
-            // Create a new session
-            const newSession = await client.sessions.createSession();
-
-            // Bind the session to the todo with appropriate role
-            await goalsClient.bindSession(
-              'todo',
-              todoId,
-              newSession.id,
-              todoTitle,
-              role,
-              0,      // tokenCount
-              false,  // isCurrent
-              false,  // isStreaming
-              undefined // forkStatus
-            );
-
-            // Generate initial prompt matching Python's generate_initial_prompt()
-            // Include plan context and spike note if applicable
-            let context = `Plan: ${planTitle}`;
-            let spikeNote = '';
-            if (isSpike) {
-              const timebox = timeboxMinutes ? ` (${timeboxMinutes} minutes)` : '';
-              spikeNote = `\n\n*Note: This is a spike${timebox} - focus on learning, not production code.*`;
-            }
-
-            const initialPrompt = `Let's implement this task:\n\n**${todoTitle}**\n\n${todoDescription || '(No description provided)'}\n\n${context}${spikeNote}\n\nI'm ready to start. Please begin the implementation.`;
-            await client.sessions.submitMessage(newSession.id, initialPrompt);
-
-            // Refresh the session list to include the new session
-            const sessionList = await client.sessionData.getAllSessions();
-            setSessions(sessionList);
-
-            // Switch to the new session
-            handleSelectSession(newSession.id);
-          } catch (err) {
-            console.error('Failed to create session:', err);
-            setError(`Failed to create session: ${err}`);
-          }
-        }}
-      />
-
       {/* SessionReviewModal - rendered at App level for portal */}
       <SessionReviewModal
         isOpen={reviewModalState.isOpen}
@@ -4670,7 +4474,6 @@ interface SidebarContentProps {
   onTogglePin?: (sessionId: string) => void;
   onLoadTurns?: (sessionId: string) => Promise<TurnInfo[]>;
   isLoadingTurns?: boolean;
-  onOpenCreateTodoModal?: (planId: string, planTitle: string) => void;
   onNewBareSession?: () => void;
   onNewBoundSession?: (entityType: string, entityId: string) => Promise<void>;
   creatingSessionFor?: string | null; // "entityType:entityId" when creating bound session
@@ -4713,7 +4516,6 @@ function SidebarContent({
   onTogglePin,
   onLoadTurns,
   isLoadingTurns = false,
-  onOpenCreateTodoModal,
   onNewBareSession,
   onNewBoundSession,
   creatingSessionFor = null,

@@ -27,6 +27,7 @@ interface AvailableTools {
   core: string[];
   categories: Record<string, string[]>;
   all: string[];
+  domain_tools?: Record<string, string[]>;
 }
 
 interface EnabledToolsViewProps {
@@ -429,6 +430,9 @@ export const EnabledToolsView = memo(function EnabledToolsView({
     if (!availableTools) return [];
 
     const groups: Array<{ key: string; label: string; tools: string[] }> = [];
+    const domainPluginTools = new Set(
+      Object.values(availableTools.domain_tools || {}).flat()
+    );
 
     if (availableTools.core.length > 0) {
       groups.push({
@@ -439,18 +443,26 @@ export const EnabledToolsView = memo(function EnabledToolsView({
     }
 
     const discoveredCategories = Object.entries(availableTools.categories)
-      .filter(([, tools]) => tools && tools.length > 0)
+      .filter(([category, tools]) => category !== 'domain_plugins' && tools && tools.length > 0)
       .sort(([a], [b]) => a.localeCompare(b));
 
     for (const [category, tools] of discoveredCategories) {
       groups.push({
         key: category,
         label: formatCategoryLabel(category),
-        tools: [...tools].sort((a, b) => a.localeCompare(b)),
+        tools: [...tools].filter(tool => !domainPluginTools.has(tool)).sort((a, b) => a.localeCompare(b)),
       });
     }
 
-    return groups;
+    if (domainPluginTools.size > 0) {
+      groups.push({
+        key: 'domain_plugins',
+        label: 'Domain Plugin Tools',
+        tools: [...domainPluginTools].sort((a, b) => a.localeCompare(b)),
+      });
+    }
+
+    return groups.filter(group => group.tools.length > 0);
   }, [availableTools]);
 
   if (isLoading) {

@@ -54,7 +54,7 @@ src/
   App.tsx     - Main component with all functionality
 
 ../generated/
-  balloons-client.ts  - Generated unified client
+  balloons-client.ts  - Unified client wrapper
   client.ts           - Generated service clients
   types.ts            - Generated TypeScript types
 ```

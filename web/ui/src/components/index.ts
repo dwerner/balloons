@@ -3,7 +3,6 @@ export * from './layout';
 
 // Tree view components
 export * from './SessionTreeView';
-export * from './GoalTreeView';
 
 // Status bar components
 export * from './SessionStatusBar';

@@ -28,12 +28,10 @@ import {
   ImageServiceClient,
   FileStateServiceClient,
   DebugLogServiceClient,
-  GoalTreeStateServiceClient,
   SoundServiceClient,
   SupervisorStateServiceClient,
   BrowserStateServiceClient,
   LSPServiceClient,
-  KanbanWebSocketServiceClient,
   DomainRpcServiceClient,
 } from './client';
 
@@ -81,12 +79,10 @@ export class BalloonsClient {
   private _images: ImageServiceClient | null = null;
   private _files: FileStateServiceClient | null = null;
   private _debugLog: DebugLogServiceClient | null = null;
-  private _goals: GoalTreeStateServiceClient | null = null;
   private _sounds: SoundServiceClient | null = null;
   private _supervisor: SupervisorStateServiceClient | null = null;
   private _browser: BrowserStateServiceClient | null = null;
   private _lsp: LSPServiceClient | null = null;
-  private _kanban: KanbanWebSocketServiceClient | null = null;
   private _domainRpc: DomainRpcServiceClient | null = null;
 
   constructor(url: string, options: BalloonsClientOptions = {}) {
@@ -184,14 +180,6 @@ export class BalloonsClient {
     return this._debugLog;
   }
 
-  /** Goal tree state service (goals, plans, todos) */
-  get goals(): GoalTreeStateServiceClient {
-    if (!this._goals) {
-      throw new Error('Not connected. Call connect() first.');
-    }
-    return this._goals;
-  }
-
   /** Sound service (notification sounds) */
   get sounds(): SoundServiceClient {
     if (!this._sounds) {
@@ -222,14 +210,6 @@ export class BalloonsClient {
       throw new Error('Not connected. Call connect() first.');
     }
     return this._lsp;
-  }
-
-  /** Kanban service (boards, columns, tasks) */
-  get kanban(): KanbanWebSocketServiceClient {
-    if (!this._kanban) {
-      throw new Error('Not connected. Call connect() first.');
-    }
-    return this._kanban;
   }
 
   /** Domain RPC service (call @ws_expose methods on domain plugins) */
@@ -377,12 +357,10 @@ export class BalloonsClient {
     this._images = new ImageServiceClient(this.ws);
     this._files = new FileStateServiceClient(this.ws);
     this._debugLog = new DebugLogServiceClient(this.ws);
-    this._goals = new GoalTreeStateServiceClient(this.ws);
     this._sounds = new SoundServiceClient(this.ws);
     this._supervisor = new SupervisorStateServiceClient(this.ws);
     this._browser = new BrowserStateServiceClient(this.ws);
     this._lsp = new LSPServiceClient(this.ws);
-    this._kanban = new KanbanWebSocketServiceClient(this.ws);
     this._domainRpc = new DomainRpcServiceClient(this.ws);
   }
 
@@ -394,12 +372,10 @@ export class BalloonsClient {
     this._images = null;
     this._files = null;
     this._debugLog = null;
-    this._goals = null;
     this._sounds = null;
     this._supervisor = null;
     this._browser = null;
     this._lsp = null;
-    this._kanban = null;
     this._domainRpc = null;
     this._clientId = null;
   }
@@ -533,11 +509,9 @@ export {
   ImageServiceClient,
   FileStateServiceClient,
   DebugLogServiceClient,
-  GoalTreeStateServiceClient,
   SoundServiceClient,
   SupervisorStateServiceClient,
   LSPServiceClient,
-  KanbanWebSocketServiceClient,
   DomainRpcServiceClient,
 } from './client';
 export type { Unsubscribe } from './client';
