@@ -44,8 +44,9 @@ These are stored as turns in the watcher session, making the watching relationsh
 - `create_watcher_session(target_session_id)` - Creates a new watcher session with:
   - `WatchStartBlock` turn establishing the relationship
   - User turn with watcher instructions (explaining how to customize)
-  - Session named `watching:{target-name}`
-- `stop_watching(watcher_session_id, target_session_id?, reason)` - Adds WatchStopBlock, unregisters
+  - Session named for the watched target
+- `start_watching_session(session_id, target_session_id)` - Attaches an existing session, including a fork, as a watcher of a target
+- `stop_watching_session(session_id, target_session_id?, reason)` - Adds WatchStopBlock, unregisters
 
 **In-memory tracking:**
 - `_watcher_targets: dict[str, list[str]]` - target -> watchers
@@ -98,13 +99,20 @@ These are stored as turns in the watcher session, making the watching relationsh
 
 ### Starting a watcher
 
+Path 1: create a new watcher session
 1. Right-click a session in the tree
 2. Select "Watch this Session"
-3. New session created: `watching:{target-name}`
+3. New watcher session created for the target
 4. Watcher session shows:
    - WatchStartBlock: "Watching **target**"
    - Instructions explaining how watchers work
 5. User can customize by chatting: "Flag any database changes"
+
+Path 2: attach an existing session
+1. Call `start_watching_session(session_id, target_session_id)`
+2. Existing session receives a WatchStartBlock for the target
+3. That session now receives live summaries for the target
+4. This is the path that allows forks to become watchers
 
 ### Watching in action
 

@@ -23,11 +23,22 @@ function formatLength(len: number): string {
   return `${kt.toFixed(1)}k chars`;
 }
 
+interface ToolMetadata {
+  description?: string;
+  category?: string;
+  kind?: string;
+  source?: string;
+  domain_id?: string;
+}
+
 interface AvailableTools {
   core: string[];
   categories: Record<string, string[]>;
   all: string[];
   domain_tools?: Record<string, string[]>;
+  tools?: Record<string, ToolMetadata>;
+  built_in_categories?: Record<string, string[]>;
+  built_in_tools?: string[];
 }
 
 interface EnabledToolsViewProps {
@@ -42,43 +53,6 @@ function formatCategoryLabel(category: string): string {
   return category.charAt(0).toUpperCase() + category.slice(1);
 }
 
-// Tool descriptions for tooltips
-const TOOL_DESCRIPTIONS: Record<string, string> = {
-  // Core
-  Read: 'Read file contents',
-  Write: 'Write/create files',
-  Edit: 'Edit files with find/replace',
-  Bash: 'Execute shell commands',
-  Glob: 'Find files by pattern',
-  Grep: 'Search file contents',
-  // Balloon
-  ask_user: 'Ask user a question and wait for response',
-  propose_fork: 'Propose creating a fork session',
-  propose_merge: 'Propose merging back to parent',
-  list_links: 'List linked sessions',
-  follow_link: 'Load context from a linked session',
-  search_linked_session: 'Search within a linked session',
-  session_info: 'Get current session info',
-  // Domain
-  load_domain: 'Load a domain plugin (chess, kanban, etc.)',
-  unload_domain: 'Unload a domain plugin',
-  list_domains: 'List available domain plugins',
-  // Supervisor
-  supervisor_start: 'Start a background process',
-  supervisor_list: 'List running processes',
-  supervisor_output: 'Get process output',
-  supervisor_stop: 'Stop a process',
-  supervisor_query: 'Query available hosts',
-  supervisor_host_status: 'Check host connectivity',
-  // Watcher
-  send_to_target: 'Send message to watched session',
-  // MIDI
-  play_midi: 'Play musical notes',
-  // Debug
-  debug_log_query: 'Query debug logs',
-  debug_log_config: 'Configure debug logging',
-  debug_log_tail: 'Tail log files',
-};
 
 export const EnabledToolsView = memo(function EnabledToolsView({
   sessionId,
@@ -546,7 +520,7 @@ export const EnabledToolsView = memo(function EnabledToolsView({
                   <label
                     key={tool}
                     className={`enabled-tools-view__tool ${enabledTools.has(tool) ? 'enabled-tools-view__tool--enabled' : ''}`}
-                    title={TOOL_DESCRIPTIONS[tool] || tool}
+                    title={availableTools.tools?.[tool]?.description || tool}
                   >
                     <input
                       type="checkbox"

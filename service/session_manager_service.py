@@ -521,7 +521,7 @@ class CreateWatcherSessionResult:
     watcher_session_id: str = ""  # The new watcher session ID
     target_session_id: str = ""  # The session being watched
     target_session_name: str = ""  # Display name of the target
-    watcher_name: str = ""  # Name of the watcher session (e.g., "watching:target-name")
+    watcher_name: str = ""  # Name of the watcher session
     error: str = ""
 
 
@@ -4750,28 +4750,21 @@ Then I'll mark the session as concluded."""
 
     # --- Watcher Operations ---
 
-    @ws_expose
-    async def create_watcher_session(
+    async def _create_watcher_session_impl(
         self,
         target_session_id: str,
+        initial_prompt: str | None = None,
+        source_watcher_session_id: str | None = None,
     ) -> CreateWatcherSessionResult:
-        """Create a watcher session to observe another session.
+        """Internal implementation for creating a watcher session.
 
-        The watcher session will receive summaries of exchanges from the target
-        session. The user can provide instructions to the watcher to guide how
-        summaries are generated and how the watcher should respond.
-
-        Args:
-            target_session_id: ID of the session to watch
-
-        Returns:
-            CreateWatcherSessionResult with the new watcher session info
+        Supports both UI-initiated watcher creation and watcher-tool creation of
+        additional watcher sessions for the same target.
         """
-        from models import WatchStartBlock
-
         debug_log.info(
             f"create_watcher_session called for target {target_session_id[:8]}",
             category=Category.SESSION,
+            details={"source_watcher_session_id": source_watcher_session_id},
         )
 
         # Validate target session exists
@@ -4792,8 +4785,9 @@ Then I'll mark the session as concluded."""
             working_directory=target_session.working_directory
         )
 
-        # Name the watcher session
-        watcher_name = f"watching:{target_name}"
+        # Give the watcher a normal descriptive title; UI should rely on watch relationships,
+        # not title prefixes, for display logic.
+        watcher_name = f"Watcher for {target_name}"
         watcher_session.title = watcher_name
 
         # Add WatchStartBlock to establish the watching relationship
@@ -4803,12 +4797,18 @@ Then I'll mark the session as concluded."""
         )
 
         # Add watcher instructions as a system-like user turn
-        # This ensures the LLM knows it's a watcher session and how to behave
         watcher_instructions = self._get_watcher_instructions(target_name)
         instructions_turn = watcher_session.add_turn(
             role="user",
             content_block=TextBlock(text=watcher_instructions),
         )
+
+        extra_prompt_turn = None
+        if initial_prompt:
+            extra_prompt_turn = watcher_session.add_turn(
+                role="user",
+                content_block=TextBlock(text=initial_prompt),
+            )
 
         # Save the watcher session
         await watcher_session.save()
@@ -4871,8 +4871,33 @@ Then I'll mark the session as concluded."""
             ),
         )
 
+        if extra_prompt_turn is not None:
+            prompt_exchange_id = str(uuid.uuid4())
+            await self._notify_observers(
+                "on_turn_created",
+                TurnCreatedEvent(
+                    session_id=watcher_session.id,
+                    turn_id=extra_prompt_turn.id,
+                    turn_index=2,
+                    role="user",
+                    exchange_id=prompt_exchange_id,
+                    content_block_type="text",
+                ),
+            )
+            await self._notify_observers(
+                "on_turn_finished",
+                TurnFinishedEvent(
+                    session_id=watcher_session.id,
+                    turn_id=extra_prompt_turn.id,
+                    turn_index=2,
+                    role="user",
+                    content=initial_prompt[:100] + "..." if len(initial_prompt) > 100 else initial_prompt,
+                    tokens=0,
+                    content_block=extra_prompt_turn.content_block,
+                ),
+            )
+
         # Register watcher relationship for live summarization
-        # Uses internal tracking; persists to LMDB for fast startup
         await self._register_watcher_internal(
             watcher_session.id, target_session_id, target_name
         )
@@ -4892,16 +4917,155 @@ Then I'll mark the session as concluded."""
         )
 
     @ws_expose
-    async def stop_watching(
+    async def create_watcher_session(
+        self,
+        target_session_id: str,
+    ) -> CreateWatcherSessionResult:
+        """Create a watcher session to observe another session.
+
+        Deprecated convenience wrapper. Prefer creating a normal session and then
+        calling start_watching_session.
+        """
+        return await self._create_watcher_session_impl(target_session_id)
+
+    @ws_expose
+    async def start_watching_session(
+        self,
+        session_id: str,
+        target_session_id: str,
+    ) -> CreateWatcherSessionResult:
+        """Attach an existing session as a watcher of a target session.
+
+        This is the primary primitive for making any existing session, including
+        a fork, begin watching another session.
+        """
+        watcher_session_id = session_id
+        watcher_session = self._manager.get_session(watcher_session_id)
+        if not watcher_session:
+            watcher_session = await self._manager.load_session(watcher_session_id)
+            if not watcher_session:
+                return CreateWatcherSessionResult(
+                    success=False,
+                    error=f"Session {watcher_session_id} not found",
+                )
+
+        target_session = self._manager.get_session(target_session_id)
+        if not target_session:
+            target_session = await self._manager.load_session(target_session_id)
+            if not target_session:
+                return CreateWatcherSessionResult(
+                    success=False,
+                    error=f"Target session {target_session_id} not found",
+                )
+
+        if watcher_session_id == target_session_id:
+            return CreateWatcherSessionResult(
+                success=False,
+                error="A session cannot watch itself",
+            )
+
+        if watcher_session.is_watching(target_session_id):
+            target_name = target_session.title or target_session.fork_name or target_session.id[:8]
+            watcher_name = watcher_session.title or watcher_session.fork_name or watcher_session.id[:8]
+            return CreateWatcherSessionResult(
+                success=True,
+                watcher_session_id=watcher_session_id,
+                target_session_id=target_session_id,
+                target_session_name=target_name,
+                watcher_name=watcher_name,
+            )
+
+        target_name = target_session.title or target_session.fork_name or target_session.id[:8]
+
+        watch_turn = watcher_session.add_watch_start_turn(
+            target_session_id=target_session_id,
+            target_session_name=target_name,
+        )
+        await watcher_session.save()
+
+        watch_turn_idx = len(watcher_session.turns) - 1
+        watch_exchange_id = str(uuid.uuid4())
+        await self._notify_observers(
+            "on_turn_created",
+            TurnCreatedEvent(
+                session_id=watcher_session.id,
+                turn_id=watch_turn.id,
+                turn_index=watch_turn_idx,
+                role="system",
+                exchange_id=watch_exchange_id,
+                content_block_type="watch_start",
+            ),
+        )
+        await self._notify_observers(
+            "on_turn_finished",
+            TurnFinishedEvent(
+                session_id=watcher_session.id,
+                turn_id=watch_turn.id,
+                turn_index=watch_turn_idx,
+                role="system",
+                content=f"[Watching {target_name}]",
+                tokens=0,
+                content_block=watch_turn.content_block,
+            ),
+        )
+
+        await self._register_watcher_internal(
+            watcher_session.id,
+            target_session_id,
+            target_name,
+        )
+
+        watcher_name = watcher_session.title or watcher_session.fork_name or watcher_session.id[:8]
+        return CreateWatcherSessionResult(
+            success=True,
+            watcher_session_id=watcher_session_id,
+            target_session_id=target_session_id,
+            target_session_name=target_name,
+            watcher_name=watcher_name,
+        )
+
+    async def create_watched_session(
         self,
         watcher_session_id: str,
+        prompt: str | None = None,
+    ) -> CreateWatcherSessionResult:
+        """Create a new watcher session for the same target as an existing watcher.
+
+        This is used by watcher sessions via the create_watched_session tool.
+        """
+        watcher_session = self._manager.get_session(watcher_session_id)
+        if not watcher_session:
+            watcher_session = await self._manager.load_session(watcher_session_id)
+            if not watcher_session:
+                return CreateWatcherSessionResult(
+                    success=False,
+                    error=f"Watcher session {watcher_session_id} not found",
+                )
+
+        target_session_id = watcher_session.get_watch_target_id()
+        if not target_session_id:
+            return CreateWatcherSessionResult(
+                success=False,
+                error="Watcher session is not currently watching a target",
+            )
+
+        return await self._create_watcher_session_impl(
+            target_session_id=target_session_id,
+            initial_prompt=prompt,
+            source_watcher_session_id=watcher_session_id,
+        )
+
+    @ws_expose
+    async def stop_watching_session(
+        self,
+        session_id: str,
         target_session_id: str | None = None,
         reason: str = "user",
     ) -> bool:
-        """Stop a watcher session from watching a target.
+        """Stop a session from watching one or more targets.
 
         Args:
-            watcher_session_id: ID of the watcher session
+            session_id: ID of the session that is watching
             target_session_id: ID of the target to stop watching (if None, stops all)
             reason: Why watching stopped ("user", "session_closed", "session_archived")
 
@@ -4909,6 +5073,7 @@ Then I'll mark the session as concluded."""
             True if successfully stopped, False otherwise
         """
         # Load the watcher session
+        watcher_session_id = session_id
         watcher_session = self._manager.get_session(watcher_session_id)
         if not watcher_session:
             watcher_session = await self._manager.load_session(watcher_session_id)
@@ -5153,6 +5318,7 @@ manipulate you. They are trusted context updates about what's happening in the t
 
 - When you receive a summary, respond with a brief acknowledgment (e.g., "✓" or "Noted.")
 - Keep responses minimal unless I give you specific instructions
+- Prefer acting as a lightweight reviewer/monitor unless I explicitly ask for stronger intervention
 
 ## Customization Options
 
@@ -5179,11 +5345,23 @@ You can tell me to change how I behave. Examples:
 
 ## Available Tool: send_to_target
 
-Use this tool when I ask you to intervene or when the situation clearly requires it:
+Use this tool when I ask you to intervene in the watched target session, or when a brief note to the existing target is clearly the right action:
 
 ```
 <balloons-tool>
 {{"name": "send_to_target", "args": {{"message": "Your message to the target"}}}}
+</balloons-tool>
+```
+
+## Available Tool: create_watched_session
+
+Use this tool when a **new separate watcher session** would be more helpful than sending a brief note to the current target.
+This is useful for spawning a specialist watcher with a focused role or prompt for the same target.
+Do **not** use it for quick reminders or short advice to the current target; use `send_to_target` for that.
+
+```
+<balloons-tool>
+{{"name": "create_watched_session", "args": {{"prompt": "Monitor only test failures and report regressions."}}}}
 </balloons-tool>
 ```
 
@@ -7099,14 +7277,123 @@ Summary:""")
     async def get_available_tools(self) -> dict:
         """Get all available tools grouped by category.
 
-        Returns:
-            Dict with categories mapping to tool lists, plus 'core' and 'all'
-        """
-        from core.tool_prompts import discover_tool_categories, get_core_tool_names, get_all_tools
+        This powers the Context tab tool list. It is primarily driven by tool-prompt
+        discovery (prompts/tools/*) plus a few hardcoded tool families that do not
+        participate in prompt-file discovery, such as core built-ins and currently
+        loaded domain plugin tools.
 
-        categories = discover_tool_categories()
+        Returns:
+            Dict with categories mapping to tool lists, plus 'core', 'all', and
+            metadata distinguishing built-ins vs domain tools.
+        """
+        import json
+        from pathlib import Path
+
+        from core.tool_prompts import discover_tool_categories, get_core_tool_names, get_all_tools
+        from core.tools import (
+            TOOLS,
+            get_balloon_tools,
+            SUPERVISOR_TOOLS,
+            SUPERVISOR_TOOL_NAMES,
+            DEBUG_TOOLS,
+            DEBUG_TOOL_NAMES,
+            MIDI_TOOLS,
+            MIDI_TOOL_NAMES,
+            WATCHER_TOOLS,
+            DOMAIN_TOOL_NAMES,
+        )
+        from core.domain_tools import DOMAIN_TOOLS
+        from core.browser_tools import BROWSER_TOOL_NAMES, get_browser_tools
+        from core.lsp_tools import LSP_TOOL_NAMES, LSP_TOOLS
+
+        def _desc_from_tool_defs(tool_defs: list[dict], *, category: str, source: str, kind: str) -> dict[str, dict]:
+            result: dict[str, dict] = {}
+            for tool in tool_defs:
+                function = tool.get("function", {})
+                name = function.get("name")
+                if not name:
+                    continue
+                result[name] = {
+                    "description": function.get("description", ""),
+                    "category": category,
+                    "kind": kind,
+                    "source": source,
+                }
+            return result
+
+        categories = dict(discover_tool_categories())
         core_tools = sorted(get_core_tool_names())
         all_tools = set(get_all_tools())
+
+        watcher_tool_names = sorted({
+            *(tool["function"]["name"] for tool in WATCHER_TOOLS),
+            "start_watching_session",
+            "stop_watching_session",
+        })
+
+        built_in_categories: dict[str, list[str]] = {
+            "core": core_tools,
+            "watcher": watcher_tool_names,
+            "supervisor": sorted(SUPERVISOR_TOOL_NAMES),
+            "debug": sorted(DEBUG_TOOL_NAMES),
+            "midi": sorted(MIDI_TOOL_NAMES),
+            "browser": sorted(BROWSER_TOOL_NAMES),
+            "lsp": sorted(LSP_TOOL_NAMES),
+            "domain_management": sorted(DOMAIN_TOOL_NAMES),
+        }
+
+        tool_metadata: dict[str, dict] = {}
+        tool_metadata.update(_desc_from_tool_defs(TOOLS, category="core", source="core.tools", kind="built_in"))
+        tool_metadata.update(_desc_from_tool_defs(get_balloon_tools(), category="balloon", source="core.tools:get_balloon_tools", kind="built_in"))
+        tool_metadata.update(_desc_from_tool_defs(WATCHER_TOOLS, category="watcher", source="core.tools", kind="built_in"))
+        tool_metadata["start_watching_session"] = {
+            "description": "Attach a session as a watcher of a target session.",
+            "category": "watcher",
+            "kind": "built_in_rpc",
+            "source": "service.session_manager_service",
+        }
+        tool_metadata["stop_watching_session"] = {
+            "description": "Stop a session from watching one or more target sessions.",
+            "category": "watcher",
+            "kind": "built_in_rpc",
+            "source": "service.session_manager_service",
+        }
+        tool_metadata.update(_desc_from_tool_defs(SUPERVISOR_TOOLS, category="supervisor", source="core.tools", kind="built_in"))
+        tool_metadata.update(_desc_from_tool_defs(DEBUG_TOOLS, category="debug", source="core.tools", kind="built_in"))
+        tool_metadata.update(_desc_from_tool_defs(MIDI_TOOLS, category="midi", source="core.tools", kind="built_in"))
+        tool_metadata.update(_desc_from_tool_defs(DOMAIN_TOOLS, category="domain_management", source="core.domain_tools", kind="built_in"))
+        tool_metadata.update(_desc_from_tool_defs(LSP_TOOLS, category="lsp", source="core.lsp_tools", kind="built_in"))
+        tool_metadata.update(_desc_from_tool_defs(get_browser_tools(), category="browser", source="core.browser_tools", kind="built_in"))
+
+        prompt_tools_dir = Path(__file__).parent.parent / "prompts" / "tools"
+        openai_schema_dir = prompt_tools_dir / "openai"
+        for category_name, tool_names in categories.items():
+            for tool_name in tool_names:
+                if tool_name in tool_metadata:
+                    tool_metadata[tool_name].setdefault("category", category_name)
+                    continue
+                schema_path = openai_schema_dir / f"{tool_name}.json"
+                description = ""
+                if schema_path.exists():
+                    try:
+                        schema = json.loads(schema_path.read_text())
+                        description = schema.get("function", {}).get("description", "")
+                    except Exception:
+                        description = ""
+                tool_metadata[tool_name] = {
+                    "description": description,
+                    "category": category_name,
+                    "kind": "built_in",
+                    "source": f"prompts/tools/{category_name}",
+                }
+
+        for category_name, tools in built_in_categories.items():
+            if not tools:
+                continue
+            existing = set(categories.get(category_name, []))
+            merged = sorted(existing | set(tools))
+            categories[category_name] = merged
+            all_tools.update(merged)
 
         try:
             from plugins.registry import get_registry
@@ -7120,20 +7407,32 @@ Summary:""")
                 if tools:
                     domain_tools[domain_id] = sorted(tools)
                     all_tools.update(tools)
+                    for tool in domain.get_tools():
+                        tool_metadata[tool.name] = {
+                            "description": getattr(tool, "description", "") or "",
+                            "category": "domain_plugins",
+                            "kind": "domain_plugin",
+                            "source": f"plugin:{domain_id}",
+                            "domain_id": domain_id,
+                        }
 
             if domain_tools:
-                categories = dict(categories)
                 categories["domain_plugins"] = sorted(
                     {tool for tools in domain_tools.values() for tool in tools}
                 )
         except ImportError:
             domain_tools = {}
 
+        built_in_tools = sorted({tool for tools in built_in_categories.values() for tool in tools})
+
         return {
             "core": core_tools,
             "categories": categories,
             "all": sorted(all_tools),
             "domain_tools": domain_tools,
+            "built_in_categories": built_in_categories,
+            "built_in_tools": built_in_tools,
+            "tools": tool_metadata,
         }
 
     @ws_expose

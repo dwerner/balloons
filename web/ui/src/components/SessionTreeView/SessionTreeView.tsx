@@ -893,62 +893,38 @@ export const SessionTreeView = memo(function SessionTreeView({
       return new Date(b.lastModified).getTime() - new Date(a.lastModified).getTime();
     });
 
-    // Identify watcher sessions and their targets
-    // Watchers have titles like "watching:target-name"
-    const watcherSessions = new Set<string>();
-    const watcherToTargetName = new Map<string, string>(); // watcher session id -> target name it's watching
-    const targetNameToSession = new Map<string, SessionInfo>(); // target name -> target session
-
-    // First pass: identify watchers and build target name index
-    for (const session of unpinned) {
-      const title = session.title || session.forkName || '';
-      if (title.startsWith('watching:')) {
-        watcherSessions.add(session.id);
-        const targetName = title.slice('watching:'.length);
-        watcherToTargetName.set(session.id, targetName);
-      }
-      // Index all sessions by their name for target matching
-      const sessionName = session.title || session.forkName || '';
-      if (sessionName && !sessionName.startsWith('watching:')) {
-        targetNameToSession.set(sessionName, session);
-      }
-    }
-
-    // Build watcher groups: each target with its watchers
-    // Structure: { target: SessionInfo | null, watchers: SessionInfo[], groupTime: number }
-    type WatcherGroup = { target: SessionInfo | null; watchers: SessionInfo[]; groupTime: number; targetName: string };
-    const watcherGroups: WatcherGroup[] = [];
+    // Identify watcher sessions from persisted watcher relationships, not title prefixes.
+    const watcherGroups: Array<{ target: SessionInfo | null; watchers: SessionInfo[]; groupTime: number; targetName: string }> = [];
     const usedSessionIds = new Set<string>();
+    const sessionsById = new Map(unpinned.map(session => [session.id, session]));
+    const targetIdToWatchers = new Map<string, SessionInfo[]>();
 
-    // Group watchers by their target
-    const targetNameToWatchers = new Map<string, SessionInfo[]>();
     for (const session of unpinned) {
-      if (watcherSessions.has(session.id)) {
-        const targetName = watcherToTargetName.get(session.id)!;
-        if (!targetNameToWatchers.has(targetName)) {
-          targetNameToWatchers.set(targetName, []);
+      const targets = session.watchTargets || [];
+      if (targets.length === 0) continue;
+      for (const targetId of targets) {
+        if (!targetIdToWatchers.has(targetId)) {
+          targetIdToWatchers.set(targetId, []);
         }
-        targetNameToWatchers.get(targetName)!.push(session);
+        targetIdToWatchers.get(targetId)!.push(session);
       }
     }
 
-    // Create groups for each unique target name
-    for (const [targetName, watchers] of targetNameToWatchers) {
-      const targetSession = targetNameToSession.get(targetName) || null;
+    for (const [targetId, watchers] of targetIdToWatchers) {
+      const targetSession = sessionsById.get(targetId) || null;
+      const targetName = targetSession?.title || targetSession?.forkName || targetId.slice(0, 8);
 
-      // Calculate group time as most recent activity in the group
-      let groupTime = 0;
+      let groupTime = targetSession ? new Date(targetSession.lastModified).getTime() : 0;
       if (targetSession) {
-        groupTime = new Date(targetSession.lastModified).getTime();
         usedSessionIds.add(targetSession.id);
       }
+
       for (const watcher of watchers) {
         const watcherTime = new Date(watcher.lastModified).getTime();
         if (watcherTime > groupTime) groupTime = watcherTime;
         usedSessionIds.add(watcher.id);
       }
 
-      // Sort watchers by last modified (most recent first)
       watchers.sort((a, b) =>
         new Date(b.lastModified).getTime() - new Date(a.lastModified).getTime()
       );

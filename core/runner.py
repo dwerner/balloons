@@ -288,16 +288,21 @@ class SessionRunner:
         self._status = RunnerStatus.STREAMING
         self._turn_index = len(self.session.turns)  # Next turn index
 
-        # If this is a watcher session, include watcher tools (send_to_target)
+        # If this is a watcher session, include watcher tools
         if self.session.is_watcher:
             if allowed_tools is None:
                 # None means "all tools" - add watcher tools to that set
                 allowed_tools = None  # Keep as None, watcher tools will be included via system
             else:
-                # Specific allowed tools - add send_to_target
-                allowed_tools = list(allowed_tools) + ["send_to_target"]
+                # Specific allowed tools - add watcher tools
+                allowed_tools = list(allowed_tools) + [
+                    "send_to_target",
+                    "create_watched_session",
+                    "start_watching_session",
+                    "stop_watching_session",
+                ]
             debug_log.debug(
-                "Watcher session - including send_to_target tool",
+                "Watcher session - including watcher tools",
                 session_id=self.session.id,
                 category=Category.RUNNER,
             )
@@ -464,11 +469,16 @@ class SessionRunner:
         self._status = RunnerStatus.STREAMING
         self._turn_index = len(self.session.turns)  # Next turn index
 
-        # If this is a watcher session, include watcher tools (send_to_target)
+        # If this is a watcher session, include watcher tools
         if self.session.is_watcher:
             if allowed_tools is not None:
-                # Specific allowed tools - add send_to_target
-                allowed_tools = list(allowed_tools) + ["send_to_target"]
+                # Specific allowed tools - add watcher tools
+                allowed_tools = list(allowed_tools) + [
+                    "send_to_target",
+                    "create_watched_session",
+                    "start_watching_session",
+                    "stop_watching_session",
+                ]
 
         # Debug log to trace turn_id
         from core.debug_log import debug_log
