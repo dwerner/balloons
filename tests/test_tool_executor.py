@@ -1,7 +1,10 @@
 """Tests for tool_executor module."""
 
-import pytest
+import json
 from pathlib import Path
+from unittest.mock import AsyncMock, MagicMock
+
+import pytest
 
 from core.tool_executor import (
     execute_read,
@@ -193,6 +196,63 @@ class TestExecuteWrite:
 
         assert not is_error
         assert test_file.read_text() == ""
+
+
+class TestCreateSessionTool:
+    """Tests for the create_session balloons tool."""
+
+    @pytest.mark.asyncio
+    async def test_create_session_tool_uses_service_and_temp_db(self, temp_storage, tmp_path):
+        manager = MagicMock()
+
+        created = MagicMock()
+        created.id = "new-session-123"
+        created.title = "Session new-sess"
+        created.created = "2024-01-01T00:00:00"
+        created.model = ""
+        created.turns = []
+        created.parent_id = None
+        created.returned = False
+        created.working_directory = str(tmp_path)
+
+        manager.create_session = AsyncMock(return_value=created)
+        manager._active_session_id = None
+
+        current_session = MagicMock()
+        current_session.working_directory = str(tmp_path)
+        current_session._manager = manager
+        current_session.session_manager = manager
+
+        result, is_error = await execute_tool(
+            "create_session",
+            {},
+            str(tmp_path),
+            session=current_session,
+        )
+
+        assert is_error is False
+        payload = json.loads(result)
+        assert payload["status"] == "created"
+        assert payload["session_id"] == "new-session-123"
+        assert payload["working_directory"] == str(tmp_path)
+        manager.create_session.assert_awaited_once_with(str(tmp_path))
+
+    @pytest.mark.asyncio
+    async def test_create_session_tool_returns_error_without_manager(self, temp_storage, tmp_path):
+        current_session = MagicMock()
+        current_session.working_directory = str(tmp_path)
+        current_session._manager = None
+        current_session.session_manager = None
+
+        result, is_error = await execute_tool(
+            "create_session",
+            {},
+            str(tmp_path),
+            session=current_session,
+        )
+
+        assert is_error is True
+        assert "registered session manager" in result
 
 
 class TestExecuteTool:

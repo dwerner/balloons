@@ -1,0 +1,25 @@
+{
+  "type": "function",
+  "function": {
+    "name": "stop_watching_session",
+    "description": "Stop a session from watching one or more target sessions.",
+    "parameters": {
+      "type": "object",
+      "properties": {
+        "session_id": {
+          "type": "string",
+          "description": "ID of the session that is currently watching"
+        },
+        "target_session_id": {
+          "type": "string",
+          "description": "Specific target to stop watching. If omitted, stop watching all current targets"
+        },
+        "reason": {
+          "type": "string",
+          "description": "Reason watching stopped. Defaults to 'user'"
+        }
+      },
+      "required": ["session_id"]
+    }
+  }
+}

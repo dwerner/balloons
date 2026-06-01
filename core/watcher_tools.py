@@ -13,7 +13,6 @@ from core.debug_log import debug_log, Category
 # Tool names handled by this module
 WATCHER_TOOL_NAMES = {
     "send_to_target",
-    "create_watched_session",
     "start_watching_session",
     "stop_watching_session",
 }
@@ -36,8 +35,6 @@ async def execute_watcher_tool(
     """
     if name == "send_to_target":
         return await _execute_send_to_target(args, current_session)
-    elif name == "create_watched_session":
-        return await _execute_create_watched_session(args, current_session)
     elif name == "start_watching_session":
         return await _execute_start_watching_session(args, current_session)
     elif name == "stop_watching_session":
@@ -133,58 +130,6 @@ async def _execute_send_to_target(args: dict[str, Any], watcher_session: Session
     return json.dumps(result, indent=2), False
 
 
-async def _execute_create_watched_session(args: dict[str, Any], watcher_session: Session) -> tuple[str, bool]:
-    """Create a new watcher session that watches this watcher's current target.
-
-    This is intended for watcher-to-watcher delegation, allowing a watcher to
-    spin up a fresh session with a specialized prompt focused on the same target.
-
-    Args:
-        args: {"prompt": str | None} - Optional initial user instructions for the new watcher
-        watcher_session: The watcher session invoking the tool
-
-    Returns:
-        Tuple of (result_string, is_error)
-    """
-    target_session_id = watcher_session.get_watch_target_id()
-    if not target_session_id:
-        return "Error: This session is not watching any target session", True
-
-    prompt = args.get("prompt")
-    if prompt is not None and not isinstance(prompt, str):
-        return "Error: prompt must be a string", True
-
-    try:
-        from service.session_manager_service import get_session_manager_service
-
-        service = get_session_manager_service()
-        result = await service.create_watched_session(
-            watcher_session_id=watcher_session.id,
-            prompt=prompt,
-        )
-    except Exception as e:
-        debug_log.error(
-            f"Failed to create watched session from watcher {watcher_session.id[:8]}: {e}",
-            category=Category.SESSION,
-        )
-        return f"Error: Failed to create watched session: {e}", True
-
-    if not result.success:
-        return result.error or "Error: Failed to create watched session", True
-
-    payload = {
-        "status": "created",
-        "watcher_session_id": result.watcher_session_id,
-        "target_session_id": result.target_session_id,
-        "target_session_name": result.target_session_name,
-        "watcher_name": result.watcher_name,
-        "note": "New watcher session created for the same target.",
-    }
-    if prompt:
-        payload["initial_prompt"] = prompt
-
-    return json.dumps(payload, indent=2), False
-
 
 async def _execute_start_watching_session(args: dict[str, Any], current_session: Session) -> tuple[str, bool]:
     """Attach a session as a watcher of a target session."""
@@ -196,8 +141,12 @@ async def _execute_start_watching_session(args: dict[str, Any], current_session:
         return "Error: target_session_id is required", True
 
     try:
-        from service.session_manager_service import get_session_manager_service
-        service = get_session_manager_service()
+        from service.session_manager_service import SessionManagerService
+        from core.stream_state import get_stream_state
+        from core.manager import SessionManager
+        manager = SessionManager()
+        service = SessionManagerService(manager, stream_state=get_stream_state())
+        await service.initialize()
         result = await service.start_watching_session(
             session_id=session_id,
             target_session_id=target_session_id,
@@ -232,8 +181,12 @@ async def _execute_stop_watching_session(args: dict[str, Any], current_session: 
     reason = args.get("reason", "user")
 
     try:
-        from service.session_manager_service import get_session_manager_service
-        service = get_session_manager_service()
+        from service.session_manager_service import SessionManagerService
+        from core.stream_state import get_stream_state
+        from core.manager import SessionManager
+        manager = SessionManager()
+        service = SessionManagerService(manager, stream_state=get_stream_state())
+        await service.initialize()
         success = await service.stop_watching_session(
             session_id=session_id,
             target_session_id=target_session_id,

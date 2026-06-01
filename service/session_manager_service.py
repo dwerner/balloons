@@ -5029,9 +5029,9 @@ Then I'll mark the session as concluded."""
         watcher_session_id: str,
         prompt: str | None = None,
     ) -> CreateWatcherSessionResult:
-        """Create a new watcher session for the same target as an existing watcher.
+        """Deprecated internal helper for creating another watcher on the same target.
 
-        This is used by watcher sessions via the create_watched_session tool.
+        Prefer creating a normal session and then calling start_watching_session.
         """
         watcher_session = self._manager.get_session(watcher_session_id)
         if not watcher_session:
@@ -5353,15 +5353,15 @@ Use this tool when I ask you to intervene in the watched target session, or when
 </balloons-tool>
 ```
 
-## Available Tool: create_watched_session
+## Available Tool: create_session
 
-Use this tool when a **new separate watcher session** would be more helpful than sending a brief note to the current target.
-This is useful for spawning a specialist watcher with a focused role or prompt for the same target.
+Use this tool when you need a **new separate session** rather than sending a brief note to the current target.
+A common watcher flow is to create a new session and then attach it with `start_watching_session`.
 Do **not** use it for quick reminders or short advice to the current target; use `send_to_target` for that.
 
 ```
 <balloons-tool>
-{{"name": "create_watched_session", "args": {{"prompt": "Monitor only test failures and report regressions."}}}}
+{{"name": "create_session", "args": {{}}}}
 </balloons-tool>
 ```
 
@@ -7325,11 +7325,7 @@ Summary:""")
         core_tools = sorted(get_core_tool_names())
         all_tools = set(get_all_tools())
 
-        watcher_tool_names = sorted({
-            *(tool["function"]["name"] for tool in WATCHER_TOOLS),
-            "start_watching_session",
-            "stop_watching_session",
-        })
+        watcher_tool_names = sorted(tool["function"]["name"] for tool in WATCHER_TOOLS)
 
         built_in_categories: dict[str, list[str]] = {
             "core": core_tools,
@@ -7346,18 +7342,6 @@ Summary:""")
         tool_metadata.update(_desc_from_tool_defs(TOOLS, category="core", source="core.tools", kind="built_in"))
         tool_metadata.update(_desc_from_tool_defs(get_balloon_tools(), category="balloon", source="core.tools:get_balloon_tools", kind="built_in"))
         tool_metadata.update(_desc_from_tool_defs(WATCHER_TOOLS, category="watcher", source="core.tools", kind="built_in"))
-        tool_metadata["start_watching_session"] = {
-            "description": "Attach a session as a watcher of a target session.",
-            "category": "watcher",
-            "kind": "built_in_rpc",
-            "source": "service.session_manager_service",
-        }
-        tool_metadata["stop_watching_session"] = {
-            "description": "Stop a session from watching one or more target sessions.",
-            "category": "watcher",
-            "kind": "built_in_rpc",
-            "source": "service.session_manager_service",
-        }
         tool_metadata.update(_desc_from_tool_defs(SUPERVISOR_TOOLS, category="supervisor", source="core.tools", kind="built_in"))
         tool_metadata.update(_desc_from_tool_defs(DEBUG_TOOLS, category="debug", source="core.tools", kind="built_in"))
         tool_metadata.update(_desc_from_tool_defs(MIDI_TOOLS, category="midi", source="core.tools", kind="built_in"))

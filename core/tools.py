@@ -560,7 +560,7 @@ def get_balloon_tools() -> list[dict]:
     # Balloon tools are: ask_user, propose_*, list_links, follow_link, etc.
     # Plus any discovered that aren't in other tool sets
     balloon_prefixes = ("ask_", "propose_", "list_links", "follow_link",
-                        "search_linked", "session_info", "create_slide", "speak")
+                        "search_linked", "session_info", "create_slide", "speak", "create_session")
 
     for name in available_schemas:
         # Skip browser tools - handled by get_browser_tools()
@@ -610,30 +610,6 @@ as coming from the watcher session.""",
                     }
                 },
                 "required": ["message"]
-            }
-        }
-    },
-    {
-        "type": "function",
-        "function": {
-            "name": "create_watched_session",
-            "description": """Create a new watcher session for the same target session you are currently watching.
-
-Use this when a separate watcher session would be more appropriate than sending a quick note with send_to_target.
-For example, create a watched session when you need a dedicated specialist watcher, a different monitoring strategy,
-or a clean thread with a focused prompt for the same target.
-
-Prefer send_to_target for brief guidance to the existing target session.
-Prefer create_watched_session when the work should continue in a separate watcher session.""",
-            "parameters": {
-                "type": "object",
-                "properties": {
-                    "prompt": {
-                        "type": "string",
-                        "description": "Optional initial instructions to send to the new watcher session after it is created"
-                    }
-                },
-                "required": []
             }
         }
     },

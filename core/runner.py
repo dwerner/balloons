@@ -297,7 +297,6 @@ class SessionRunner:
                 # Specific allowed tools - add watcher tools
                 allowed_tools = list(allowed_tools) + [
                     "send_to_target",
-                    "create_watched_session",
                     "start_watching_session",
                     "stop_watching_session",
                 ]
@@ -475,7 +474,6 @@ class SessionRunner:
                 # Specific allowed tools - add watcher tools
                 allowed_tools = list(allowed_tools) + [
                     "send_to_target",
-                    "create_watched_session",
                     "start_watching_session",
                     "stop_watching_session",
                 ]

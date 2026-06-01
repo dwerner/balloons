@@ -41,6 +41,16 @@ test-plugins: setup
     @just banner {{quote(green)}} 'test-plugins: running plugin pytest suite'
     {{py}} pytest -q plugins
 
+test-scope scope: setup
+    @just banner {{quote(green)}} 'test-scope: ensuring pytest is available'
+    @if ! {{uv}} run python -c 'import pytest' >/dev/null 2>&1; then \
+        {{uv}} pip install --python {{venv_python}} pytest pytest-asyncio; \
+    elif ! {{uv}} run python -c 'import pytest_asyncio' >/dev/null 2>&1; then \
+        {{uv}} pip install --python {{venv_python}} pytest-asyncio; \
+    fi
+    @just banner {{quote(green)}} 'test-scope: running pytest for {{scope}}'
+    {{py}} python -m pytest -q {{scope}}
+
 build: setup gen
     @just banner {{quote(yellow)}} 'build: developing balloons-py with maturin'
     {{uv}} run maturin develop --release --manifest-path balloons-rs/crates/balloons-py/Cargo.toml
