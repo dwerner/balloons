@@ -2921,6 +2921,7 @@ function AppContent() {
       } catch (err) {
         debugLog('Properties tab: failed to load backends', { error: String(err) });
         console.error('Failed to load backends:', err);
+        setError(`Failed to load backends: ${err}`);
         setAvailableBackends([{ name: 'claude', displayName: 'claude' }]);
       }
     })();
@@ -2935,6 +2936,7 @@ function AppContent() {
       } catch (err) {
         debugLog('Properties tab: failed to load reviews', { error: String(err) });
         console.error('Failed to load existing reviews:', err);
+        setError(`Failed to load existing reviews: ${err}`);
         setExistingReviews([]);
       }
     })();
@@ -3484,7 +3486,8 @@ function AppContent() {
                       await client.sessions.setSessionBackend(selectedSessionId, backendName);
                       debugLog('Changed session backend', { sessionId: selectedSessionId, backendName });
                     } catch (err) {
-                      console.error('Failed to change backend:', err);
+                      const errorMessage = err instanceof Error ? err.message : String(err);
+                      debugLog('Failed to change backend', { sessionId: selectedSessionId, backendName, error: errorMessage });
                     }
                   }}
                   onChangeWorkingDirectory={async (path) => {

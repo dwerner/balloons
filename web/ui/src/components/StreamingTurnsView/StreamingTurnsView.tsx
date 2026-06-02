@@ -23,6 +23,25 @@
  */
 
 import React, { useMemo, useEffect, useRef, useCallback, useState } from 'react';
+
+function formatStreamingCounter(seconds: number): string {
+  const safeSeconds = Math.max(0, seconds);
+  const wholeSeconds = Math.floor(safeSeconds);
+  const hours = Math.floor(wholeSeconds / 3600);
+  const minutes = Math.floor((wholeSeconds % 3600) / 60);
+  const secs = wholeSeconds % 60;
+  const hundredths = Math.floor((safeSeconds - wholeSeconds) * 100);
+
+  if (hours > 0) {
+    return `${hours}h ${minutes}m ${secs}s`;
+  }
+
+  if (minutes > 0) {
+    return `${minutes}m ${secs}s`;
+  }
+
+  return `${secs}.${String(hundredths).padStart(2, '0')}s`;
+}
 import type { BalloonsClient } from '../../../../generated/balloons-client';
 import { useSessionData, type SessionDataTurn, type StreamingProgress, type HistoryLoadMode } from '../../hooks';
 import type { ToolResultBlock } from '../../../../generated/types';
@@ -109,6 +128,9 @@ export function StreamingTurnsView({ sessionId, client, onSelectSession, onScrol
   // refreshKey forces re-subscription when incremented (e.g., after archive)
   // historyLoadMode determines which history layer to use: 'history', 'history_reverse', or 'history_lazy'
   const { turns, pendingAssistantTurns, isLoading, isLoadingHistory, isStreaming, streamError, error, streamingProgress, totalHistoryTurns, loadHistoryRange } = useSessionData(client, sessionId, refreshKey, historyLoadMode);
+  const streamStartTimeRef = useRef<number | null>(null);
+  const baseDurationRef = useRef(0);
+  const [streamingCounter, setStreamingCounter] = useState('0.00s');
 
   // Get autoscroll settings from preferences, keep in refs for access in callbacks
   const { autoscrollSpeed, autoscrollInstant } = usePreferences();
@@ -148,6 +170,37 @@ export function StreamingTurnsView({ sessionId, client, onSelectSession, onScrol
       onLoadingChange(isLoading, error);
     }
   }, [isLoading, error, onLoadingChange]);
+
+  useEffect(() => {
+    if (!isStreaming || pendingAssistantTurns.length === 0) {
+      streamStartTimeRef.current = null;
+      baseDurationRef.current = 0;
+      setStreamingCounter('0.00s');
+      return;
+    }
+
+    const progressDuration = streamingProgress?.durationSeconds ?? 0;
+    const now = Date.now();
+
+    if (streamStartTimeRef.current === null || baseDurationRef.current > progressDuration || streamingProgress?.exchangeId) {
+      baseDurationRef.current = progressDuration;
+      streamStartTimeRef.current = now;
+    } else if (progressDuration > baseDurationRef.current) {
+      baseDurationRef.current = progressDuration;
+      streamStartTimeRef.current = now;
+    }
+
+    const updateCounter = () => {
+      const elapsedSinceLastProgress = streamStartTimeRef.current === null
+        ? 0
+        : (Date.now() - streamStartTimeRef.current) / 1000;
+      setStreamingCounter(formatStreamingCounter(baseDurationRef.current + elapsedSinceLastProgress));
+    };
+
+    updateCounter();
+    const interval = window.setInterval(updateCounter, 100);
+    return () => window.clearInterval(interval);
+  }, [isStreaming, pendingAssistantTurns.length, streamingProgress?.exchangeId, streamingProgress?.durationSeconds]);
 
   // Ref for the scrollable container
   // Also track the element in state so we can re-run effects when it changes
@@ -1283,7 +1336,7 @@ export function StreamingTurnsView({ sessionId, client, onSelectSession, onScrol
                 <span className="dot">●</span>
                 <span className="dot">●</span>
               </span>
-              <span>Streaming...</span>
+              <span>Streaming... {streamingCounter}</span>
             </div>
           )}
         </div>

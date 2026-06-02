@@ -121,6 +121,8 @@ export interface SessionDataTurn {
  * Updated periodically (throttled) during streaming.
  */
 export interface StreamingProgress {
+  /** Exchange ID for the active stream */
+  exchangeId: string;
   /** Estimated output tokens so far */
   tokensStreamed: number;
   /** Current token rate (tokens/sec) */
@@ -843,6 +845,7 @@ export function useSessionData(
           client.sessionData.sessionDataStreamProgress((event: SessionStreamProgressEvent) => {
             if (event.sessionId !== newSessionId) return;
             setStreamingProgress({
+              exchangeId: event.exchangeId,
               tokensStreamed: event.tokensStreamed,
               currentTokenRate: event.currentTokenRate,
               toolName: event.toolName,
@@ -864,6 +867,7 @@ export function useSessionData(
               ? `${event.error}\n\nDebug dump: ${event.dumpFile}`
               : event.error;
             setStreamError(errorWithDump);
+            setError(errorWithDump);
             setStreamingProgress(null);
           })
         );

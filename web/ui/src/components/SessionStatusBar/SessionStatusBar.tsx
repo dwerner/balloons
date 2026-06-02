@@ -5,7 +5,10 @@ import { useLayout } from '../layout';
 import { usePreferences } from '../layout/PreferencesContext';
 import { RenameSessionModal } from '../RenameSessionModal';
 import { getModelColor } from '../../utils';
+import { createLogger } from '../../utils/debugLog';
 import './SessionStatusBar.css';
+
+const debugLog = createLogger('SessionStatusBar');
 
 export interface SessionStatusBarProps {
   /** Current session info */
@@ -200,6 +203,7 @@ export const SessionStatusBar = memo(function SessionStatusBar({
     notificationsEnabled,
     toggleNotifications,
     permissionState,
+    showNotification,
   } = useNotifications(session.id, client);
 
   // Collapsed state - persist in localStorage
@@ -218,6 +222,7 @@ export const SessionStatusBar = memo(function SessionStatusBar({
 
   // Backend selector state
   const [backends, setBackends] = useState<string[]>([]);
+  const [inlineNotification, setInlineNotification] = useState<string | null>(null);
   const [selectedBackend, setSelectedBackend] = useState<string>(session.backendName || '');
   const [isChangingBackend, setIsChangingBackend] = useState(false);
   const [showBackendSelector, setShowBackendSelector] = useState(false);
@@ -273,7 +278,7 @@ export const SessionStatusBar = memo(function SessionStatusBar({
           console.log('Loaded backends:', backends);
           setBackends(backends);
         })
-        .catch(err => console.error('Failed to load backends:', err));
+        .catch(err => debugLog('Failed to load backends', { sessionId: session.id, error: String(err) }));
     }
   }, [client, isConnected]);
 
@@ -288,39 +293,48 @@ export const SessionStatusBar = memo(function SessionStatusBar({
         .then(backend => {
           if (backend) setSelectedBackend(backend);
         })
-        .catch(err => console.error('Failed to get session backend:', err));
+        .catch(err => debugLog('Failed to get session backend', { sessionId: session.id, error: String(err) }));
     }
   }, [session.backendName, session.id, client, isConnected]);
 
   // Handle backend change
   const handleBackendChange = useCallback(async (newBackend: string) => {
     if (!client || !client.isConnected) {
-      console.warn('Cannot change backend: client not connected');
+      debugLog('Cannot change backend: client not connected', { sessionId: session.id });
       return;
     }
     if (isStreaming) {
-      console.warn('Cannot change backend: session is streaming');
+      debugLog('Cannot change backend: session is streaming', { sessionId: session.id });
       return;
     }
     if (newBackend === selectedBackend) {
-      console.log('Backend already selected:', newBackend);
+      debugLog('Backend already selected', { sessionId: session.id, backend: newBackend });
       setShowBackendSelector(false);
       return;
     }
 
     setIsChangingBackend(true);
     try {
-      console.log('Changing backend from', selectedBackend, 'to', newBackend);
+      debugLog('Changing backend', { sessionId: session.id, from: selectedBackend, to: newBackend });
       const success = await client.sessions.setSessionBackend(session.id, newBackend);
-      console.log('setSessionBackend result:', success);
+      debugLog('setSessionBackend result', { sessionId: session.id, success });
       if (success) {
         setSelectedBackend(newBackend);
         onBackendChange?.(newBackend);
+        debugLog('Changed backend successfully', { sessionId: session.id, backend: newBackend });
       } else {
-        console.error('Backend change failed - server returned false');
+        debugLog('Backend change failed - server returned false', { sessionId: session.id, backend: newBackend });
+        setInlineNotification('Backend change failed');
       }
     } catch (err) {
-      console.error('Failed to change backend:', err);
+      const errorMessage = err instanceof Error ? err.message : String(err);
+      debugLog('Failed to change backend', { sessionId: session.id, backend: newBackend, error: errorMessage });
+      setInlineNotification(`Backend change failed: ${errorMessage}`);
+      showNotification(
+        'Backend Change Failed',
+        errorMessage,
+        { tag: `backend-change-${session.id}`, requireInteraction: true }
+      );
     } finally {
       setIsChangingBackend(false);
       setShowBackendSelector(false);
@@ -330,6 +344,14 @@ export const SessionStatusBar = memo(function SessionStatusBar({
   return (
     <>
     <div className={`session-status-bar ${isCollapsed ? 'session-status-bar--collapsed' : ''}`} role="status">
+      {/* Inline notification gutter */}
+      {inlineNotification && (
+        <div className="session-status-bar__notification-gutter" aria-live="polite">
+          <span className="session-status-bar__notification-gutter-icon">⚠</span>
+          <span className="session-status-bar__notification-gutter-text">{inlineNotification}</span>
+        </div>
+      )}
+
       {/* Collapsed view: toggle + minimal progress bar */}
       {isCollapsed ? (
         <div className="session-status-bar__collapsed-view">
