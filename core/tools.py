@@ -560,7 +560,7 @@ def get_balloon_tools() -> list[dict]:
     # Balloon tools are: ask_user, propose_*, list_links, follow_link, etc.
     # Plus any discovered that aren't in other tool sets
     balloon_prefixes = ("ask_", "propose_", "list_links", "follow_link",
-                        "search_linked", "session_info", "create_slide", "speak")
+                        "search_linked", "session_info", "create_slide", "speak", "create_session")
 
     for name in available_schemas:
         # Skip browser tools - handled by get_browser_tools()
@@ -583,7 +583,7 @@ def get_balloon_tools() -> list[dict]:
 
     return result
 
-# Watcher mode tools - for cross-session communication
+# Watcher mode tools - for cross-session communication and watch-relationship management
 WATCHER_TOOLS = [
     {
         "type": "function",
@@ -610,6 +610,56 @@ as coming from the watcher session.""",
                     }
                 },
                 "required": ["message"]
+            }
+        }
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "start_watching_session",
+            "description": """Attach a session as a watcher of a target session.
+
+Watching is a relationship, not a special session type. Use this to make any existing session, including a fork, begin watching another session.""",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "session_id": {
+                        "type": "string",
+                        "description": "ID of the session that should become the watcher"
+                    },
+                    "target_session_id": {
+                        "type": "string",
+                        "description": "ID of the session to watch"
+                    }
+                },
+                "required": ["session_id", "target_session_id"]
+            }
+        }
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "stop_watching_session",
+            "description": """Stop a session from watching one or more target sessions.
+
+Use this to remove a watch relationship. If target_session_id is omitted, the session stops watching all current targets.""",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "session_id": {
+                        "type": "string",
+                        "description": "ID of the session that is currently watching"
+                    },
+                    "target_session_id": {
+                        "type": "string",
+                        "description": "Specific target to stop watching. If omitted, stop watching all current targets"
+                    },
+                    "reason": {
+                        "type": "string",
+                        "description": "Reason watching stopped. Default: user"
+                    }
+                },
+                "required": ["session_id"]
             }
         }
     },
@@ -845,7 +895,7 @@ Note: The process must be running and have stdin available.""",
 
 # Names of supervisor tools
 SUPERVISOR_TOOL_NAMES = {
-    "supervisor_start", "supervisor_list", "supervisor_output", "supervisor_stop", "supervisor_input",
+    "supervisor_start", "supervisor_list", "supervisor_query", "supervisor_host_status", "supervisor_output", "supervisor_stop", "supervisor_input",
 }
 
 # Session review tools for quality evaluation

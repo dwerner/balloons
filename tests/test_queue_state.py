@@ -2,26 +2,15 @@
 
 import pytest
 import asyncio
-import sys
-import importlib.util
-from pathlib import Path
 from datetime import datetime
 
-# Mark all async tests to use pytest-asyncio
-pytestmark = pytest.mark.asyncio
-
-# Import directly from the module file, not through core package
-# This avoids the core/__init__.py which has heavy dependencies (tiktoken, etc.)
-_module_path = Path(__file__).parent.parent / "core" / "queue_state.py"
-_spec = importlib.util.spec_from_file_location("queue_state", _module_path)
-_queue_state_module = importlib.util.module_from_spec(_spec)
-_spec.loader.exec_module(_queue_state_module)
-
-QueueState = _queue_state_module.QueueState
-QueueEvent = _queue_state_module.QueueEvent
-QueueSnapshot = _queue_state_module.QueueSnapshot
-QueuedMessageSnapshot = _queue_state_module.QueuedMessageSnapshot
-get_queue_state = _queue_state_module.get_queue_state
+from core.queue_state import (
+    QueueState,
+    QueueEvent,
+    QueueSnapshot,
+    QueuedMessageSnapshot,
+    get_queue_state,
+)
 
 
 @pytest.fixture

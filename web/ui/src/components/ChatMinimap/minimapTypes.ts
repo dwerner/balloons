@@ -19,6 +19,16 @@ export interface MinimapExchange {
 /**
  * DOM-measured exchange position - actual rendered positions from the DOM
  */
+export interface MinimapJumpBlock {
+  id: string;
+  turnId: string;
+  top: number;      // Relative to exchange top in rendered pixels
+  height: number;   // Rendered height in pixels
+  kind: string;
+  label?: string;
+  filePath?: string;
+}
+
 export interface ExchangeDOMRect {
   id: string;
   colorIndex: number;
@@ -28,6 +38,7 @@ export interface ExchangeDOMRect {
   tokenCount?: number; // Total tokens in this exchange
   turnIndices?: number[]; // Turn indices for archive action
   turnIds?: string[]; // Turn IDs for stable tracking during archive
+  jumpBlocks?: MinimapJumpBlock[];
 }
 
 // Calculated layout positions
@@ -39,11 +50,18 @@ export interface MinimapTurnLayout {
   width: number;    // 0-1 normalized
 }
 
+export interface MinimapJumpBlockLayout {
+  block: MinimapJumpBlock;
+  y: number;      // Relative to exchange top in minimap pixels
+  height: number;
+}
+
 export interface MinimapExchangeLayout {
   exchange: MinimapExchange;
   y: number;
   height: number;
   turns: MinimapTurnLayout[];
+  jumpBlocks?: MinimapJumpBlockLayout[];
   turnRange?: string;  // e.g., "#0-5" for labeling in the minimap
   tokenCount?: number; // Total tokens in this exchange
 }
@@ -53,7 +71,10 @@ export interface MinimapLayout {
   totalHeight: number;
   viewportTop: number;
   viewportHeight: number;
-  scale: number; // scrollHeight -> canvasHeight mapping
+  scale: number; // scrollHeight -> minimap content height mapping
+  contentOffsetY?: number; // Top of visible minimap window within virtual content
+  anchorCanvasY?: number; // Canvas-space Y to preserve during zoom
+  maxContentOffsetY?: number;
 }
 
 export interface MinimapColors {
@@ -63,6 +84,17 @@ export interface MinimapColors {
   tool: string;
   system: string;
   systemLight: string;
+  assistantBlock: string;
+  assistantBlockHover: string;
+  toolBlock: string;
+  toolBlockHover: string;
+  editBlock: string;
+  editBlockHover: string;
+  readBlock: string;
+  writeBlock: string;
+  bashBlock: string;
+  grepBlock: string;
+  globBlock: string;
   viewport: string;
   viewportBorder: string;
   newContent: string;
@@ -73,6 +105,7 @@ export interface MinimapRenderOptions {
   showViewport: boolean;
   newContentFromY?: number; // Y position where new content starts
   hoveredExchangeId?: string; // Exchange to highlight on hover
+  hoveredJumpBlockId?: string; // Jump block to highlight on hover
   selectedExchangeId?: string; // Exchange that's currently selected/active
   archivingExchangeIds?: Set<string>; // Exchanges currently being archived
 }

@@ -362,17 +362,28 @@ class WsServer:
     async def _broadcast(
         self, message: dict, target_clients: set[str] | None = None
     ) -> None:
-        """Broadcast a message to connected clients (legacy, uses queue).
+        """Broadcast a message to connected clients.
 
-        This method now delegates to _enqueue_broadcast for ordered delivery.
-
-        Args:
-            message: Message dict to JSON-encode and send
-            target_clients: Optional set of client_ids to send to. If None,
-                broadcasts to all clients. If provided, only sends to clients
-                whose client_id is in the set.
+        Tests and some legacy callers expect this method to send immediately.
+        Ordered production delivery still uses _enqueue_broadcast() via
+        _on_service_event().
         """
-        self._enqueue_broadcast(message, target_clients)
+        if not self._clients:
+            return
+
+        message_str = json.dumps(message)
+        for websocket in list(self._clients):
+            client_info = self._client_info.get(websocket)
+            if client_info is None:
+                continue
+            if target_clients is not None and client_info.client_id not in target_clients:
+                continue
+            try:
+                await websocket.send(message_str)
+            except ConnectionClosed:
+                pass
+            except Exception as e:
+                logger.warning(f"Failed to broadcast to client: {e}")
 
     async def _send_to_client(
         self, websocket: ServerConnection, message: str

@@ -1,0 +1,17 @@
+{
+  "type": "function",
+  "function": {
+    "name": "create_session",
+    "description": "Create a new session.",
+    "parameters": {
+      "type": "object",
+      "properties": {
+        "working_directory": {
+          "type": "string",
+          "description": "Working directory for the new session. Defaults to the current session's working directory when omitted"
+        }
+      },
+      "required": []
+    }
+  }
+}

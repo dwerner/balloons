@@ -14,7 +14,7 @@
  */
 
 import React, { useRef, useState, useEffect, useCallback, useMemo } from 'react';
-import type { MinimapExchange, ExchangeDOMRect, MinimapExchangeLayout } from './minimapTypes';
+import type { MinimapExchange, ExchangeDOMRect, MinimapExchangeLayout, MinimapJumpBlockLayout } from './minimapTypes';
 import { calculateMinimapLayout, calculateMinimapLayoutFromDOM, minimapYToScrollPosition, findExchangeAtPosition } from './minimapLayout';
 import { renderMinimap } from './minimapRender';
 import { getMinimapColors } from './minimapColors';
@@ -28,6 +28,15 @@ interface ContextMenuInfo {
   tokenCount?: number;
   turnIndices?: number[];
   turnIds?: string[];
+}
+
+function findJumpBlockAtPosition(exchangeLayout: MinimapExchangeLayout, yWithinExchange: number): MinimapJumpBlockLayout | null {
+  for (const jumpBlock of exchangeLayout.jumpBlocks ?? []) {
+    if (yWithinExchange >= jumpBlock.y && yWithinExchange < jumpBlock.y + jumpBlock.height) {
+      return jumpBlock;
+    }
+  }
+  return null;
 }
 
 export interface ChatMinimapProps {
@@ -49,6 +58,8 @@ export interface ChatMinimapProps {
   onNavigate: (scrollPosition: number) => void;
   /** Callback when user clicks on a specific exchange */
   onExchangeClick?: (exchangeId: string) => void;
+  /** Callback when user clicks on a specific edit block */
+  onEditBlockClick?: (turnId: string) => void;
   /** Callback when user requests to archive an exchange's turns */
   onArchiveExchange?: (turnIndices: number[], turnIds: string[]) => void;
   /** Currently selected/active exchange ID */
@@ -73,6 +84,7 @@ export function ChatMinimap({
   lastSeenTurnIndex,
   onNavigate,
   onExchangeClick,
+  onEditBlockClick,
   onArchiveExchange,
   selectedExchangeId,
   archivingExchangeIds,
@@ -83,12 +95,20 @@ export function ChatMinimap({
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const containerRef = useRef<HTMLDivElement>(null);
   const contextMenuRef = useRef<HTMLDivElement>(null);
+  const dragAutoPanRef = useRef<number | null>(null);
+  const lastPointerClientYRef = useRef<number | null>(null);
+  const AUTO_PAN_EDGE_ZONE = 14;
   const [isDragging, setIsDragging] = useState(false);
   const [canvasHeight, setCanvasHeight] = useState(0);
   const [hoveredExchangeId, setHoveredExchangeId] = useState<string | null>(null);
+  const [hoveredJumpBlockId, setHoveredJumpBlockId] = useState<string | null>(null);
   const [contextMenu, setContextMenu] = useState<ContextMenuInfo | null>(null);
   const [contextMenuPosition, setContextMenuPosition] = useState<{ left: number; top: number } | null>(null);
   const [tooltip, setTooltip] = useState<{ x: number; y: number; text: string } | null>(null);
+  const [autoPanDirection, setAutoPanDirection] = useState<'top' | 'bottom' | null>(null);
+  const [zoom, setZoom] = useState(1);
+  const [zoomAnchorScrollTop, setZoomAnchorScrollTop] = useState<number | undefined>(undefined);
+  const [zoomAnchorCanvasY, setZoomAnchorCanvasY] = useState<number | undefined>(undefined);
 
   // Detect theme (check for data-theme attribute or prefers-color-scheme)
   // Possible values: 'dark', 'light', 'dark-flat'
@@ -170,7 +190,10 @@ export function ChatMinimap({
         canvasHeight,
         scrollTop,
         scrollHeight,
-        viewportHeight
+        viewportHeight,
+        zoom,
+        zoomAnchorScrollTop,
+        zoomAnchorCanvasY
       );
     } else if (exchanges && exchanges.length > 0) {
       // Fall back to legacy token-based layout
@@ -184,7 +207,7 @@ export function ChatMinimap({
     }
 
     return null;
-  }, [exchanges, exchangeRects, canvasHeight, scrollTop, scrollHeight, viewportHeight]);
+  }, [exchanges, exchangeRects, canvasHeight, scrollTop, scrollHeight, viewportHeight, zoom, zoomAnchorScrollTop, zoomAnchorCanvasY]);
 
   // Calculate new content Y position (when scrolled away)
   const newContentFromY = useMemo(() => {
@@ -231,10 +254,11 @@ export function ChatMinimap({
       showViewport: true,
       newContentFromY,
       hoveredExchangeId: hoveredExchangeId ?? undefined,
+      hoveredJumpBlockId: hoveredJumpBlockId ?? undefined,
       selectedExchangeId,
       archivingExchangeIds,
     });
-  }, [layout, colors, newContentFromY, hoveredExchangeId, selectedExchangeId, archivingExchangeIds]);
+  }, [layout, colors, newContentFromY, hoveredExchangeId, hoveredJumpBlockId, selectedExchangeId, archivingExchangeIds]);
 
   // Navigation handlers
   const handleNavigateToY = useCallback((clientY: number) => {
@@ -258,31 +282,140 @@ export function ChatMinimap({
 
   const handlePointerDown = useCallback((e: React.PointerEvent) => {
     setIsDragging(true);
+    lastPointerClientYRef.current = e.clientY;
     (e.target as HTMLElement).setPointerCapture(e.pointerId);
     handleNavigateToY(e.clientY);
 
-    // Also check if clicking on a specific exchange
-    if (onExchangeClick && layout) {
+    if (layout) {
       const canvas = canvasRef.current;
       if (canvas) {
         const rect = canvas.getBoundingClientRect();
         const y = e.clientY - rect.top;
         const exLayout = findExchangeAtPosition(layout, y);
         if (exLayout) {
-          onExchangeClick(exLayout.exchange.id);
+          const contentY = y + (layout.contentOffsetY ?? 0);
+          const jumpLayout = findJumpBlockAtPosition(exLayout, contentY - exLayout.y);
+          if (jumpLayout && onEditBlockClick) {
+            onEditBlockClick(jumpLayout.block.turnId);
+          } else if (onExchangeClick) {
+            onExchangeClick(exLayout.exchange.id);
+          }
         }
       }
     }
-  }, [handleNavigateToY, onExchangeClick, layout]);
+  }, [handleNavigateToY, onExchangeClick, onEditBlockClick, layout]);
 
   const handlePointerMove = useCallback((e: React.PointerEvent) => {
     if (!isDragging) return;
+    lastPointerClientYRef.current = e.clientY;
     handleNavigateToY(e.clientY);
   }, [isDragging, handleNavigateToY]);
 
+  const stopDragAutoPan = useCallback(() => {
+    if (dragAutoPanRef.current !== null) {
+      cancelAnimationFrame(dragAutoPanRef.current);
+      dragAutoPanRef.current = null;
+    }
+  }, []);
+
   const handlePointerUp = useCallback(() => {
     setIsDragging(false);
-  }, []);
+    setAutoPanDirection(null);
+    lastPointerClientYRef.current = null;
+    stopDragAutoPan();
+  }, [stopDragAutoPan]);
+
+  useEffect(() => {
+    if (!isDragging || zoom <= 1) {
+      setAutoPanDirection(null);
+      stopDragAutoPan();
+      return;
+    }
+
+    let lastTick = performance.now();
+
+    const step = (now: number) => {
+      const canvas = canvasRef.current;
+      const currentLayout = layout;
+      const pointerClientY = lastPointerClientYRef.current;
+      if (!canvas || !currentLayout || pointerClientY === null) {
+        dragAutoPanRef.current = requestAnimationFrame(step);
+        return;
+      }
+
+      const rect = canvas.getBoundingClientRect();
+      const overshootTop = Math.max(0, rect.top - pointerClientY);
+      const overshootBottom = Math.max(0, pointerClientY - rect.bottom);
+      const withinTopZone = pointerClientY >= rect.top && pointerClientY <= rect.top + AUTO_PAN_EDGE_ZONE;
+      const withinBottomZone = pointerClientY <= rect.bottom && pointerClientY >= rect.bottom - AUTO_PAN_EDGE_ZONE;
+      const zonePullTop = withinTopZone ? (rect.top + AUTO_PAN_EDGE_ZONE - pointerClientY) : 0;
+      const zonePullBottom = withinBottomZone ? (pointerClientY - (rect.bottom - AUTO_PAN_EDGE_ZONE)) : 0;
+      const overshoot = overshootBottom > 0
+        ? overshootBottom + zonePullBottom
+        : overshootTop > 0
+          ? -(overshootTop + zonePullTop)
+          : withinBottomZone
+            ? zonePullBottom
+            : withinTopZone
+              ? -zonePullTop
+              : 0;
+      const dt = Math.min(now - lastTick, 32);
+      lastTick = now;
+
+      if (overshoot > 0) {
+        setAutoPanDirection('bottom');
+      } else if (overshoot < 0) {
+        setAutoPanDirection('top');
+      } else {
+        setAutoPanDirection(null);
+      }
+
+      if (overshoot !== 0) {
+        const direction = overshoot > 0 ? 1 : -1;
+        const speed = Math.min(40 + Math.abs(overshoot) * 2.5, 220);
+        const scrollDelta = direction * speed * (dt / 1000);
+        const nextScrollTop = scrollTop + scrollDelta;
+        const maxScrollTop = Math.max(0, scrollHeight - viewportHeight);
+        onNavigate(Math.max(0, Math.min(nextScrollTop, maxScrollTop)));
+      }
+
+      dragAutoPanRef.current = requestAnimationFrame(step);
+    };
+
+    dragAutoPanRef.current = requestAnimationFrame(step);
+    return stopDragAutoPan;
+  }, [isDragging, zoom, layout, onNavigate, scrollTop, scrollHeight, viewportHeight, stopDragAutoPan]);
+
+  const handleWheel = useCallback((e: React.WheelEvent) => {
+    const canvas = canvasRef.current;
+    if (!canvas || !layout) return;
+
+    if (e.shiftKey) {
+      e.preventDefault();
+
+      const rect = canvas.getBoundingClientRect();
+      const y = e.clientY - rect.top;
+      const contentY = y + (layout.contentOffsetY ?? 0);
+      const anchorScroll = contentY / layout.scale;
+
+      setZoomAnchorScrollTop(anchorScroll);
+      setZoomAnchorCanvasY(y);
+      setZoom((currentZoom) => {
+        const zoomDelta = e.deltaY > 0 ? 0.9 : 1.1;
+        const nextZoom = currentZoom * zoomDelta;
+        return Math.max(1, Math.min(nextZoom, 12));
+      });
+      return;
+    }
+
+  }, [layout]);
+
+  useEffect(() => {
+    if (zoom === 1) {
+      setZoomAnchorScrollTop(undefined);
+      setZoomAnchorCanvasY(undefined);
+    }
+  }, [zoom]);
 
   // Handle hover to show exchange highlight and tooltip
   const handlePointerMoveHover = useCallback((e: React.PointerEvent) => {
@@ -294,11 +427,20 @@ export function ChatMinimap({
     const rect = canvas.getBoundingClientRect();
     const y = e.clientY - rect.top;
     const exLayout = findExchangeAtPosition(layout, y);
+    const contentY = y + (layout.contentOffsetY ?? 0);
+    const jumpLayout = exLayout ? findJumpBlockAtPosition(exLayout, contentY - exLayout.y) : null;
 
     setHoveredExchangeId(exLayout?.exchange.id ?? null);
+    setHoveredJumpBlockId(jumpLayout?.block.id ?? null);
 
-    // Show tooltip with turn range (token count is rendered in the minimap itself)
-    if (exLayout) {
+    // Show tooltip with turn range or jump target
+    if (jumpLayout) {
+      setTooltip({
+        x: e.clientX,
+        y: e.clientY,
+        text: jumpLayout.block.label || jumpLayout.block.kind,
+      });
+    } else if (exLayout) {
       const exchangeRect = exchangeRects?.find(r => r.id === exLayout.exchange.id);
       const turnRange = exLayout.turnRange || exchangeRect?.turnRange;
 
@@ -320,6 +462,7 @@ export function ChatMinimap({
   const handlePointerLeaveHover = useCallback(() => {
     if (!isDragging) {
       setHoveredExchangeId(null);
+      setHoveredJumpBlockId(null);
       setTooltip(null);
     }
   }, [isDragging]);
@@ -426,6 +569,7 @@ export function ChatMinimap({
         ref={containerRef}
         className={`chat-minimap ${className} ${isDragging ? 'chat-minimap--dragging' : ''} ${!visible ? 'chat-minimap--hidden' : ''}`}
         style={{ width }}
+        title={zoom > 1 ? `Shift-scroll to zoom (${zoom.toFixed(1)}×)` : 'Shift-scroll to zoom'}
       >
         <canvas
           ref={canvasRef}
@@ -442,7 +586,20 @@ export function ChatMinimap({
             handlePointerLeaveHover();
           }}
           onContextMenu={handleContextMenu}
+          onWheel={handleWheel}
         />
+        {isDragging && zoom > 1 && (
+          <>
+            <div
+              className={`chat-minimap__edge-zone chat-minimap__edge-zone--top ${autoPanDirection === 'top' ? 'chat-minimap__edge-zone--active' : ''}`}
+              style={{ height: AUTO_PAN_EDGE_ZONE }}
+            />
+            <div
+              className={`chat-minimap__edge-zone chat-minimap__edge-zone--bottom ${autoPanDirection === 'bottom' ? 'chat-minimap__edge-zone--active' : ''}`}
+              style={{ height: AUTO_PAN_EDGE_ZONE }}
+            />
+          </>
+        )}
       </div>
 
       {/* Hover Tooltip */}

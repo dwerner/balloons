@@ -16,6 +16,7 @@ from typing import TYPE_CHECKING, Awaitable, Callable
 import aiofiles
 
 from .debug_log import debug_log, Category
+from plugins.decorators import BuiltinLLMCallableRegistry, llm_callable_builtin
 from .tools import BALLOON_TOOL_NAMES, SUPERVISOR_TOOL_NAMES, REVIEW_TOOL_NAMES
 from .link_tools import LINK_TOOL_NAMES, execute_link_tool
 from .supervisor_tools import SUPERVISOR_TOOL_NAMES as SUP_TOOL_NAMES, execute_supervisor_tool
@@ -72,6 +73,15 @@ from models import ToolResultDeltaEvent
 
 
 ToolOutputCallback = Callable[[str, str], Awaitable[None]]
+
+
+@dataclass(frozen=True)
+class CategoryToolRoute:
+    tool_names: set[str] | frozenset[str]
+    requires_session: bool
+    session_error_label: str
+    executor_name: str
+    pass_working_dir: bool = False
 
 
 def _camel_to_snake(name: str) -> str:
@@ -183,97 +193,31 @@ async def execute_tool(
         except ImportError:
             pass  # Plugin system not available
 
-        # Link navigation tools
-        if name in LINK_TOOL_NAMES:
-            if session is None:
-                return "Error: Link tools require a session context", True
-            return await execute_link_tool(name, args, session)
-
-        # Process supervisor tools
-        debug_log.info(
-            f"[CHECK] name={name!r}, SUP_TOOL_NAMES={SUP_TOOL_NAMES}, name in SUP_TOOL_NAMES={name in SUP_TOOL_NAMES}",
-            category=Category.SUPERVISOR,
-        )
-        if name in SUP_TOOL_NAMES:
-            debug_log.info(
-                f"[TOOL_EXEC] About to call execute_supervisor_tool for {name}",
-                category=Category.SUPERVISOR,
+        # Built-in annotated tools
+        handler = BuiltinLLMCallableRegistry.get_handler(name)
+        if handler is not None:
+            result = handler(
+                **args,
+                session=session,
+                working_dir=working_dir,
+                output_callback=output_callback,
             )
-            if session is None:
-                return "Error: Supervisor tools require a session context", True
-            result = await execute_supervisor_tool(name, args, session, working_dir)
-            debug_log.info(
-                f"[TOOL_EXEC] execute_supervisor_tool returned",
-                category=Category.SUPERVISOR,
-            )
+            if asyncio.iscoroutine(result):
+                return await result
             return result
 
-        # Review tools
-        if name in REVIEW_TOOL_NAMES:
-            if session is None:
-                return "Error: Review tools require a session context", True
-            return await execute_review_tool(name, args, session)
+        # Remaining category-based built-in families
+        for route in CATEGORY_TOOL_ROUTES:
+            if name not in route.tool_names:
+                continue
+            if route.requires_session and session is None:
+                return f"Error: {route.session_error_label} require a session context", True
+            executor = globals()[route.executor_name]
+            if route.pass_working_dir:
+                return await executor(name, args, session, working_dir)
+            return await executor(name, args, session)
 
-        # Debug logging tools (LLM self-debugging)
-        if name in DEBUG_TOOL_NAMES:
-            return await execute_debug_tool(name, args, session)
-
-        # Watcher mode tools (cross-session communication)
-        if name in WATCHER_TOOL_NAMES:
-            if session is None:
-                return "Error: Watcher tools require a session context", True
-            return await execute_watcher_tool(name, args, session)
-
-        # LSP semantic code tools
-        if name in LSP_TOOL_NAMES:
-            if session is None:
-                return "Error: LSP tools require a session context", True
-            return await execute_lsp_tool(name, args, session, working_dir)
-
-        # Note: Kanban tools are now handled by the domain plugin system
-        # (is_domain_tool check at the top of this function)
-
-        # Domain management tools (load_domain, unload_domain, list_domains)
-        if name in DOMAIN_TOOL_NAMES:
-            if session is None:
-                return "Error: Domain tools require a session context", True
-            return await execute_domain_management_tool(name, args, session)
-
-        # Browser automation tools
-        if name in BROWSER_TOOL_NAMES:
-            if session is None:
-                return "Error: Browser tools require a session context", True
-            return await execute_browser_tool(name, args, session, working_dir)
-
-        # Standard file/shell tools
-        if name == "Read":
-            return await execute_read(args, working_dir)
-        elif name == "Write":
-            return await execute_write(args, working_dir)
-        elif name == "Edit":
-            return await execute_edit(args, working_dir)
-        elif name == "Bash":
-            return await execute_bash(args, working_dir, output_callback=output_callback)
-        elif name == "Glob":
-            return await execute_glob(args, working_dir)
-        elif name == "Grep":
-            return await execute_grep(args, working_dir)
-        elif name == "List":
-            return await execute_list(args, working_dir)
-        elif name == "ask_user":
-            return execute_ask_user(args)
-        elif name == "propose_fork":
-            return execute_propose_fork(args)
-        elif name == "propose_merge":
-            return execute_propose_merge(args)
-        elif name == "create_slide":
-            return await execute_create_slide(args, session)
-        elif name == "speak":
-            return await execute_speak(args)
-        elif name == "play_midi":
-            return execute_play_midi(args)
-        else:
-            return f"Unknown tool: {name}", True
+        return f"Unknown tool: {name}", True
 
     except Exception as e:
         debug_log.error(
@@ -282,6 +226,40 @@ async def execute_tool(
             run_id=run_id,
         )
         return f"Error: {str(e)}", True
+
+
+@llm_callable_builtin(name="create_session", category="balloon")
+async def builtin_create_session(
+    working_directory: str | None = None,
+    *,
+    session: "Session | None" = None,
+    working_dir: str = "",
+    output_callback: ToolOutputCallback | None = None,
+) -> tuple[str, bool]:
+    """Create a new session."""
+    if session is None:
+        return "Error: create_session requires a session context", True
+
+    target_working_directory = working_directory or session.working_directory
+
+    try:
+        manager = getattr(session, "_manager", None) or getattr(session, "session_manager", None)
+        if manager is None:
+            return "Error: create_session is unavailable without a registered session manager", True
+        service = manager.get_service() if hasattr(manager, "get_service") else None
+        if service is None:
+            return "Error: create_session is unavailable without an attached session manager service", True
+        new_info = await service.create_session(target_working_directory)
+    except Exception as e:
+        return f"Error: Failed to create session: {e}", True
+
+    payload = {
+        "status": "created",
+        "session_id": new_info.id,
+        "working_directory": new_info.working_directory,
+        "title": new_info.title,
+    }
+    return json.dumps(payload, indent=2), False
 
 
 async def execute_read(args: dict, working_dir: str) -> tuple[str, bool]:
@@ -640,6 +618,12 @@ async def _grep_fallback(
         return f"Error: {e}", True
 
 
+@llm_callable_builtin(name="ask_user", category="balloon")
+def builtin_ask_user(question: str, context: str = "", options: list[str] | None = None, *, session: "Session | None" = None, working_dir: str = "", output_callback: ToolOutputCallback | None = None) -> ToolExecutionResult:
+    """Ask the user a question and wait for their response. Use this when you need clarification, confirmation, or input before proceeding."""
+    return execute_ask_user({"question": question, "context": context, "options": options or []})
+
+
 def execute_ask_user(args: dict) -> ToolExecutionResult:
     """Handle an ask_user tool call.
 
@@ -718,6 +702,29 @@ async def execute_list(args: dict, working_dir: str) -> tuple[str, bool]:
 
     except Exception as e:
         return f"Error: {e}", True
+
+
+@llm_callable_builtin(name="propose_fork", category="balloon")
+def builtin_propose_fork(
+    name: str,
+    description: str,
+    context_plan: list[dict],
+    initial_prompt: str = "",
+    bind_to: dict | str | None = None,
+    backend_name: str = "",
+    *,
+    session: "Session | None" = None,
+    working_dir: str = "",
+    output_callback: ToolOutputCallback | None = None,
+) -> tuple[str, bool]:
+    return execute_propose_fork({
+        "name": name,
+        "description": description,
+        "context_plan": context_plan,
+        "initial_prompt": initial_prompt,
+        "bind_to": bind_to,
+        "backend_name": backend_name,
+    })
 
 
 def execute_propose_fork(args: dict) -> tuple[str, bool]:
@@ -875,21 +882,45 @@ def parse_fork_proposal(args: dict) -> ForkProposal | None:
         return None
 
 
+@llm_callable_builtin(name="propose_merge", category="balloon")
+def builtin_propose_merge(
+    summary: str,
+    reason: str = "",
+    files_changed: list[str] | None = None,
+    key_accomplishments: list[str] | None = None,
+    *,
+    session: "Session | None" = None,
+    working_dir: str = "",
+    output_callback: ToolOutputCallback | None = None,
+) -> tuple[str, bool]:
+    return execute_propose_merge({
+        "summary": summary,
+        "reason": reason,
+        "files_changed": files_changed or [],
+        "key_accomplishments": key_accomplishments or [],
+    })
+
+
 def execute_propose_merge(args: dict) -> tuple[str, bool]:
     """Handle a propose_merge tool call.
 
-    This validates the proposal arguments and returns a structured JSON result
-    containing the full proposal state. The UI renders this as an interactive
-    card where the user can modify the summary and accept/reject.
+    This layer only validates the tool arguments and returns the sentinel
+    string ``MERGE_PROPOSAL_PENDING``.
 
-    The tool_result becomes the source of truth for proposal state.
+    The actual proposal UI/state is no longer encoded in the tool result.
+    Instead, higher-level session handling intercepts the ``propose_merge``
+    tool_use event, keeps the tool input on the resulting ToolUseBlock, and
+    the frontend renders MergeProposalCard directly from that tool_use block.
+    ``parse_merge_proposal()`` remains here because the app/service layer uses
+    it to validate/log/interact with the structured tool input after
+    interception.
 
     Args:
         args: Tool arguments containing summary, reason, files_changed, etc.
               Accepts both snake_case and camelCase parameter names.
 
     Returns:
-        Tuple of (result_string, is_error) - result is JSON with proposal state
+        Tuple of (result_string, is_error)
     """
     # Normalize args to handle camelCase variants and stringified JSON
     args = _normalize_tool_args(args, {
@@ -912,19 +943,9 @@ def execute_propose_merge(args: dict) -> tuple[str, bool]:
     if not isinstance(key_accomplishments, list):
         return "Error: key_accomplishments must be a list", True
 
-    # Return structured JSON with the full proposal state
-    result = {
-        "_type": "merge_proposal",
-        "_status": "pending",  # pending | accepted | rejected
-        "summary": summary,
-        "reason": args.get("reason", ""),
-        "files_changed": files_changed,
-        "key_accomplishments": key_accomplishments,
-        # Set when merge is accepted:
-        "_merge_id": None,
-        "_parent_session_id": None,
-    }
-    return json.dumps(result), False
+    # Legacy tool contract: app layer intercepts the tool call and handles the
+    # proposal state separately.
+    return "MERGE_PROPOSAL_PENDING", False
 
 
 def parse_merge_proposal(args: dict) -> MergeProposal | None:
@@ -1217,6 +1238,61 @@ async def execute_save_review(args: dict, session: "Session") -> tuple[str, bool
         return f"Error saving review: {e}", True
 
 
+CATEGORY_TOOL_ROUTES: tuple[CategoryToolRoute, ...] = (
+    CategoryToolRoute(
+        tool_names=LINK_TOOL_NAMES,
+        requires_session=True,
+        session_error_label="Link tools",
+        executor_name="execute_link_tool",
+    ),
+    CategoryToolRoute(
+        tool_names=SUP_TOOL_NAMES,
+        requires_session=True,
+        session_error_label="Supervisor tools",
+        executor_name="execute_supervisor_tool",
+        pass_working_dir=True,
+    ),
+    CategoryToolRoute(
+        tool_names=REVIEW_TOOL_NAMES,
+        requires_session=True,
+        session_error_label="Review tools",
+        executor_name="execute_review_tool",
+    ),
+    CategoryToolRoute(
+        tool_names=DEBUG_TOOL_NAMES,
+        requires_session=False,
+        session_error_label="Debug tools",
+        executor_name="execute_debug_tool",
+    ),
+    CategoryToolRoute(
+        tool_names=WATCHER_TOOL_NAMES,
+        requires_session=True,
+        session_error_label="Watcher tools",
+        executor_name="execute_watcher_tool",
+    ),
+    CategoryToolRoute(
+        tool_names=LSP_TOOL_NAMES,
+        requires_session=True,
+        session_error_label="LSP tools",
+        executor_name="execute_lsp_tool",
+        pass_working_dir=True,
+    ),
+    CategoryToolRoute(
+        tool_names=DOMAIN_TOOL_NAMES,
+        requires_session=True,
+        session_error_label="Domain tools",
+        executor_name="execute_domain_management_tool",
+    ),
+    CategoryToolRoute(
+        tool_names=BROWSER_TOOL_NAMES,
+        requires_session=True,
+        session_error_label="Browser tools",
+        executor_name="execute_browser_tool",
+        pass_working_dir=True,
+    ),
+)
+
+
 def execute_play_midi(args: dict) -> tuple[str, bool]:
     """Handle a play_midi tool call (fallback for non-balloons tool calls).
 
@@ -1239,3 +1315,67 @@ def execute_play_midi(args: dict) -> tuple[str, bool]:
 
     # Simple acknowledgment - actual playback is client-side
     return f"MIDI tool acknowledged. Playback is handled by the UI.", False
+
+
+@llm_callable_builtin(name="Read", category="core")
+async def builtin_read(file_path: str, offset: int = 1, limit: int | None = None, *, session: "Session | None" = None, working_dir: str = "", output_callback: ToolOutputCallback | None = None) -> tuple[str, bool]:
+    return await execute_read({"file_path": file_path, "offset": offset, "limit": limit}, working_dir)
+
+
+@llm_callable_builtin(name="Write", category="core")
+async def builtin_write(file_path: str, content: str, *, session: "Session | None" = None, working_dir: str = "", output_callback: ToolOutputCallback | None = None) -> tuple[str, bool]:
+    return await execute_write({"file_path": file_path, "content": content}, working_dir)
+
+
+@llm_callable_builtin(name="Edit", category="core")
+async def builtin_edit(file_path: str, old_string: str, new_string: str, replace_all: bool = False, *, session: "Session | None" = None, working_dir: str = "", output_callback: ToolOutputCallback | None = None) -> tuple[str, bool]:
+    return await execute_edit({"file_path": file_path, "old_string": old_string, "new_string": new_string, "replace_all": replace_all}, working_dir)
+
+
+@llm_callable_builtin(name="Bash", category="core")
+async def builtin_bash(command: str, timeout: int = 120, *, session: "Session | None" = None, working_dir: str = "", output_callback: ToolOutputCallback | None = None) -> tuple[str, bool]:
+    return await execute_bash({"command": command, "timeout": timeout}, working_dir, output_callback=output_callback)
+
+
+@llm_callable_builtin(name="Glob", category="core")
+async def builtin_glob(pattern: str, path: str = "", *, session: "Session | None" = None, working_dir: str = "", output_callback: ToolOutputCallback | None = None) -> tuple[str, bool]:
+    args = {"pattern": pattern}
+    if path:
+        args["path"] = path
+    return await execute_glob(args, working_dir)
+
+
+@llm_callable_builtin(name="Grep", category="core")
+async def builtin_grep(pattern: str, path: str = "", glob: str = "", case_insensitive: bool = False, *, session: "Session | None" = None, working_dir: str = "", output_callback: ToolOutputCallback | None = None) -> tuple[str, bool]:
+    args = {"pattern": pattern, "case_insensitive": case_insensitive}
+    if path:
+        args["path"] = path
+    if glob:
+        args["glob"] = glob
+    return await execute_grep(args, working_dir)
+
+
+@llm_callable_builtin(name="List", category="core")
+async def builtin_list(path: str = "", *, session: "Session | None" = None, working_dir: str = "", output_callback: ToolOutputCallback | None = None) -> tuple[str, bool]:
+    args = {}
+    if path:
+        args["path"] = path
+    return await execute_list(args, working_dir)
+
+
+@llm_callable_builtin(name="create_slide", category="balloon")
+async def builtin_create_slide(title: str = "", content: str = "", notes: str = "", *, session: "Session | None" = None, working_dir: str = "", output_callback: ToolOutputCallback | None = None) -> tuple[str, bool]:
+    return await execute_create_slide({"title": title, "content": content, "notes": notes}, session)
+
+
+@llm_callable_builtin(name="speak", category="balloon")
+async def builtin_speak(text: str, voice: str = "", *, session: "Session | None" = None, working_dir: str = "", output_callback: ToolOutputCallback | None = None) -> tuple[str, bool]:
+    args = {"text": text}
+    if voice:
+        args["voice"] = voice
+    return await execute_speak(args)
+
+
+@llm_callable_builtin(name="play_midi", category="midi")
+def builtin_play_midi(notes: str, bpm: int = 120, waveform: str = "sine", volume: float = 0.5, *, session: "Session | None" = None, working_dir: str = "", output_callback: ToolOutputCallback | None = None) -> tuple[str, bool]:
+    return execute_play_midi({"notes": notes, "bpm": bpm, "waveform": waveform, "volume": volume})

@@ -128,6 +128,12 @@ export const ReadCard = React.memo(function ReadCard({ turn, result }: ReadCardP
       className="read-card"
       rawData={rawData}
       timestamp={turn.timestamp}
+      dataAttributes={{
+        'data-turn-id': turn.turnId,
+        'data-file-path': filePath || undefined,
+      }}
+      minimapKind="read"
+      minimapLabel={filePath ? `Read · ${formatRelativePath(filePath)}` : 'Read'}
     >
       {hasResult && (
         <LazySyntaxHighlightedCode

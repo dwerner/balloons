@@ -13,28 +13,30 @@ from models import Message, TextBlock, ToolUseBlock, ToolResultBlock
 class TestSessionProgressiveSaving:
     """Tests demonstrating that sessions should save after each turn."""
 
-    def test_session_save_persists_turns(self, temp_storage):
+    @pytest.mark.asyncio
+    async def test_session_save_persists_turns(self, temp_storage):
         """Basic test: saved session can be loaded."""
         session = Session()
         session.add_message("user", "Hello")
         session.add_message("assistant", "Hi there")
-        session.save()
+        await session.save()
 
         # Load and verify
-        loaded = Session.load(session.id)
+        loaded = await Session.load(session.id)
         assert loaded is not None
         assert len(loaded.turns) == 2
         assert loaded.turns[0].content == "Hello"
         assert loaded.turns[1].content == "Hi there"
 
-    def test_progressive_save_each_turn(self, temp_storage):
+    @pytest.mark.asyncio
+    async def test_progressive_save_each_turn(self, temp_storage):
         """Each turn should be persisted immediately after being added.
 
         This demonstrates the EXPECTED behavior: if we crash after adding
         a turn, that turn should still be on disk.
         """
         session = Session()
-        session.save()  # Initial save
+        await session.save()  # Initial save
 
         # Simulate an agentic loop where each turn should be saved
         turn_data = [
@@ -45,52 +47,54 @@ class TestSessionProgressiveSaving:
 
         for role, content in turn_data:
             session.add_message(role, content)
-            session.save()  # Progressive save after each turn
+            await session.save()  # Progressive save after each turn
 
             # Verify the turn is on disk
-            loaded = Session.load(session.id)
+            loaded = await Session.load(session.id)
             assert len(loaded.turns) == len(session.turns)
             assert loaded.turns[-1].content == content
 
-    def test_crash_recovery_with_progressive_saves(self, temp_storage):
+    @pytest.mark.asyncio
+    async def test_crash_recovery_with_progressive_saves(self, temp_storage):
         """Simulate crash recovery: only saved turns should survive."""
         session = Session()
-        session.save()
+        await session.save()
 
         # Add and save first turn
         session.add_message("user", "Turn 1")
-        session.save()
+        await session.save()
 
         # Add and save second turn
         session.add_message("assistant", "Turn 2")
-        session.save()
+        await session.save()
 
         # Add third turn but DON'T save (simulating crash before save)
         session.add_message("user", "Turn 3 - this will be lost")
 
         # Simulate crash by loading from disk (not from memory)
-        recovered = Session.load(session.id)
+        recovered = await Session.load(session.id)
 
         # Only the saved turns should survive
         assert len(recovered.turns) == 2
         assert recovered.turns[0].content == "Turn 1"
         assert recovered.turns[1].content == "Turn 2"
 
-    def test_tool_loop_saves_each_step(self, temp_storage):
+    @pytest.mark.asyncio
+    async def test_tool_loop_saves_each_step(self, temp_storage):
         """A tool use loop should save after each step.
 
         Scenario: User asks a question, assistant uses tools in a loop.
         Each tool call and result should be persisted.
         """
         session = Session()
-        session.save()
+        await session.save()
 
         # User prompt
         session.add_message("user", "Find and read the config file")
-        session.save()
+        await session.save()
 
         # Verify after user prompt is saved (1 turn: text block)
-        loaded = Session.load(session.id)
+        loaded = await Session.load(session.id)
         assert len(loaded.turns) == 1
 
         # Assistant decides to use a tool (2 content blocks = 2 turns)
@@ -100,19 +104,19 @@ class TestSessionProgressiveSaving:
             "",
             content_blocks=[TextBlock(text="I'll search for config files."), tool_use]
         )
-        session.save()
+        await session.save()
 
         # Verify after tool call is saved (1 + 2 = 3 turns)
-        loaded = Session.load(session.id)
+        loaded = await Session.load(session.id)
         assert len(loaded.turns) == 3
 
         # Tool result comes back (1 turn)
         tool_result = ToolResultBlock(tool_use_id="tool_1", content="config.yaml")
         session.add_message("user", "", content_blocks=[tool_result])
-        session.save()
+        await session.save()
 
         # Verify after tool result is saved (3 + 1 = 4 turns)
-        loaded = Session.load(session.id)
+        loaded = await Session.load(session.id)
         assert len(loaded.turns) == 4
 
         # Assistant continues with another tool (2 content blocks = 2 turns)
@@ -122,20 +126,21 @@ class TestSessionProgressiveSaving:
             "",
             content_blocks=[TextBlock(text="Found it, reading now."), tool_use_2]
         )
-        session.save()
+        await session.save()
 
         # Final verification (4 + 2 = 6 turns)
-        loaded = Session.load(session.id)
+        loaded = await Session.load(session.id)
         assert len(loaded.turns) == 6
 
-    def test_long_agent_loop_crash_midway(self, temp_storage):
+    @pytest.mark.asyncio
+    async def test_long_agent_loop_crash_midway(self, temp_storage):
         """Simulate a long agent loop where we crash midway.
 
         This is the bug scenario: if saves only happen at the end,
         we could lose many turns of work.
         """
         session = Session()
-        session.save()
+        await session.save()
 
         # Simulate 10 turns in an agent loop
         saved_turn_count = 0
@@ -144,7 +149,7 @@ class TestSessionProgressiveSaving:
             session.add_message(role, f"Turn {i}")
 
             # With progressive saving, we save after each turn
-            session.save()
+            await session.save()
             saved_turn_count += 1
 
             # Simulate crash at turn 5
@@ -152,27 +157,28 @@ class TestSessionProgressiveSaving:
                 break
 
         # Load from disk
-        recovered = Session.load(session.id)
+        recovered = await Session.load(session.id)
 
         # All 6 turns (0-5) should be recovered
         assert len(recovered.turns) == 6
         for i in range(6):
             assert recovered.turns[i].content == f"Turn {i}"
 
-    def test_usage_updates_persisted(self, temp_storage):
+    @pytest.mark.asyncio
+    async def test_usage_updates_persisted(self, temp_storage):
         """Token usage should be saved with each turn."""
         session = Session()
-        session.save()
+        await session.save()
 
         session.add_message("user", "Hello")
         session.update_usage(input_tokens=100, output_tokens=0, cost=0.001)
-        session.save()
+        await session.save()
 
         session.add_message("assistant", "Hi there")
         session.update_usage(input_tokens=0, output_tokens=50, cost=0.002)
-        session.save()
+        await session.save()
 
-        loaded = Session.load(session.id)
+        loaded = await Session.load(session.id)
         assert loaded.total_input_tokens == 100
         assert loaded.total_output_tokens == 50
         assert loaded.total_cost == pytest.approx(0.003)
@@ -283,7 +289,8 @@ class TestSessionArchive:
         with patch("core.archiver.ARCHIVES_DIR", archives_dir):
             yield archives_dir
 
-    def test_archive_turns_modifies_session(self, temp_storage, temp_archives_dir):
+    @pytest.mark.asyncio
+    async def test_archive_turns_modifies_session(self, temp_storage, temp_archives_dir):
         """archive_turns replaces turns with archive marker."""
         session = Session()
         session.add_message("user", "Message 1")
@@ -291,7 +298,7 @@ class TestSessionArchive:
         session.add_message("user", "Message 3")
         session.add_message("assistant", "Message 4")
         session.add_message("user", "Message 5")
-        session.save()
+        await session.save()
 
         # Archive turns 1-4
         archive_block = session.archive_turns(1, 4, "Middle messages archived")
@@ -302,30 +309,32 @@ class TestSessionArchive:
         assert session.turns[2].content == "Message 5"
         assert archive_block.message_count == 3
 
-    def test_archive_persists_after_save(self, temp_storage, temp_archives_dir):
+    @pytest.mark.asyncio
+    async def test_archive_persists_after_save(self, temp_storage, temp_archives_dir):
         """Archived session can be saved and loaded."""
         session = Session()
         session.add_message("user", "Message 1")
         session.add_message("assistant", "Message 2")
         session.add_message("user", "Message 3")
-        session.save()
+        await session.save()
 
         # Archive and save
         session.archive_turns(1, 2, "Archived message 2")
-        session.save()
+        await session.save()
 
         # Load and verify
-        loaded = Session.load(session.id)
+        loaded = await Session.load(session.id)
         assert len(loaded.turns) == 3
         assert loaded.has_archives()
 
-    def test_rehydrate_restores_turns(self, temp_storage, temp_archives_dir):
+    @pytest.mark.asyncio
+    async def test_rehydrate_restores_turns(self, temp_storage, temp_archives_dir):
         """rehydrate_archive restores original turns."""
         session = Session()
         session.add_message("user", "Message 1")
         session.add_message("assistant", "Message 2")
         session.add_message("user", "Message 3")
-        session.save()
+        await session.save()
 
         # Archive
         session.archive_turns(0, 2, "First two turns")
@@ -337,20 +346,21 @@ class TestSessionArchive:
         assert len(session.turns) == 3
         assert session.turns[0].content == "Message 1"
 
-    def test_archive_rehydrate_round_trip_with_persistence(self, temp_storage, temp_archives_dir):
+    @pytest.mark.asyncio
+    async def test_archive_rehydrate_round_trip_with_persistence(self, temp_storage, temp_archives_dir):
         """Archive, save, load, rehydrate works correctly."""
         # Create and archive
         session = Session()
         session.add_message("user", "Question")
         session.add_message("assistant", "Answer")
         session.add_message("user", "Follow up")
-        session.save()
+        await session.save()
 
         session.archive_turns(0, 2, "Q&A")
-        session.save()
+        await session.save()
 
         # Load fresh
-        loaded = Session.load(session.id)
+        loaded = await Session.load(session.id)
         assert loaded.has_archives()
         assert len(loaded.turns) == 2
 
@@ -360,12 +370,13 @@ class TestSessionArchive:
         assert loaded.turns[0].content == "Question"
         assert loaded.turns[1].content == "Answer"
 
-    def test_get_all_archives(self, temp_storage, temp_archives_dir):
+    @pytest.mark.asyncio
+    async def test_get_all_archives(self, temp_storage, temp_archives_dir):
         """get_all_archives returns all archive blocks with indices."""
         session = Session()
         for i in range(10):
             session.add_message("user" if i % 2 == 0 else "assistant", f"Msg {i}")
-        session.save()
+        await session.save()
 
         # Create two archives
         session.archive_turns(0, 3, "First archive")
@@ -376,12 +387,13 @@ class TestSessionArchive:
         assert archives[0][1].summary == "First archive"
         assert archives[1][1].summary == "Second archive"
 
-    def test_has_archives(self, temp_storage, temp_archives_dir):
+    @pytest.mark.asyncio
+    async def test_has_archives(self, temp_storage, temp_archives_dir):
         """has_archives returns correct boolean."""
         session = Session()
         session.add_message("user", "Test")
         session.add_message("assistant", "Reply")
-        session.save()
+        await session.save()
 
         assert not session.has_archives()
 
@@ -452,10 +464,7 @@ class TestAsyncSessionIO:
             await session.save()
 
         # List sessions
-        sessions = []
-        async for metadata in Session.list_sessions():
-            sessions.append(metadata)
-
+        sessions = await Session.list_sessions()
         assert len(sessions) == 3
 
     @pytest.mark.asyncio
@@ -468,7 +477,7 @@ class TestAsyncSessionIO:
 
         # Verify session appears in list
         found = False
-        async for metadata in Session.list_sessions():
+        for metadata in await Session.list_sessions():
             if metadata["id"] == session.id:
                 found = True
                 assert metadata["turn_count"] == 1

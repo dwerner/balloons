@@ -2,7 +2,7 @@
 
 ## Overview
 
-Watcher mode provides a way to observe and interact with another chat session. A "watcher" is a **real, persistent session** that maintains a compressed summary chain of the target session's exchanges. The watcher session is automatically named `watching:{target-session-name}`.
+Watcher mode provides a way to observe and interact with another chat session. A "watcher" is a **real, persistent session** that maintains a compressed summary chain of the target session's exchanges. Watcher identity should come from persisted watch relationships, not a title prefix convention.
 
 ## Terminology
 
@@ -14,8 +14,8 @@ Watcher mode provides a way to observe and interact with another chat session. A
 - **Real session**: Watcher is a full session, persists across reloads, appears in session tree
 - **Explicit user control**: User initiates watching via UI
 - **User-guided summarization**: Conversation with the watcher influences how summaries are generated
-- **One watcher per target**: V1 limits to one watcher per target session
-- **Fork follows**: When target forks, watcher follows, summary chain continues
+- **Existing sessions can become watchers**: use `watch_session(watcher_session_id, target_session_id)` to attach an existing session, including a fork, as a watcher
+- **Fork follows is not implicit**: if a fork should be watched, it must be attached explicitly via `watch_session`
 
 ## Core Mechanism
 
@@ -148,9 +148,14 @@ The watcher has access to cross-session tools:
 def send_to_target(message: str) -> str:
     """Send a message to the target session.
     The message is queued and sent after any current exchange completes."""
+
+def create_watched_session(prompt: str | None = None) -> str:
+    """Create a new watcher session for the same target session.
+    Optionally provide initial instructions for the new watcher."""
 ```
 
-This lets the watcher actively intervene when instructed by the user.
+Use `send_to_target` for brief guidance to the current target.
+Use `create_watched_session` when a separate watcher session with its own focused role is more appropriate.
 
 ### Queueing Rules
 
@@ -158,6 +163,7 @@ When multiple things want to happen:
 - **Summary arrives while watcher is mid-exchange**: Queue the summary, inject after exchange completes
 - **User message while watcher is processing summary**: Queue user message, process after summary response
 - **send_to_target while target is mid-exchange**: Queue message, send after target exchange completes
+- **create_watched_session**: Create a new watcher session bound to the same target; optional prompt seeds its initial behavior
 
 Order: FIFO within each queue. Summary injection waits for current watcher exchange to finish before triggering its own exchange.
 
@@ -178,12 +184,20 @@ Order: FIFO within each queue. Summary injection waits for current watcher excha
 
 ### How to Initiate (MVP)
 
-Right-click session in tree -> "Watch in new session":
-1. Creates new session named `watching-{target-name}`
+There are now two initiation paths:
+
+**Watch in new session**
+1. Creates a new watcher session for the selected target
 2. Adds `WatchStartBlock` turn
 3. Starts a conversation where user can give watching instructions
 4. Kicks off the target session (if not already running)
 5. User switches between sessions using normal session tree
+
+**Attach existing session as watcher**
+1. Call `start_watching_session(session_id, target_session_id)`
+2. Adds `WatchStartBlock` to the existing session
+3. Registers the watcher relationship for live summaries
+4. Enables existing sessions, including forks, to begin watching without creating a new watcher session
 
 No split-pane UI for MVP - just normal session switching.
 

@@ -453,6 +453,22 @@ export function StreamingTurnsView({ sessionId, client, onSelectSession, onScrol
   const [exchangeRects, setExchangeRects] = useState<ExchangeDOMRect[]>([]);
   const exchangeRefsMap = useRef<Map<string, HTMLDivElement>>(new Map());
 
+  const scrollToTurnElement = useCallback((turnId: string) => {
+    const scrollContainer = scrollContainerRef.current;
+    if (!scrollContainer) return;
+
+    const turnElement = scrollContainer.querySelector(`[data-turn-id="${CSS.escape(turnId)}"]`) as HTMLElement | null;
+    if (!turnElement) return;
+
+    turnElement.scrollIntoView({ behavior: 'smooth', block: 'start' });
+    turnElement.classList.remove('turn-highlight');
+    void turnElement.offsetWidth;
+    turnElement.classList.add('turn-highlight');
+    window.setTimeout(() => turnElement.classList.remove('turn-highlight'), 1500);
+  }, []);
+
+  const highlightedAssistantTurnIdsRef = useRef<Set<string>>(new Set());
+
   // Measure exchange DOM positions for minimap
   const measureExchanges = useCallback(() => {
     const scrollContainer = scrollContainerRef.current;
@@ -477,6 +493,7 @@ export function StreamingTurnsView({ sessionId, client, onSelectSession, onScrol
       let tokenCount = 0;
       let turnIndices: number[] = [];
       let turnIds: string[] = [];
+      let jumpBlocks: ExchangeDOMRect['jumpBlocks'] = [];
 
       if (group) {
         const allTurns = group.items.flatMap(item => item.turns);
@@ -491,6 +508,24 @@ export function StreamingTurnsView({ sessionId, client, onSelectSession, onScrol
         turnIndices = allTurns.map(t => t.order).filter((o): o is number => o !== undefined);
         // Collect stable turn IDs for tracking during archive (IDs don't change during reorder)
         turnIds = allTurns.map(t => t.turnId).filter((id): id is string => !!id);
+
+        jumpBlocks = Array.from(element.querySelectorAll('[data-minimap-jump-block="true"]')).map((blockElement, index) => {
+          const blockHTMLElement = blockElement as HTMLElement;
+          const blockRect = blockHTMLElement.getBoundingClientRect();
+          const turnId = blockHTMLElement.getAttribute('data-turn-id') || `jump-${id}-${index}`;
+          const kind = blockHTMLElement.getAttribute('data-minimap-kind') || 'tool';
+          const label = blockHTMLElement.getAttribute('data-minimap-label') || kind;
+          const filePath = blockHTMLElement.getAttribute('data-file-path') || undefined;
+          return {
+            id: `${id}:${turnId}`,
+            turnId,
+            top: blockRect.top - rect.top,
+            height: blockRect.height,
+            kind,
+            label,
+            filePath,
+          };
+        });
       }
 
       rects.push({
@@ -502,6 +537,7 @@ export function StreamingTurnsView({ sessionId, client, onSelectSession, onScrol
         tokenCount,
         turnIndices,
         turnIds,
+        jumpBlocks,
       });
     });
 
@@ -992,6 +1028,43 @@ export function StreamingTurnsView({ sessionId, client, onSelectSession, onScrol
     });
   }, [turnsOrGroups, isStreaming, pendingAssistantTurns.length, streamingProgress, animateScrollTo, isInitialLoadComplete, sessionId, checkAtBottom]);
 
+  useEffect(() => {
+    if (!isFollowingRef.current || !scrollContainerRef.current) return;
+
+    const assistantTurns = turns.filter(turn => turn.role === 'assistant' && !!turn.turnId);
+    const newAssistantTurns = assistantTurns.filter(turn => !highlightedAssistantTurnIdsRef.current.has(turn.turnId));
+    if (newAssistantTurns.length === 0) return;
+
+    const lastAssistantTurn = newAssistantTurns[newAssistantTurns.length - 1];
+    if (!lastAssistantTurn?.turnId) return;
+
+    highlightedAssistantTurnIdsRef.current = new Set([
+      ...highlightedAssistantTurnIdsRef.current,
+      ...newAssistantTurns.map(turn => turn.turnId).filter((id): id is string => !!id),
+    ]);
+
+    const attemptHighlight = (remainingAttempts: number) => {
+      requestAnimationFrame(() => {
+        if (!scrollContainerRef.current) return;
+
+        const turnElement = scrollContainerRef.current.querySelector(`[data-turn-id="${CSS.escape(lastAssistantTurn.turnId)}"]`) as HTMLElement | null;
+        if (!turnElement) {
+          if (remainingAttempts > 0) {
+            attemptHighlight(remainingAttempts - 1);
+          }
+          return;
+        }
+
+        turnElement.classList.remove('turn-highlight');
+        void turnElement.offsetWidth;
+        turnElement.classList.add('turn-highlight');
+        window.setTimeout(() => turnElement.classList.remove('turn-highlight'), 1500);
+      });
+    };
+
+    attemptHighlight(8);
+  }, [turns]);
+
   // Early returns AFTER all hooks have been called
   if (!sessionId) {
     return <div className="streaming-turns-view empty">No session selected</div>;
@@ -1070,6 +1143,7 @@ export function StreamingTurnsView({ sessionId, client, onSelectSession, onScrol
           isFollowing={isFollowing}
           lastSeenTurnIndex={lastSeenTurnIndexRef.current}
           onNavigate={handleMinimapNavigate}
+          onEditBlockClick={scrollToTurnElement}
           onArchiveExchange={onArchiveTurns}
           archivingExchangeIds={archivingExchangeIds}
           visible={showMinimap && exchangeRects.length > 0 && !isInitializing}

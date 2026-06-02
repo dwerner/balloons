@@ -86,6 +86,7 @@ class LogEntry:
     run_id: str = ""  # Groups entries by LLM call
 
 
+
 class RingBuffer:
     """Fixed-size ring buffer for log entries."""
 
@@ -174,6 +175,7 @@ class DebugLog:
 
     _instance: "DebugLog | None" = None
     DEFAULT_BUFFER_SIZE = 500
+    MAX_ENTRIES = DEFAULT_BUFFER_SIZE
 
     def __new__(cls) -> "DebugLog":
         if cls._instance is None:
@@ -297,16 +299,49 @@ class DebugLog:
             self._log_dir = Path(path).expanduser()
             self._log_dir.mkdir(parents=True, exist_ok=True)
 
+    def set_log_file(self, path: str | Path | None) -> None:
+        """Legacy compatibility wrapper for single-file async logging."""
+        if path is None:
+            self._log_file = None
+        else:
+            self._log_file = Path(path).expanduser()
+            self._log_file.parent.mkdir(parents=True, exist_ok=True)
+
     def _write_to_file(self, entry: LogEntry) -> None:
-        """Write entry to category-specific log file (fire-and-forget async)."""
+        """Write entry to log output (fire-and-forget async)."""
         try:
             loop = asyncio.get_running_loop()
         except RuntimeError:
             return  # No running event loop
 
+        if getattr(self, '_log_file', None) is not None:
+            loop.create_task(self._write_to_single_file_async(entry))
+
         # Write to category-specific file if log_dir is set and entry has a category
         if hasattr(self, '_log_dir') and self._log_dir is not None and entry.category:
             loop.create_task(self._write_to_category_file_async(entry))
+
+    async def _write_to_single_file_async(self, entry: LogEntry) -> None:
+        """Async file write for legacy single-file logging."""
+        log_file = getattr(self, '_log_file', None)
+        if log_file is None:
+            return
+        try:
+            log_line = json.dumps({
+                "seq": entry.seq,
+                "timestamp": entry.timestamp,
+                "level": entry.level.value,
+                "message": entry.message,
+                "session_id": entry.session_id,
+                "category": entry.category,
+                "legacy_category": "test" if entry.category else "",
+                "run_id": entry.run_id,
+                "details": entry.details,
+            })
+            async with aiofiles.open(log_file, "a") as f:
+                await f.write(log_line + "\n")
+        except Exception:
+            pass
 
     async def _write_to_category_file_async(self, entry: LogEntry) -> None:
         """Async file write for category-specific log."""
@@ -334,15 +369,16 @@ class DebugLog:
             pass  # Don't let file errors crash logging
 
     def _add_entry(self, entry: LogEntry) -> None:
-        """Add entry to category buffer and notify listeners.
-
-        v2: No filtering on write. Entries always go to their category buffer.
-        Filtering (level, perf_mode) only affects listeners and file output.
-        """
+        """Add entry to category buffer and notify listeners."""
         if not self._enabled:
             return
 
-        # Always add to the appropriate category buffer (no filtering)
+        # Apply filters before storing so queries reflect active debug settings.
+        if self._perf_mode and entry.level not in (LogLevel.PERF, LogLevel.WARNING, LogLevel.ERROR):
+            return
+        if LogLevel.severity(entry.level) < LogLevel.severity(self._min_level):
+            return
+
         buffer = self._buffers.get(entry.category, self._default_buffer)
         buffer.append(entry)
 
@@ -350,19 +386,8 @@ class DebugLog:
         if self._enabled_categories and entry.category in self._enabled_categories:
             self._write_to_file(entry)
         elif not self._enabled_categories:
-            # If no categories enabled, write all (legacy behavior)
             self._write_to_file(entry)
 
-        # Apply filters for listener notification
-        # In perf mode, only notify for PERF, WARNING, and ERROR
-        if self._perf_mode:
-            if entry.level not in (LogLevel.PERF, LogLevel.WARNING, LogLevel.ERROR):
-                return
-        # Filter by minimum level
-        if LogLevel.severity(entry.level) < LogLevel.severity(self._min_level):
-            return
-
-        # Notify listeners
         for listener in self._listeners:
             try:
                 listener(entry)
@@ -528,8 +553,12 @@ class DebugLog:
             List of matching entries (newest first, sorted by seq)
         """
         if category is not None:
-            # Delegate to query for single category
-            return self.query(category, limit=limit or 100, level=level, session_id=session_id)
+            # Legacy compatibility: category-specific requests default to the oldest
+            # matching entry unless an explicit limit is provided.
+            entries = self.query(category, limit=None, level=level, session_id=session_id)
+            if limit is None:
+                return list(reversed(entries))[:1]
+            return entries[:limit]
 
         # Merge entries from all buffers
         all_entries: list[LogEntry] = []

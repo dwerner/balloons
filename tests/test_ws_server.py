@@ -948,13 +948,13 @@ websocket:
   port: 8765
   jwt:
     enabled: true
-    secret: my-secret-key
+    secret: my-secret-key-32-bytes-minimum!!
     expiration_seconds: 3600
 """)
 
         config = Config._load_from_file(config_file)
         assert config.websocket.jwt.enabled is True
-        assert config.websocket.jwt.secret == "my-secret-key"
+        assert config.websocket.jwt.secret == "my-secret-key-32-bytes-minimum!!"
         assert config.websocket.jwt.expiration_seconds == 3600
 
     def test_parse_jwt_config_disabled(self, tmp_path):
@@ -994,7 +994,7 @@ class TestJWTAuthentication:
         from config import WebSocketConfig, JWTConfig
 
         config = WebSocketConfig(
-            jwt=JWTConfig(enabled=True, secret="test-secret"),
+            jwt=JWTConfig(enabled=True, secret="test-secret-32-bytes-minimum!!!!"),
         )
         server = WsServer(config=config)
         assert server.jwt_enabled is True
@@ -1016,7 +1016,7 @@ class TestJWTAuthentication:
         from config import WebSocketConfig, JWTConfig
 
         config = WebSocketConfig(
-            jwt=JWTConfig(enabled=True, secret="test-secret-key-32-chars-long!!"),
+            jwt=JWTConfig(enabled=True, secret="test-secret-key-32-chars-long!!!"),
         )
         server = WsServer(config=config)
 
@@ -1066,7 +1066,7 @@ class TestJWTAuthentication:
         from config import WebSocketConfig, JWTConfig
 
         config = WebSocketConfig(
-            jwt=JWTConfig(enabled=True, secret="test-secret"),
+            jwt=JWTConfig(enabled=True, secret="test-secret-32-bytes-minimum!!!!"),
         )
         server = WsServer(config=config)
 
@@ -1113,7 +1113,7 @@ class TestJWTAuthentication:
         from config import WebSocketConfig, JWTConfig
 
         config = WebSocketConfig(
-            jwt=JWTConfig(enabled=True, secret="test-secret"),
+            jwt=JWTConfig(enabled=True, secret="test-secret-32-bytes-minimum!!!!"),
         )
         server = WsServer(config=config)
 
@@ -1132,7 +1132,7 @@ class TestJWTAuthentication:
         from config import WebSocketConfig, JWTConfig
 
         config = WebSocketConfig(
-            jwt=JWTConfig(enabled=True, secret="test"),
+            jwt=JWTConfig(enabled=True, secret="test-test-test-test-test-test-12345"),
         )
         server = WsServer(config=config)
 
@@ -1148,7 +1148,7 @@ class TestJWTAuthentication:
         from config import WebSocketConfig, JWTConfig
 
         config = WebSocketConfig(
-            jwt=JWTConfig(enabled=True, secret="test"),
+            jwt=JWTConfig(enabled=True, secret="test-test-test-test-test-test-12345"),
         )
         server = WsServer(config=config)
 

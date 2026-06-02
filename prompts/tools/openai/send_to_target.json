@@ -1,0 +1,17 @@
+{
+  "type": "function",
+  "function": {
+    "name": "send_to_target",
+    "description": "Send a message to the target session being watched. The message is queued and delivered when the target completes its current exchange.",
+    "parameters": {
+      "type": "object",
+      "properties": {
+        "message": {
+          "type": "string",
+          "description": "The message to send to the target session"
+        }
+      },
+      "required": ["message"]
+    }
+  }
+}

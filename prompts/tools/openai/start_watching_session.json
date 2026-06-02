@@ -1,0 +1,21 @@
+{
+  "type": "function",
+  "function": {
+    "name": "start_watching_session",
+    "description": "Attach a session as a watcher of a target session.",
+    "parameters": {
+      "type": "object",
+      "properties": {
+        "session_id": {
+          "type": "string",
+          "description": "ID of the session that should become the watcher"
+        },
+        "target_session_id": {
+          "type": "string",
+          "description": "ID of the session to watch"
+        }
+      },
+      "required": ["session_id", "target_session_id"]
+    }
+  }
+}

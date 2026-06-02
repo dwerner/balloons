@@ -230,6 +230,124 @@ def _python_type_to_json_schema(py_type: Any) -> dict[str, Any]:
     return {}
 
 
+@dataclass
+class BuiltinLLMCallableSpec:
+    """Specification for a built-in LLM-callable function."""
+
+    name: str
+    description: str
+    parameters: dict[str, Any]
+    required: list[str]
+    handler: Callable
+    category: str = "builtin"
+
+
+class BuiltinLLMCallableRegistry:
+    """Registry of built-in LLM-callable functions."""
+
+    _registry: dict[str, BuiltinLLMCallableSpec] = {}
+
+    @classmethod
+    def register(cls, spec: BuiltinLLMCallableSpec) -> None:
+        cls._registry[spec.name] = spec
+
+    @classmethod
+    def get_spec(cls, tool_name: str) -> BuiltinLLMCallableSpec | None:
+        return cls._registry.get(tool_name)
+
+    @classmethod
+    def get_all_specs(cls) -> list[BuiltinLLMCallableSpec]:
+        return list(cls._registry.values())
+
+    @classmethod
+    def get_tool_defs(cls) -> list[ToolDef]:
+        return [
+            ToolDef(
+                name=spec.name,
+                description=spec.description,
+                parameters={
+                    "type": "object",
+                    "properties": spec.parameters,
+                    "required": spec.required,
+                },
+            )
+            for spec in cls.get_all_specs()
+        ]
+
+    @classmethod
+    def get_handler(cls, tool_name: str) -> Callable | None:
+        spec = cls.get_spec(tool_name)
+        return spec.handler if spec else None
+
+
+_RUNTIMЕ_INJECTED_PARAMS = {"session", "working_dir", "output_callback"}
+
+
+def llm_callable_builtin(
+    func: Callable = None,
+    *,
+    name: str = None,
+    description: str = None,
+    params: dict[str, Param] | None = None,
+    category: str = "builtin",
+):
+    """Mark a function as a built-in LLM-callable tool.
+
+    Similar to @llm_callable, but intended for core/built-in tools instead of
+    domain plugin methods. Parameters named session, working_dir, and
+    output_callback are treated as runtime-injected and excluded from the
+    exposed tool schema.
+    """
+
+    def decorator(method: Callable) -> Callable:
+        sig = inspect.signature(method)
+        try:
+            type_hints = get_type_hints(method, include_extras=True)
+        except NameError:
+            type_hints = getattr(method, "__annotations__", {})
+        tool_name = name or method.__name__
+        tool_description = description or inspect.getdoc(method) or ""
+
+        properties: dict[str, Any] = {}
+        required: list[str] = []
+
+        for param_name, param in sig.parameters.items():
+            if param_name in _RUNTIMЕ_INJECTED_PARAMS:
+                continue
+            if param_name == "self":
+                continue
+
+            if params and param_name in params:
+                schema = params[param_name].to_json_schema()
+                is_required = params[param_name].required
+                if is_required is None:
+                    is_required = param.default is inspect.Parameter.empty
+            else:
+                param_type = type_hints.get(param_name, str)
+                schema = _python_type_to_json_schema(param_type)
+                is_required = param.default is inspect.Parameter.empty
+
+            properties[param_name] = schema
+            if is_required:
+                required.append(param_name)
+
+        spec = BuiltinLLMCallableSpec(
+            name=tool_name,
+            description=tool_description,
+            parameters=properties,
+            required=required,
+            handler=method,
+            category=category,
+        )
+        BuiltinLLMCallableRegistry.register(spec)
+        method._builtin_llm_callable_spec = spec
+        return method
+
+    if func is not None:
+        return decorator(func)
+    return decorator
+
+
 def llm_callable(
     method: Callable = None,
     *,

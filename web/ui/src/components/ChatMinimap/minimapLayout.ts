@@ -15,6 +15,10 @@ import type {
 // Layout constants
 const MIN_EXCHANGE_HEIGHT = 3;  // Minimum height for visibility in minimap
 
+function yClamp(value: number, min: number, max: number): number {
+  return Math.max(min, Math.min(value, max));
+}
+
 /**
  * Calculate minimap layout from DOM-measured exchange positions
  *
@@ -26,7 +30,10 @@ export function calculateMinimapLayoutFromDOM(
   canvasHeight: number,
   scrollTop: number,
   scrollHeight: number,
-  viewportHeight: number
+  viewportHeight: number,
+  zoom: number = 1,
+  zoomAnchorScrollTop?: number,
+  zoomAnchorCanvasY?: number
 ): MinimapLayout {
   if (exchangeRects.length === 0 || canvasHeight <= 0 || scrollHeight <= 0) {
     return {
@@ -38,8 +45,10 @@ export function calculateMinimapLayoutFromDOM(
     };
   }
 
-  // Scale factor: canvas pixels per scroll pixel
-  const scale = canvasHeight / scrollHeight;
+  // Scale factor: minimap pixels per scroll pixel
+  const baseScale = canvasHeight / scrollHeight;
+  const scale = baseScale * zoom;
+  const totalHeight = scrollHeight * scale;
 
   const exchangeLayouts: MinimapExchangeLayout[] = [];
 
@@ -57,21 +66,58 @@ export function calculateMinimapLayoutFromDOM(
       y,
       height,
       turns: [], // Individual turns rendered as a block
+      jumpBlocks: rect.jumpBlocks?.map((block) => ({
+        block,
+        y: block.top * scale,
+        height: Math.max(block.height * scale, MIN_EXCHANGE_HEIGHT),
+      })) ?? [],
       turnRange: rect.turnRange,
       tokenCount: rect.tokenCount,
     });
   }
 
-  // Viewport position - simple scale since we're using scroll coordinates directly
-  const viewportTop = scrollTop * scale;
+  // Viewport position within virtual minimap content
   const viewportHeightScaled = Math.max(viewportHeight * scale, 10);
+  const maxOffsetY = Math.max(0, totalHeight - canvasHeight);
+  let contentOffsetY: number;
+
+  const visibleTop = scrollTop * scale;
+  const visibleBottom = visibleTop + viewportHeightScaled;
+
+  if (zoom > 1 && zoomAnchorScrollTop !== undefined) {
+    const anchorScrollTop = yClamp(zoomAnchorScrollTop, 0, Math.max(scrollHeight, 0));
+    const anchorCanvasY = yClamp(zoomAnchorCanvasY ?? (canvasHeight / 2), 0, canvasHeight);
+    const anchorContentY = anchorScrollTop * scale;
+    contentOffsetY = anchorContentY - anchorCanvasY;
+
+    const anchoredViewportTop = visibleTop - contentOffsetY;
+    const anchoredViewportBottom = anchoredViewportTop + viewportHeightScaled;
+
+    if (anchoredViewportBottom > canvasHeight) {
+      contentOffsetY += anchoredViewportBottom - canvasHeight;
+    }
+    if (anchoredViewportTop < 0) {
+      contentOffsetY += anchoredViewportTop;
+    }
+  } else {
+    contentOffsetY = Math.max(0, Math.min(visibleBottom - canvasHeight, maxOffsetY));
+    if (visibleTop < contentOffsetY) {
+      contentOffsetY = visibleTop;
+    }
+  }
+
+  contentOffsetY = Math.max(0, Math.min(contentOffsetY, maxOffsetY));
+  const viewportTop = scrollTop * scale - contentOffsetY;
 
   return {
     exchanges: exchangeLayouts,
-    totalHeight: canvasHeight,
+    totalHeight,
     viewportTop,
     viewportHeight: viewportHeightScaled,
     scale,
+    contentOffsetY,
+    anchorCanvasY: zoomAnchorCanvasY,
+    maxContentOffsetY: maxOffsetY,
   };
 }
 
@@ -125,8 +171,9 @@ export function findExchangeAtPosition(
   layout: MinimapLayout,
   y: number
 ): MinimapExchangeLayout | null {
+  const contentY = y + (layout.contentOffsetY ?? 0);
   for (const exLayout of layout.exchanges) {
-    if (y >= exLayout.y && y < exLayout.y + exLayout.height) {
+    if (contentY >= exLayout.y && contentY < exLayout.y + exLayout.height) {
       return exLayout;
     }
   }
@@ -144,8 +191,9 @@ export function minimapYToScrollPosition(
 ): number {
   if (layout.scale <= 0) return 0;
 
-  // Direct scale conversion - minimap is proportional to scroll
-  const scrollTop = y / layout.scale;
+  // Convert canvas Y into virtual minimap content Y, then to scroll position
+  const contentY = y + (layout.contentOffsetY ?? 0);
+  const scrollTop = contentY / layout.scale;
 
   // Clamp to valid scroll range
   const maxScroll = scrollHeight - viewportHeight;

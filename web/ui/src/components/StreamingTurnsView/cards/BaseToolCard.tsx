@@ -49,6 +49,12 @@ export interface BaseToolCardProps {
   rawData?: unknown;
   /** ISO 8601 timestamp when turn was created */
   timestamp?: string;
+  /** Extra data attributes for the card root */
+  dataAttributes?: Record<string, string | undefined>;
+  /** Minimap jump block kind */
+  minimapKind?: string;
+  /** Minimap jump block label */
+  minimapLabel?: string;
 }
 
 // Phase to icon mapping
@@ -162,6 +168,9 @@ export const BaseToolCard = React.memo(function BaseToolCard({
   initialDisplayMode = 'formatted',
   rawData,
   timestamp,
+  dataAttributes,
+  minimapKind,
+  minimapLabel,
 }: BaseToolCardProps) {
   const { expandToolCards: expandToolCardsPref } = usePreferences();
   // Use deferred value to make preference changes non-blocking
@@ -228,7 +237,7 @@ export const BaseToolCard = React.memo(function BaseToolCard({
   const hasRawData = rawData !== undefined;
 
   return (
-    <div className={`turn-card tool-card ${statusClass} ${isActive ? 'streaming' : ''} ${displayMode === 'raw' ? 'raw-mode' : ''} ${className}`}>
+    <div className={`turn-card tool-card ${statusClass} ${isActive ? 'streaming' : ''} ${displayMode === 'raw' ? 'raw-mode' : ''} ${className}`} data-minimap-jump-block="true" data-minimap-kind={minimapKind || toolName.toLowerCase()} data-minimap-label={minimapLabel || toolName} {...dataAttributes}>
       <CardBackgroundPattern />
       <div
         className={`tool-card-header ${isCollapsible ? 'collapsible-header-clickable' : ''}`}

@@ -89,6 +89,12 @@ export const GlobCard = React.memo(function GlobCard({ turn, result }: GlobCardP
       className="glob-card"
       rawData={rawData}
       timestamp={turn.timestamp}
+      dataAttributes={{
+        'data-turn-id': turn.turnId,
+        'data-file-path': path || undefined,
+      }}
+      minimapKind="glob"
+      minimapLabel={path ? `Glob · ${formatRelativePath(path)}` : 'Glob'}
     >
       {hasResult && (
         <>

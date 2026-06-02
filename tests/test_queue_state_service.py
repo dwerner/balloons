@@ -1,38 +1,15 @@
 """Tests for QueueStateService."""
 
 import pytest
-import importlib.util
-from pathlib import Path
 from dataclasses import dataclass
 
-# Mark all async tests to use pytest-asyncio
-pytestmark = pytest.mark.asyncio
-
-# Import QueueState directly to avoid heavy core/__init__.py dependencies
-_queue_state_path = Path(__file__).parent.parent / "core" / "queue_state.py"
-_spec = importlib.util.spec_from_file_location("queue_state", _queue_state_path)
-_queue_state_module = importlib.util.module_from_spec(_spec)
-_spec.loader.exec_module(_queue_state_module)
-
-QueueState = _queue_state_module.QueueState
-QueueEvent = _queue_state_module.QueueEvent
-
-# Import service module
-_service_path = Path(__file__).parent.parent / "service" / "queue_state_service.py"
-_spec2 = importlib.util.spec_from_file_location("queue_state_service", _service_path)
-_queue_state_service_module = importlib.util.module_from_spec(_spec2)
-
-# Need to set up codegen imports for the service module
-import sys
-
-# Make sure codegen is importable
-sys.path.insert(0, str(Path(__file__).parent.parent))
-_spec2.loader.exec_module(_queue_state_service_module)
-
-QueueStateService = _queue_state_service_module.QueueStateService
-QueueInfo = _queue_state_service_module.QueueInfo
-QueuedMessageInfo = _queue_state_service_module.QueuedMessageInfo
-QueueEventData = _queue_state_service_module.QueueEventData
+from core.queue_state import QueueState, QueueEvent
+from service.queue_state_service import (
+    QueueStateService,
+    QueueInfo,
+    QueuedMessageInfo,
+    QueueEventData,
+)
 
 
 @pytest.fixture

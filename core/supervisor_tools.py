@@ -22,15 +22,15 @@ from .debug_log import debug_log, Category
 if TYPE_CHECKING:
     from session import Session
 
-# Tool names handled by this module
+# Legacy public tool-name contract used by tests/UI.
 SUPERVISOR_TOOL_NAMES = {
     "supervisor_start",
     "supervisor_list",
+    "supervisor_query",
+    "supervisor_host_status",
     "supervisor_output",
     "supervisor_stop",
     "supervisor_input",
-    "supervisor_query",
-    "supervisor_host_status",
 }
 
 # Global supervisor instance - set by app on startup

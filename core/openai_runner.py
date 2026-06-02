@@ -233,7 +233,7 @@ class OpenAICompatibleRunner(BaseRunner):
             # Do not convert them into user turns: strict Jinja templates like
             # Mistral's require user/assistant alternation and will reject
             # synthetic user messages inserted from system metadata.
-            if msg.role == "system":
+            if msg.role == "system" and not msg.content_blocks:
                 continue
 
             # Handle tool results specially - they use role="tool" in OpenAI format
@@ -260,7 +260,7 @@ class OpenAICompatibleRunner(BaseRunner):
                 continue
 
             # Build content from blocks if available
-            if msg.content_blocks:
+            if msg.content_blocks or (role == "assistant" and msg.role == "system"):
                 content_parts = []
                 image_blocks = []
                 tool_use_blocks = []
@@ -287,7 +287,8 @@ class OpenAICompatibleRunner(BaseRunner):
                         content_parts.append(f"[Error: {block.reason}]")
                     elif isinstance(block, ArchiveBlock):
                         # Format archive reference with summary
-                        archive_info = f"[Archived {block.message_count} turns: {block.summary}]"
+                        summary = block.summary or f"Archived {block.message_count} turns"
+                        archive_info = f"[Archived {block.message_count} turns: {summary}]"
                         archive_info += f"\n(Use read_archive tool with archive_id={block.archive_id} to retrieve full content)"
                         content_parts.append(archive_info)
 

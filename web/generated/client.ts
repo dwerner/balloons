@@ -1,7 +1,7 @@
 // AUTO-GENERATED CODE - DO NOT EDIT
 //
 // Generated from Python @ws_expose and @ws_event decorators.
-// Generated: 2026-05-25T10:27:04.356154
+// Generated: 2026-06-01T14:31:38.529241
 //
 // To regenerate:
 //     python -m codegen.generate_typescript
@@ -511,15 +511,8 @@ export interface SessionManagerService {
   /**
    * Create a watcher session to observe another session.
    * 
-   * The watcher session will receive summaries of exchanges from the target
-   * session. The user can provide instructions to the watcher to guide how
-   * summaries are generated and how the watcher should respond.
-   * 
-   * Args:
-   * target_session_id: ID of the session to watch
-   * 
-   * Returns:
-   * CreateWatcherSessionResult with the new watcher session info
+   * Deprecated convenience wrapper. Prefer creating a normal session and then
+   * calling start_watching_session.
    */
   createWatcherSession(targetSessionId: string): Promise<Types.CreateWatcherSessionResult>;
 
@@ -634,8 +627,14 @@ export interface SessionManagerService {
   /**
    * Get all available tools grouped by category.
    * 
+   * This powers the Context tab tool list. It is primarily driven by tool-prompt
+   * discovery (prompts/tools/*) plus a few hardcoded tool families that do not
+   * participate in prompt-file discovery, such as core built-ins and currently
+   * loaded domain plugin tools.
+   * 
    * Returns:
-   * Dict with categories mapping to tool lists, plus 'core' and 'all'
+   * Dict with categories mapping to tool lists, plus 'core', 'all', and
+   * metadata distinguishing built-ins vs domain tools.
    */
   getAvailableTools(): Promise<Record<string, unknown>>;
 
@@ -1074,17 +1073,25 @@ export interface SessionManagerService {
   startSessionReview(sessionId: string, backendName: string): Promise<Types.StartSessionReviewResult>;
 
   /**
-   * Stop a watcher session from watching a target.
+   * Attach an existing session as a watcher of a target session.
+   * 
+   * This is the primary primitive for making any existing session, including
+   * a fork, begin watching another session.
+   */
+  startWatchingSession(sessionId: string, targetSessionId: string): Promise<Types.CreateWatcherSessionResult>;
+
+  /**
+   * Stop a session from watching one or more targets.
    * 
    * Args:
-   * watcher_session_id: ID of the watcher session
+   * session_id: ID of the session that is watching
    * target_session_id: ID of the target to stop watching (if None, stops all)
    * reason: Why watching stopped ("user", "session_closed", "session_archived")
    * 
    * Returns:
    * True if successfully stopped, False otherwise
    */
-  stopWatching(watcherSessionId: string, targetSessionId?: string | null, reason?: string): Promise<boolean>;
+  stopWatchingSession(sessionId: string, targetSessionId?: string | null, reason?: string): Promise<boolean>;
 
   /**
    * Submit a markdown message to a session and start streaming the response.
@@ -1525,8 +1532,12 @@ export class SessionManagerServiceClient implements SessionManagerService {
     return this.call('startSessionReview', { sessionId: sessionId, backendName: backendName });
   }
 
-  async stopWatching(watcherSessionId: string, targetSessionId?: string | null, reason?: string): Promise<boolean> {
-    return this.call('stopWatching', { watcherSessionId: watcherSessionId, targetSessionId: targetSessionId, reason: reason });
+  async startWatchingSession(sessionId: string, targetSessionId: string): Promise<Types.CreateWatcherSessionResult> {
+    return this.call('startWatchingSession', { sessionId: sessionId, targetSessionId: targetSessionId });
+  }
+
+  async stopWatchingSession(sessionId: string, targetSessionId?: string | null, reason?: string): Promise<boolean> {
+    return this.call('stopWatchingSession', { sessionId: sessionId, targetSessionId: targetSessionId, reason: reason });
   }
 
   async submitMarkdownMessage(sessionId: string, content: string, queue?: boolean, allowedTools?: string[] | null): Promise<Types.SubmitMessageResult> {

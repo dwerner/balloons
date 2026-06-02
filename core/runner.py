@@ -288,16 +288,20 @@ class SessionRunner:
         self._status = RunnerStatus.STREAMING
         self._turn_index = len(self.session.turns)  # Next turn index
 
-        # If this is a watcher session, include watcher tools (send_to_target)
+        # If this is a watcher session, include watcher tools
         if self.session.is_watcher:
             if allowed_tools is None:
                 # None means "all tools" - add watcher tools to that set
                 allowed_tools = None  # Keep as None, watcher tools will be included via system
             else:
-                # Specific allowed tools - add send_to_target
-                allowed_tools = list(allowed_tools) + ["send_to_target"]
+                # Specific allowed tools - add watcher tools
+                allowed_tools = list(allowed_tools) + [
+                    "send_to_target",
+                    "start_watching_session",
+                    "stop_watching_session",
+                ]
             debug_log.debug(
-                "Watcher session - including send_to_target tool",
+                "Watcher session - including watcher tools",
                 session_id=self.session.id,
                 category=Category.RUNNER,
             )
@@ -464,11 +468,15 @@ class SessionRunner:
         self._status = RunnerStatus.STREAMING
         self._turn_index = len(self.session.turns)  # Next turn index
 
-        # If this is a watcher session, include watcher tools (send_to_target)
+        # If this is a watcher session, include watcher tools
         if self.session.is_watcher:
             if allowed_tools is not None:
-                # Specific allowed tools - add send_to_target
-                allowed_tools = list(allowed_tools) + ["send_to_target"]
+                # Specific allowed tools - add watcher tools
+                allowed_tools = list(allowed_tools) + [
+                    "send_to_target",
+                    "start_watching_session",
+                    "stop_watching_session",
+                ]
 
         # Debug log to trace turn_id
         from core.debug_log import debug_log
@@ -627,7 +635,7 @@ class SessionRunner:
                 exchange_id=self._exchange_id,
                 turns=self._turns,
             )
-            await self._event_queue.put(self._make_event("error", {"message": error_text, "dump_file": dump_file}))
+            await self._event_queue.put(self._make_event("error", error_text if not dump_file else {"message": error_text, "dump_file": dump_file}))
 
     def drain_events(self) -> list[StreamEvent]:
         """Get all queued events without blocking.
@@ -1390,7 +1398,7 @@ class HelperRunner:
                     dump_file = error_text.split(marker, 1)[1].rstrip(")")
                 except Exception:
                     dump_file = ""
-            await self._event_queue.put(self._make_event("error", {"message": error_text, "dump_file": dump_file}))
+            await self._event_queue.put(self._make_event("error", error_text if not dump_file else {"message": error_text, "dump_file": dump_file}))
 
     def drain_events(self) -> list[StreamEvent]:
         """Get all queued events without blocking."""

@@ -85,6 +85,12 @@ export const WriteCard = React.memo(function WriteCard({ turn, result }: WriteCa
       className="write-card"
       rawData={rawData}
       timestamp={turn.timestamp}
+      dataAttributes={{
+        'data-turn-id': turn.turnId,
+        'data-file-path': filePath || undefined,
+      }}
+      minimapKind="write"
+      minimapLabel={filePath ? `Write · ${formatRelativePath(filePath)}` : 'Write'}
     >
       {/* Show content preview with syntax highlighting */}
       {content && (

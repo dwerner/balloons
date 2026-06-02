@@ -432,7 +432,7 @@ export function PropertiesTab({
       </section>
 
       {/* Relationships Section */}
-      {(session.parentId || session.bindingIndicator || (session.forkStatus && session.forkStatus !== 'none')) && (
+      {(session.parentId || session.bindingIndicator || (session.forkStatus && session.forkStatus !== 'none') || (session.watchTargets && session.watchTargets.length > 0)) && (
         <section className="properties-section">
           <h3 className="properties-section__title">Relationships</h3>
           <div className="properties-grid">
@@ -454,6 +454,14 @@ export function PropertiesTab({
               <div className="property-row">
                 <span className="property-label">Binding</span>
                 <span className="property-value property-value--readonly">{session.bindingIndicator}</span>
+              </div>
+            )}
+            {session.watchTargets && session.watchTargets.length > 0 && (
+              <div className="property-row">
+                <span className="property-label">Watching</span>
+                <span className="property-value property-value--readonly property-value--mono">
+                  {session.watchTargets.map(id => id.slice(0, 8)).join(', ')}
+                </span>
               </div>
             )}
           </div>

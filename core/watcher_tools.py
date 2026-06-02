@@ -11,7 +11,11 @@ from core.debug_log import debug_log, Category
 
 
 # Tool names handled by this module
-WATCHER_TOOL_NAMES = {"send_to_target"}
+WATCHER_TOOL_NAMES = {
+    "send_to_target",
+    "start_watching_session",
+    "stop_watching_session",
+}
 
 
 async def execute_watcher_tool(
@@ -31,6 +35,10 @@ async def execute_watcher_tool(
     """
     if name == "send_to_target":
         return await _execute_send_to_target(args, current_session)
+    elif name == "start_watching_session":
+        return await _execute_start_watching_session(args, current_session)
+    elif name == "stop_watching_session":
+        return await _execute_stop_watching_session(args, current_session)
     else:
         return f"Unknown watcher tool: {name}", True
 
@@ -120,3 +128,84 @@ async def _execute_send_to_target(args: dict[str, Any], watcher_session: Session
     }
 
     return json.dumps(result, indent=2), False
+
+
+
+async def _execute_start_watching_session(args: dict[str, Any], current_session: Session) -> tuple[str, bool]:
+    """Attach a session as a watcher of a target session."""
+    session_id = args.get("session_id")
+    target_session_id = args.get("target_session_id")
+    if not session_id:
+        return "Error: session_id is required", True
+    if not target_session_id:
+        return "Error: target_session_id is required", True
+
+    try:
+        manager = getattr(current_session, "_manager", None) or getattr(current_session, "session_manager", None)
+        if manager is None:
+            return "Error: start_watching_session is unavailable without a registered session manager", True
+        service = manager.get_service() if hasattr(manager, "get_service") else None
+        if service is None:
+            return "Error: start_watching_session is unavailable without an attached session manager service", True
+        result = await service.start_watching_session(
+            session_id=session_id,
+            target_session_id=target_session_id,
+        )
+    except Exception as e:
+        debug_log.error(
+            f"Failed to start watching session via watcher tool from {current_session.id[:8]}: {e}",
+            category=Category.SESSION,
+        )
+        return f"Error: Failed to start watching session: {e}", True
+
+    if not result.success:
+        return result.error or "Error: Failed to start watching session", True
+
+    payload = {
+        "status": "watching",
+        "watcher_session_id": result.watcher_session_id,
+        "target_session_id": result.target_session_id,
+        "target_session_name": result.target_session_name,
+        "watcher_name": result.watcher_name,
+    }
+    return json.dumps(payload, indent=2), False
+
+
+async def _execute_stop_watching_session(args: dict[str, Any], current_session: Session) -> tuple[str, bool]:
+    """Stop a session from watching one or more target sessions."""
+    session_id = args.get("session_id")
+    if not session_id:
+        return "Error: session_id is required", True
+
+    target_session_id = args.get("target_session_id")
+    reason = args.get("reason", "user")
+
+    try:
+        manager = getattr(current_session, "_manager", None) or getattr(current_session, "session_manager", None)
+        if manager is None:
+            return "Error: stop_watching_session is unavailable without a registered session manager", True
+        service = manager.get_service() if hasattr(manager, "get_service") else None
+        if service is None:
+            return "Error: stop_watching_session is unavailable without an attached session manager service", True
+        success = await service.stop_watching_session(
+            session_id=session_id,
+            target_session_id=target_session_id,
+            reason=reason,
+        )
+    except Exception as e:
+        debug_log.error(
+            f"Failed to stop watching session via watcher tool from {current_session.id[:8]}: {e}",
+            category=Category.SESSION,
+        )
+        return f"Error: Failed to stop watching session: {e}", True
+
+    if not success:
+        return "Error: Failed to stop watching session", True
+
+    payload = {
+        "status": "stopped",
+        "session_id": session_id,
+        "target_session_id": target_session_id,
+        "reason": reason,
+    }
+    return json.dumps(payload, indent=2), False
