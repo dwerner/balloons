@@ -904,18 +904,23 @@ def builtin_propose_merge(
 def execute_propose_merge(args: dict) -> tuple[str, bool]:
     """Handle a propose_merge tool call.
 
-    This validates the proposal arguments and returns a structured JSON result
-    containing the full proposal state. The UI renders this as an interactive
-    card where the user can modify the summary and accept/reject.
+    This layer only validates the tool arguments and returns the sentinel
+    string ``MERGE_PROPOSAL_PENDING``.
 
-    The tool_result becomes the source of truth for proposal state.
+    The actual proposal UI/state is no longer encoded in the tool result.
+    Instead, higher-level session handling intercepts the ``propose_merge``
+    tool_use event, keeps the tool input on the resulting ToolUseBlock, and
+    the frontend renders MergeProposalCard directly from that tool_use block.
+    ``parse_merge_proposal()`` remains here because the app/service layer uses
+    it to validate/log/interact with the structured tool input after
+    interception.
 
     Args:
         args: Tool arguments containing summary, reason, files_changed, etc.
               Accepts both snake_case and camelCase parameter names.
 
     Returns:
-        Tuple of (result_string, is_error) - result is JSON with proposal state
+        Tuple of (result_string, is_error)
     """
     # Normalize args to handle camelCase variants and stringified JSON
     args = _normalize_tool_args(args, {
@@ -938,19 +943,9 @@ def execute_propose_merge(args: dict) -> tuple[str, bool]:
     if not isinstance(key_accomplishments, list):
         return "Error: key_accomplishments must be a list", True
 
-    # Return structured JSON with the full proposal state
-    result = {
-        "_type": "merge_proposal",
-        "_status": "pending",  # pending | accepted | rejected
-        "summary": summary,
-        "reason": args.get("reason", ""),
-        "files_changed": files_changed,
-        "key_accomplishments": key_accomplishments,
-        # Set when merge is accepted:
-        "_merge_id": None,
-        "_parent_session_id": None,
-    }
-    return json.dumps(result), False
+    # Legacy tool contract: app layer intercepts the tool call and handles the
+    # proposal state separately.
+    return "MERGE_PROPOSAL_PENDING", False
 
 
 def parse_merge_proposal(args: dict) -> MergeProposal | None:

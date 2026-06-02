@@ -635,7 +635,7 @@ class SessionRunner:
                 exchange_id=self._exchange_id,
                 turns=self._turns,
             )
-            await self._event_queue.put(self._make_event("error", {"message": error_text, "dump_file": dump_file}))
+            await self._event_queue.put(self._make_event("error", error_text if not dump_file else {"message": error_text, "dump_file": dump_file}))
 
     def drain_events(self) -> list[StreamEvent]:
         """Get all queued events without blocking.
@@ -1398,7 +1398,7 @@ class HelperRunner:
                     dump_file = error_text.split(marker, 1)[1].rstrip(")")
                 except Exception:
                     dump_file = ""
-            await self._event_queue.put(self._make_event("error", {"message": error_text, "dump_file": dump_file}))
+            await self._event_queue.put(self._make_event("error", error_text if not dump_file else {"message": error_text, "dump_file": dump_file}))
 
     def drain_events(self) -> list[StreamEvent]:
         """Get all queued events without blocking."""

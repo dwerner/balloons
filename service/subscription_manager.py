@@ -29,7 +29,7 @@ from enum import Enum
 from typing import Set, Dict
 
 
-class Layer(Enum):
+class Layer(str, Enum):
     """Subscription layers for session events.
 
     Each layer represents a category of events with different bandwidth costs:
