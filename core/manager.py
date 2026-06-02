@@ -71,6 +71,15 @@ class SessionManager:
         self._backend_config = backend_config or BackendConfig(name="claude")
         self._runner_factory = runner_factory
         self._default_enabled_tools = default_enabled_tools
+        self._service = None
+
+    def set_service(self, service) -> None:
+        """Attach the live SessionManagerService for runtime-aware operations."""
+        self._service = service
+
+    def get_service(self):
+        """Get the live attached SessionManagerService, if available."""
+        return self._service
 
     @property
     def active_session_id(self) -> Optional[str]:

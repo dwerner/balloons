@@ -243,12 +243,12 @@ async def builtin_create_session(
     target_working_directory = working_directory or session.working_directory
 
     try:
-        from service.session_manager_service import SessionManagerService
-        from core.stream_state import get_stream_state
         manager = getattr(session, "_manager", None) or getattr(session, "session_manager", None)
         if manager is None:
             return "Error: create_session is unavailable without a registered session manager", True
-        service = SessionManagerService(manager, stream_state=get_stream_state())
+        service = manager.get_service() if hasattr(manager, "get_service") else None
+        if service is None:
+            return "Error: create_session is unavailable without an attached session manager service", True
         new_info = await service.create_session(target_working_directory)
     except Exception as e:
         return f"Error: Failed to create session: {e}", True

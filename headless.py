@@ -111,6 +111,7 @@ async def run_server(host: str | None = None, port: int | None = None) -> None:
         stream_state=stream_state,
         queue_state=queue_state,
     )
+    session_manager.set_service(session_service)
 
     async def load_session(session_id: str):
         return await session_manager.load_session(session_id)

@@ -4750,184 +4750,6 @@ Then I'll mark the session as concluded."""
 
     # --- Watcher Operations ---
 
-    async def _create_watcher_session_impl(
-        self,
-        target_session_id: str,
-        initial_prompt: str | None = None,
-        source_watcher_session_id: str | None = None,
-    ) -> CreateWatcherSessionResult:
-        """Internal implementation for creating a watcher session.
-
-        Supports both UI-initiated watcher creation and watcher-tool creation of
-        additional watcher sessions for the same target.
-        """
-        debug_log.info(
-            f"create_watcher_session called for target {target_session_id[:8]}",
-            category=Category.SESSION,
-            details={"source_watcher_session_id": source_watcher_session_id},
-        )
-
-        # Validate target session exists
-        target_session = self._manager.get_session(target_session_id)
-        if not target_session:
-            target_session = await self._manager.load_session(target_session_id)
-            if not target_session:
-                return CreateWatcherSessionResult(
-                    success=False,
-                    error=f"Target session {target_session_id} not found",
-                )
-
-        # Get target session name for display
-        target_name = target_session.title or target_session.fork_name or target_session.id[:8]
-
-        # Create the watcher session
-        watcher_session = await self._manager.create_session(
-            working_directory=target_session.working_directory
-        )
-
-        # Give the watcher a normal descriptive title; UI should rely on watch relationships,
-        # not title prefixes, for display logic.
-        watcher_name = f"Watcher for {target_name}"
-        watcher_session.title = watcher_name
-
-        # Add WatchStartBlock to establish the watching relationship
-        watch_turn = watcher_session.add_watch_start_turn(
-            target_session_id=target_session_id,
-            target_session_name=target_name,
-        )
-
-        # Add watcher instructions as a system-like user turn
-        watcher_instructions = self._get_watcher_instructions(target_name)
-        instructions_turn = watcher_session.add_turn(
-            role="user",
-            content_block=TextBlock(text=watcher_instructions),
-        )
-
-        extra_prompt_turn = None
-        if initial_prompt:
-            extra_prompt_turn = watcher_session.add_turn(
-                role="user",
-                content_block=TextBlock(text=initial_prompt),
-            )
-
-        # Save the watcher session
-        await watcher_session.save()
-
-        # Emit session created event
-        self._emit_event(SessionManagerEvent.SESSION_CREATED, watcher_session.id)
-
-        # Emit session added event so React UI can display the new session
-        self._emit_session_added(watcher_session, is_streaming=False)
-
-        # Emit turn events for the watch start (turn 0)
-        watch_exchange_id = str(uuid.uuid4())
-        await self._notify_observers(
-            "on_turn_created",
-            TurnCreatedEvent(
-                session_id=watcher_session.id,
-                turn_id=watch_turn.id,
-                turn_index=0,
-                role="system",
-                exchange_id=watch_exchange_id,
-                content_block_type="watch_start",
-            ),
-        )
-        await self._notify_observers(
-            "on_turn_finished",
-            TurnFinishedEvent(
-                session_id=watcher_session.id,
-                turn_id=watch_turn.id,
-                turn_index=0,
-                role="system",
-                content=f"[Watching {target_name}]",
-                tokens=0,
-                content_block=watch_turn.content_block,
-            ),
-        )
-
-        # Emit turn events for the instructions turn (turn 1)
-        instructions_exchange_id = str(uuid.uuid4())
-        await self._notify_observers(
-            "on_turn_created",
-            TurnCreatedEvent(
-                session_id=watcher_session.id,
-                turn_id=instructions_turn.id,
-                turn_index=1,
-                role="user",
-                exchange_id=instructions_exchange_id,
-                content_block_type="text",
-            ),
-        )
-        await self._notify_observers(
-            "on_turn_finished",
-            TurnFinishedEvent(
-                session_id=watcher_session.id,
-                turn_id=instructions_turn.id,
-                turn_index=1,
-                role="user",
-                content=watcher_instructions[:100] + "...",
-                tokens=0,
-                content_block=instructions_turn.content_block,
-            ),
-        )
-
-        if extra_prompt_turn is not None:
-            prompt_exchange_id = str(uuid.uuid4())
-            await self._notify_observers(
-                "on_turn_created",
-                TurnCreatedEvent(
-                    session_id=watcher_session.id,
-                    turn_id=extra_prompt_turn.id,
-                    turn_index=2,
-                    role="user",
-                    exchange_id=prompt_exchange_id,
-                    content_block_type="text",
-                ),
-            )
-            await self._notify_observers(
-                "on_turn_finished",
-                TurnFinishedEvent(
-                    session_id=watcher_session.id,
-                    turn_id=extra_prompt_turn.id,
-                    turn_index=2,
-                    role="user",
-                    content=initial_prompt[:100] + "..." if len(initial_prompt) > 100 else initial_prompt,
-                    tokens=0,
-                    content_block=extra_prompt_turn.content_block,
-                ),
-            )
-
-        # Register watcher relationship for live summarization
-        await self._register_watcher_internal(
-            watcher_session.id, target_session_id, target_name
-        )
-
-        debug_log.info(
-            f"Created watcher session: {watcher_session.id[:8]} watching {target_session_id[:8]}",
-            category=Category.SESSION,
-            details={"target_name": target_name, "watcher_name": watcher_name},
-        )
-
-        return CreateWatcherSessionResult(
-            success=True,
-            watcher_session_id=watcher_session.id,
-            target_session_id=target_session_id,
-            target_session_name=target_name,
-            watcher_name=watcher_name,
-        )
-
-    @ws_expose
-    async def create_watcher_session(
-        self,
-        target_session_id: str,
-    ) -> CreateWatcherSessionResult:
-        """Create a watcher session to observe another session.
-
-        Deprecated convenience wrapper. Prefer creating a normal session and then
-        calling start_watching_session.
-        """
-        return await self._create_watcher_session_impl(target_session_id)
-
     @ws_expose
     async def start_watching_session(
         self,
@@ -5024,37 +4846,6 @@ Then I'll mark the session as concluded."""
             watcher_name=watcher_name,
         )
 
-    async def create_watched_session(
-        self,
-        watcher_session_id: str,
-        prompt: str | None = None,
-    ) -> CreateWatcherSessionResult:
-        """Deprecated internal helper for creating another watcher on the same target.
-
-        Prefer creating a normal session and then calling start_watching_session.
-        """
-        watcher_session = self._manager.get_session(watcher_session_id)
-        if not watcher_session:
-            watcher_session = await self._manager.load_session(watcher_session_id)
-            if not watcher_session:
-                return CreateWatcherSessionResult(
-                    success=False,
-                    error=f"Watcher session {watcher_session_id} not found",
-                )
-
-        target_session_id = watcher_session.get_watch_target_id()
-        if not target_session_id:
-            return CreateWatcherSessionResult(
-                success=False,
-                error="Watcher session is not currently watching a target",
-            )
-
-        return await self._create_watcher_session_impl(
-            target_session_id=target_session_id,
-            initial_prompt=prompt,
-            source_watcher_session_id=watcher_session_id,
-        )
-
     @ws_expose
     async def stop_watching_session(
         self,
@@ -5148,8 +4939,8 @@ Then I'll mark the session as concluded."""
     ) -> None:
         """Register a watcher relationship internally.
 
-        Called when create_watcher_session creates the watching relationship,
-        or when loading from storage after server restart.
+        Called when a watching relationship is created or when loading from
+        storage after server restart.
 
         Args:
             watcher_session_id: ID of the watcher session
@@ -5178,7 +4969,7 @@ Then I'll mark the session as concluded."""
         # - "load": session loaded/switched, may need migration to LMDB
         # Skip "startup" since those are already loaded from LMDB
         if is_new and source in ("creation", "rebuild", "load"):
-            from datetime import datetime
+            from datetime import datetime, UTC
             from core.async_storage import get_watcher_storage, WatcherRelationData
 
             watcher_id = f"{watcher_session_id}:{target_session_id}"
@@ -5187,7 +4978,7 @@ Then I'll mark the session as concluded."""
                 watcher_session_id=watcher_session_id,
                 target_session_id=target_session_id,
                 target_session_name=target_session_name,
-                created_at=datetime.utcnow().isoformat() + "Z",
+                created_at=datetime.now(UTC).isoformat().replace("+00:00", "Z"),
             )
             try:
                 watcher_storage = await get_watcher_storage()

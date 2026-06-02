@@ -141,12 +141,12 @@ async def _execute_start_watching_session(args: dict[str, Any], current_session:
         return "Error: target_session_id is required", True
 
     try:
-        from service.session_manager_service import SessionManagerService
-        from core.stream_state import get_stream_state
-        from core.manager import SessionManager
-        manager = SessionManager()
-        service = SessionManagerService(manager, stream_state=get_stream_state())
-        await service.initialize()
+        manager = getattr(current_session, "_manager", None) or getattr(current_session, "session_manager", None)
+        if manager is None:
+            return "Error: start_watching_session is unavailable without a registered session manager", True
+        service = manager.get_service() if hasattr(manager, "get_service") else None
+        if service is None:
+            return "Error: start_watching_session is unavailable without an attached session manager service", True
         result = await service.start_watching_session(
             session_id=session_id,
             target_session_id=target_session_id,
@@ -181,12 +181,12 @@ async def _execute_stop_watching_session(args: dict[str, Any], current_session: 
     reason = args.get("reason", "user")
 
     try:
-        from service.session_manager_service import SessionManagerService
-        from core.stream_state import get_stream_state
-        from core.manager import SessionManager
-        manager = SessionManager()
-        service = SessionManagerService(manager, stream_state=get_stream_state())
-        await service.initialize()
+        manager = getattr(current_session, "_manager", None) or getattr(current_session, "session_manager", None)
+        if manager is None:
+            return "Error: stop_watching_session is unavailable without a registered session manager", True
+        service = manager.get_service() if hasattr(manager, "get_service") else None
+        if service is None:
+            return "Error: stop_watching_session is unavailable without an attached session manager service", True
         success = await service.stop_watching_session(
             session_id=session_id,
             target_session_id=target_session_id,
