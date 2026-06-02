@@ -156,6 +156,11 @@ export const EditCard = React.memo(function EditCard({ turn, result }: EditCardP
   return (
     <BaseToolCard
       toolName="Edit"
+      dataAttributes={{
+        'data-edit-block': 'true',
+        'data-turn-id': turn.turnId,
+        'data-file-path': filePath || undefined,
+      }}
       headerContent={headerContent}
       phase={phase}
       tokens={tokens}

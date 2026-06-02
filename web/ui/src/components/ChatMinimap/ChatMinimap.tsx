@@ -14,7 +14,7 @@
  */
 
 import React, { useRef, useState, useEffect, useCallback, useMemo } from 'react';
-import type { MinimapExchange, ExchangeDOMRect, MinimapExchangeLayout } from './minimapTypes';
+import type { MinimapExchange, ExchangeDOMRect, MinimapExchangeLayout, MinimapEditBlockLayout } from './minimapTypes';
 import { calculateMinimapLayout, calculateMinimapLayoutFromDOM, minimapYToScrollPosition, findExchangeAtPosition } from './minimapLayout';
 import { renderMinimap } from './minimapRender';
 import { getMinimapColors } from './minimapColors';
@@ -28,6 +28,15 @@ interface ContextMenuInfo {
   tokenCount?: number;
   turnIndices?: number[];
   turnIds?: string[];
+}
+
+function findEditBlockAtPosition(exchangeLayout: MinimapExchangeLayout, yWithinExchange: number): MinimapEditBlockLayout | null {
+  for (const editBlock of exchangeLayout.editBlocks ?? []) {
+    if (yWithinExchange >= editBlock.y && yWithinExchange < editBlock.y + editBlock.height) {
+      return editBlock;
+    }
+  }
+  return null;
 }
 
 export interface ChatMinimapProps {
@@ -49,6 +58,8 @@ export interface ChatMinimapProps {
   onNavigate: (scrollPosition: number) => void;
   /** Callback when user clicks on a specific exchange */
   onExchangeClick?: (exchangeId: string) => void;
+  /** Callback when user clicks on a specific edit block */
+  onEditBlockClick?: (turnId: string) => void;
   /** Callback when user requests to archive an exchange's turns */
   onArchiveExchange?: (turnIndices: number[], turnIds: string[]) => void;
   /** Currently selected/active exchange ID */
@@ -73,6 +84,7 @@ export function ChatMinimap({
   lastSeenTurnIndex,
   onNavigate,
   onExchangeClick,
+  onEditBlockClick,
   onArchiveExchange,
   selectedExchangeId,
   archivingExchangeIds,
@@ -86,6 +98,7 @@ export function ChatMinimap({
   const [isDragging, setIsDragging] = useState(false);
   const [canvasHeight, setCanvasHeight] = useState(0);
   const [hoveredExchangeId, setHoveredExchangeId] = useState<string | null>(null);
+  const [hoveredEditBlockId, setHoveredEditBlockId] = useState<string | null>(null);
   const [contextMenu, setContextMenu] = useState<ContextMenuInfo | null>(null);
   const [contextMenuPosition, setContextMenuPosition] = useState<{ left: number; top: number } | null>(null);
   const [tooltip, setTooltip] = useState<{ x: number; y: number; text: string } | null>(null);
@@ -231,10 +244,11 @@ export function ChatMinimap({
       showViewport: true,
       newContentFromY,
       hoveredExchangeId: hoveredExchangeId ?? undefined,
+      hoveredEditBlockId: hoveredEditBlockId ?? undefined,
       selectedExchangeId,
       archivingExchangeIds,
     });
-  }, [layout, colors, newContentFromY, hoveredExchangeId, selectedExchangeId, archivingExchangeIds]);
+  }, [layout, colors, newContentFromY, hoveredExchangeId, hoveredEditBlockId, selectedExchangeId, archivingExchangeIds]);
 
   // Navigation handlers
   const handleNavigateToY = useCallback((clientY: number) => {
@@ -261,19 +275,23 @@ export function ChatMinimap({
     (e.target as HTMLElement).setPointerCapture(e.pointerId);
     handleNavigateToY(e.clientY);
 
-    // Also check if clicking on a specific exchange
-    if (onExchangeClick && layout) {
+    if (layout) {
       const canvas = canvasRef.current;
       if (canvas) {
         const rect = canvas.getBoundingClientRect();
         const y = e.clientY - rect.top;
         const exLayout = findExchangeAtPosition(layout, y);
         if (exLayout) {
-          onExchangeClick(exLayout.exchange.id);
+          const editLayout = findEditBlockAtPosition(exLayout, y - exLayout.y);
+          if (editLayout && onEditBlockClick) {
+            onEditBlockClick(editLayout.block.turnId);
+          } else if (onExchangeClick) {
+            onExchangeClick(exLayout.exchange.id);
+          }
         }
       }
     }
-  }, [handleNavigateToY, onExchangeClick, layout]);
+  }, [handleNavigateToY, onExchangeClick, onEditBlockClick, layout]);
 
   const handlePointerMove = useCallback((e: React.PointerEvent) => {
     if (!isDragging) return;
@@ -294,11 +312,19 @@ export function ChatMinimap({
     const rect = canvas.getBoundingClientRect();
     const y = e.clientY - rect.top;
     const exLayout = findExchangeAtPosition(layout, y);
+    const editLayout = exLayout ? findEditBlockAtPosition(exLayout, y - exLayout.y) : null;
 
     setHoveredExchangeId(exLayout?.exchange.id ?? null);
+    setHoveredEditBlockId(editLayout?.block.id ?? null);
 
-    // Show tooltip with turn range (token count is rendered in the minimap itself)
-    if (exLayout) {
+    // Show tooltip with turn range or edit target
+    if (editLayout) {
+      setTooltip({
+        x: e.clientX,
+        y: e.clientY,
+        text: editLayout.block.filePath ? `Edit · ${editLayout.block.filePath}` : 'Edit',
+      });
+    } else if (exLayout) {
       const exchangeRect = exchangeRects?.find(r => r.id === exLayout.exchange.id);
       const turnRange = exLayout.turnRange || exchangeRect?.turnRange;
 
@@ -320,6 +346,7 @@ export function ChatMinimap({
   const handlePointerLeaveHover = useCallback(() => {
     if (!isDragging) {
       setHoveredExchangeId(null);
+      setHoveredEditBlockId(null);
       setTooltip(null);
     }
   }, [isDragging]);

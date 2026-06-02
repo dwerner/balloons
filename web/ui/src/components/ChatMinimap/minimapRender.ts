@@ -98,7 +98,7 @@ export function renderMinimap(
   height: number,
   options: MinimapRenderOptions
 ): void {
-  const { colors, showViewport, newContentFromY, hoveredExchangeId, selectedExchangeId, archivingExchangeIds } = options;
+  const { colors, showViewport, newContentFromY, hoveredExchangeId, hoveredEditBlockId, selectedExchangeId, archivingExchangeIds } = options;
 
   // Clear canvas
   ctx.fillStyle = colors.background;
@@ -219,6 +219,22 @@ export function renderMinimap(
         const labelY = y + exHeight / 2;
 
         ctx.fillText(tokenLabel, labelX, labelY);
+        ctx.restore();
+      }
+    }
+
+    if (exLayout.editBlocks && exLayout.editBlocks.length > 0) {
+      for (const editLayout of exLayout.editBlocks) {
+        const editY = y + editLayout.y;
+        const editHeight = Math.max(editLayout.height, 3);
+        const isHoveredEdit = editLayout.block.id === hoveredEditBlockId;
+
+        ctx.save();
+        ctx.fillStyle = isHoveredEdit ? colors.editBlockHover : colors.editBlock;
+        ctx.fillRect(contentX, editY, contentWidth, editHeight);
+        ctx.strokeStyle = isHoveredEdit ? 'rgba(255, 255, 255, 0.9)' : 'rgba(255, 255, 255, 0.5)';
+        ctx.lineWidth = isHoveredEdit ? 1.5 : 1;
+        ctx.strokeRect(contentX + 0.5, editY + 0.5, contentWidth - 1, Math.max(editHeight - 1, 1));
         ctx.restore();
       }
     }

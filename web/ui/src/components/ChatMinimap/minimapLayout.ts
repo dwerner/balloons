@@ -57,6 +57,11 @@ export function calculateMinimapLayoutFromDOM(
       y,
       height,
       turns: [], // Individual turns rendered as a block
+      editBlocks: rect.editBlocks?.map((block) => ({
+        block,
+        y: block.top * scale,
+        height: Math.max(block.height * scale, MIN_EXCHANGE_HEIGHT),
+      })) ?? [],
       turnRange: rect.turnRange,
       tokenCount: rect.tokenCount,
     });

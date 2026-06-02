@@ -24,6 +24,8 @@ export const MINIMAP_COLORS_DARK: MinimapColors = {
   tool: 'rgba(251, 146, 60, 0.7)',        // Orange
   system: 'rgba(148, 163, 184, 0.6)',     // Slate
   systemLight: 'rgba(148, 163, 184, 0.3)',
+  editBlock: 'rgba(250, 204, 21, 0.75)',
+  editBlockHover: 'rgba(253, 224, 71, 0.95)',
   viewport: 'rgba(59, 130, 246, 0.15)',
   viewportBorder: 'rgba(59, 130, 246, 0.5)',
   newContent: 'rgba(59, 130, 246, 0.4)',
@@ -37,6 +39,8 @@ export const MINIMAP_COLORS_LIGHT: MinimapColors = {
   tool: 'rgba(234, 88, 12, 0.6)',         // Orange-600
   system: 'rgba(100, 116, 139, 0.5)',     // Slate-500
   systemLight: 'rgba(100, 116, 139, 0.25)',
+  editBlock: 'rgba(217, 119, 6, 0.72)',
+  editBlockHover: 'rgba(180, 83, 9, 0.9)',
   viewport: 'rgba(37, 99, 235, 0.1)',
   viewportBorder: 'rgba(37, 99, 235, 0.4)',
   newContent: 'rgba(37, 99, 235, 0.3)',
@@ -50,6 +54,8 @@ export const MINIMAP_COLORS_DARK_FLAT: MinimapColors = {
   tool: 'rgba(184, 160, 112, 0.7)',       // Muted yellow/orange
   system: 'rgba(152, 144, 136, 0.6)',     // Warm gray
   systemLight: 'rgba(152, 144, 136, 0.3)',
+  editBlock: 'rgba(184, 160, 112, 0.85)',
+  editBlockHover: 'rgba(214, 192, 138, 0.95)',
   viewport: 'rgba(112, 136, 152, 0.15)',
   viewportBorder: 'rgba(112, 136, 152, 0.5)',
   newContent: 'rgba(112, 136, 152, 0.4)',

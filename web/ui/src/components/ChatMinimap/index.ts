@@ -10,6 +10,7 @@ export type {
   MinimapLayout,
   ExchangeDOMRect,
   ExchangeContextMenuAction,
+  MinimapEditBlock,
 } from './minimapTypes';
 export { getMinimapColors, EXCHANGE_COLORS } from './minimapColors';
 

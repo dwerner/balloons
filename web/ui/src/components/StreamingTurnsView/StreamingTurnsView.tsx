@@ -453,6 +453,18 @@ export function StreamingTurnsView({ sessionId, client, onSelectSession, onScrol
   const [exchangeRects, setExchangeRects] = useState<ExchangeDOMRect[]>([]);
   const exchangeRefsMap = useRef<Map<string, HTMLDivElement>>(new Map());
 
+  const scrollToTurnElement = useCallback((turnId: string) => {
+    const scrollContainer = scrollContainerRef.current;
+    if (!scrollContainer) return;
+
+    const turnElement = scrollContainer.querySelector(`[data-turn-id="${CSS.escape(turnId)}"]`) as HTMLElement | null;
+    if (!turnElement) return;
+
+    turnElement.scrollIntoView({ behavior: 'smooth', block: 'center' });
+    turnElement.classList.add('turn-highlight');
+    window.setTimeout(() => turnElement.classList.remove('turn-highlight'), 1500);
+  }, []);
+
   // Measure exchange DOM positions for minimap
   const measureExchanges = useCallback(() => {
     const scrollContainer = scrollContainerRef.current;
@@ -477,6 +489,7 @@ export function StreamingTurnsView({ sessionId, client, onSelectSession, onScrol
       let tokenCount = 0;
       let turnIndices: number[] = [];
       let turnIds: string[] = [];
+      let editBlocks: ExchangeDOMRect['editBlocks'] = [];
 
       if (group) {
         const allTurns = group.items.flatMap(item => item.turns);
@@ -491,6 +504,20 @@ export function StreamingTurnsView({ sessionId, client, onSelectSession, onScrol
         turnIndices = allTurns.map(t => t.order).filter((o): o is number => o !== undefined);
         // Collect stable turn IDs for tracking during archive (IDs don't change during reorder)
         turnIds = allTurns.map(t => t.turnId).filter((id): id is string => !!id);
+
+        editBlocks = Array.from(element.querySelectorAll('[data-edit-block="true"]')).map((editElement, index) => {
+          const editHTMLElement = editElement as HTMLElement;
+          const editRect = editHTMLElement.getBoundingClientRect();
+          const turnId = editHTMLElement.getAttribute('data-turn-id') || `edit-${id}-${index}`;
+          const filePath = editHTMLElement.getAttribute('data-file-path') || undefined;
+          return {
+            id: `${id}:${turnId}`,
+            turnId,
+            top: editRect.top - rect.top,
+            height: editRect.height,
+            filePath,
+          };
+        });
       }
 
       rects.push({
@@ -502,6 +529,7 @@ export function StreamingTurnsView({ sessionId, client, onSelectSession, onScrol
         tokenCount,
         turnIndices,
         turnIds,
+        editBlocks,
       });
     });
 
@@ -1070,6 +1098,7 @@ export function StreamingTurnsView({ sessionId, client, onSelectSession, onScrol
           isFollowing={isFollowing}
           lastSeenTurnIndex={lastSeenTurnIndexRef.current}
           onNavigate={handleMinimapNavigate}
+          onEditBlockClick={scrollToTurnElement}
           onArchiveExchange={onArchiveTurns}
           archivingExchangeIds={archivingExchangeIds}
           visible={showMinimap && exchangeRects.length > 0 && !isInitializing}
