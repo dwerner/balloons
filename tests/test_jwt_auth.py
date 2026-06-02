@@ -31,8 +31,8 @@ class TestJWTConfig:
         assert config.issuer == "balloons"
 
     def test_get_secret_with_configured_secret(self):
-        config = JWTConfig(secret="my-secret-key")
-        assert config.get_secret() == "my-secret-key"
+        config = JWTConfig(secret="my-secret-key-32-bytes-minimum!!")
+        assert config.get_secret() == "my-secret-key-32-bytes-minimum!!"
 
     def test_get_secret_generates_runtime_secret(self):
         config = JWTConfig(secret=None)
@@ -55,13 +55,13 @@ class TestJWTAuth:
     @pytest.fixture
     def auth(self):
         """Create auth handler with a fixed secret for testing."""
-        config = JWTConfig(secret="test-secret-key-12345")
+        config = JWTConfig(secret="test-secret-key-12345-32-bytes!!")
         return JWTAuth(config)
 
     @pytest.fixture
     def short_expiry_auth(self):
         """Create auth handler with short token expiry."""
-        config = JWTConfig(secret="test-secret", expiration_seconds=1)
+        config = JWTConfig(secret="test-secret-32-bytes-minimum!!!!", expiration_seconds=1)
         return JWTAuth(config)
 
     def test_generate_token_basic(self, auth):
@@ -108,7 +108,7 @@ class TestJWTAuth:
 
     def test_validate_token_invalid_signature(self, auth):
         # Generate a token with different secret
-        other_auth = JWTAuth(JWTConfig(secret="different-secret"))
+        other_auth = JWTAuth(JWTConfig(secret="different-secret-32-bytes-min!!!"))
         token = other_auth.generate_token(subject="test")
 
         with pytest.raises(InvalidTokenError):
@@ -127,7 +127,7 @@ class TestJWTAuth:
         import jwt
 
         payload = {"foo": "bar"}  # Missing sub, exp, iat
-        token = jwt.encode(payload, "test-secret-key-12345", algorithm="HS256")
+        token = jwt.encode(payload, "test-secret-key-12345-32-bytes!!", algorithm="HS256")
 
         with pytest.raises(InvalidTokenError):
             auth.validate_token(token)
@@ -138,7 +138,7 @@ class TestTokenExtraction:
 
     @pytest.fixture
     def auth(self):
-        return JWTAuth(JWTConfig(secret="test"))
+        return JWTAuth(JWTConfig(secret="test-test-test-test-test-test-1234"))
 
     def test_extract_token_from_query_simple(self, auth):
         query = "token=abc123"
@@ -211,10 +211,10 @@ class TestCreateAuth:
         assert auth.config.enabled is True
 
     def test_create_auth_custom_config(self):
-        config = JWTConfig(enabled=False, secret="custom")
+        config = JWTConfig(enabled=False, secret="custom-secret-32-bytes-minimum!")
         auth = create_auth(config)
         assert auth.config.enabled is False
-        assert auth.config.secret == "custom"
+        assert auth.config.secret == "custom-secret-32-bytes-minimum!"
 
 
 class TestJWTAuthLazyImport:
@@ -222,7 +222,7 @@ class TestJWTAuthLazyImport:
 
     def test_import_error_message(self):
         """Test that a helpful error message is shown when jwt is not installed."""
-        config = JWTConfig(secret="test")
+        config = JWTConfig(secret="test-test-test-test-test-test-1234")
         auth = JWTAuth(config)
 
         # Mock the import to fail
@@ -240,7 +240,7 @@ class TestRoundTrip:
     """End-to-end tests for token generation and validation."""
 
     def test_roundtrip_basic(self):
-        auth = create_auth(JWTConfig(secret="roundtrip-secret"))
+        auth = create_auth(JWTConfig(secret="roundtrip-secret-32-bytes-min!!!"))
 
         # Generate
         token = auth.generate_token(subject="session-abc-123")
@@ -250,7 +250,7 @@ class TestRoundTrip:
         assert claims.subject == "session-abc-123"
 
     def test_roundtrip_with_custom_claims(self):
-        auth = create_auth(JWTConfig(secret="roundtrip-secret"))
+        auth = create_auth(JWTConfig(secret="roundtrip-secret-32-bytes-min!!!"))
 
         token = auth.generate_token(
             subject="user-42",
@@ -266,7 +266,7 @@ class TestRoundTrip:
         assert claims.custom["metadata"]["version"] == 1
 
     def test_roundtrip_custom_expiration(self):
-        auth = create_auth(JWTConfig(secret="test", expiration_seconds=3600))
+        auth = create_auth(JWTConfig(secret="test-test-test-test-test-test-1234", expiration_seconds=3600))
 
         token = auth.generate_token(subject="test", expiration_seconds=7200)
 
@@ -276,7 +276,7 @@ class TestRoundTrip:
         assert claims.expires_at - now >= 7100  # Give some slack
 
     def test_tokens_with_different_subjects_differ(self):
-        auth = create_auth(JWTConfig(secret="test"))
+        auth = create_auth(JWTConfig(secret="test-test-test-test-test-test-1234"))
 
         token1 = auth.generate_token(subject="session-1")
         token2 = auth.generate_token(subject="session-2")
@@ -285,7 +285,7 @@ class TestRoundTrip:
         assert token1 != token2
 
     def test_same_token_validates_multiple_times(self):
-        auth = create_auth(JWTConfig(secret="test"))
+        auth = create_auth(JWTConfig(secret="test-test-test-test-test-test-1234"))
 
         token = auth.generate_token(subject="test")
 

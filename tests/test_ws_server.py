@@ -994,7 +994,7 @@ class TestJWTAuthentication:
         from config import WebSocketConfig, JWTConfig
 
         config = WebSocketConfig(
-            jwt=JWTConfig(enabled=True, secret="test-secret"),
+            jwt=JWTConfig(enabled=True, secret="test-secret-32-bytes-minimum!!!!"),
         )
         server = WsServer(config=config)
         assert server.jwt_enabled is True
@@ -1016,7 +1016,7 @@ class TestJWTAuthentication:
         from config import WebSocketConfig, JWTConfig
 
         config = WebSocketConfig(
-            jwt=JWTConfig(enabled=True, secret="test-secret-key-32-chars-long!!"),
+            jwt=JWTConfig(enabled=True, secret="test-secret-key-32-chars-long!!!"),
         )
         server = WsServer(config=config)
 
@@ -1066,7 +1066,7 @@ class TestJWTAuthentication:
         from config import WebSocketConfig, JWTConfig
 
         config = WebSocketConfig(
-            jwt=JWTConfig(enabled=True, secret="test-secret"),
+            jwt=JWTConfig(enabled=True, secret="test-secret-32-bytes-minimum!!!!"),
         )
         server = WsServer(config=config)
 
@@ -1113,7 +1113,7 @@ class TestJWTAuthentication:
         from config import WebSocketConfig, JWTConfig
 
         config = WebSocketConfig(
-            jwt=JWTConfig(enabled=True, secret="test-secret"),
+            jwt=JWTConfig(enabled=True, secret="test-secret-32-bytes-minimum!!!!"),
         )
         server = WsServer(config=config)
 
@@ -1132,7 +1132,7 @@ class TestJWTAuthentication:
         from config import WebSocketConfig, JWTConfig
 
         config = WebSocketConfig(
-            jwt=JWTConfig(enabled=True, secret="test"),
+            jwt=JWTConfig(enabled=True, secret="test-test-test-test-test-test-12345"),
         )
         server = WsServer(config=config)
 
@@ -1148,7 +1148,7 @@ class TestJWTAuthentication:
         from config import WebSocketConfig, JWTConfig
 
         config = WebSocketConfig(
-            jwt=JWTConfig(enabled=True, secret="test"),
+            jwt=JWTConfig(enabled=True, secret="test-test-test-test-test-test-12345"),
         )
         server = WsServer(config=config)
 

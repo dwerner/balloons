@@ -5,9 +5,6 @@ import importlib.util
 from pathlib import Path
 from dataclasses import dataclass
 
-# Mark all async tests to use pytest-asyncio
-pytestmark = pytest.mark.asyncio
-
 # Import QueueState directly to avoid heavy core/__init__.py dependencies
 _queue_state_path = Path(__file__).parent.parent / "core" / "queue_state.py"
 _spec = importlib.util.spec_from_file_location("queue_state", _queue_state_path)
