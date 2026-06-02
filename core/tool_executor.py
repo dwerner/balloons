@@ -75,6 +75,15 @@ from models import ToolResultDeltaEvent
 ToolOutputCallback = Callable[[str, str], Awaitable[None]]
 
 
+@dataclass(frozen=True)
+class CategoryToolRoute:
+    tool_names: set[str] | frozenset[str]
+    requires_session: bool
+    session_error_label: str
+    executor_name: str
+    pass_working_dir: bool = False
+
+
 def _camel_to_snake(name: str) -> str:
     """Convert camelCase to snake_case."""
     # Insert underscore before uppercase letters and lowercase them
@@ -196,6 +205,17 @@ async def execute_tool(
             if asyncio.iscoroutine(result):
                 return await result
             return result
+
+        # Remaining category-based built-in families
+        for route in CATEGORY_TOOL_ROUTES:
+            if name not in route.tool_names:
+                continue
+            if route.requires_session and session is None:
+                return f"Error: {route.session_error_label} require a session context", True
+            executor = globals()[route.executor_name]
+            if route.pass_working_dir:
+                return await executor(name, args, session, working_dir)
+            return await executor(name, args, session)
 
         return f"Unknown tool: {name}", True
 
@@ -1221,6 +1241,61 @@ async def execute_save_review(args: dict, session: "Session") -> tuple[str, bool
     except Exception as e:
         debug_log.error(f"Failed to save review: {e}", category=Category.RUNNER)
         return f"Error saving review: {e}", True
+
+
+CATEGORY_TOOL_ROUTES: tuple[CategoryToolRoute, ...] = (
+    CategoryToolRoute(
+        tool_names=LINK_TOOL_NAMES,
+        requires_session=True,
+        session_error_label="Link tools",
+        executor_name="execute_link_tool",
+    ),
+    CategoryToolRoute(
+        tool_names=SUP_TOOL_NAMES,
+        requires_session=True,
+        session_error_label="Supervisor tools",
+        executor_name="execute_supervisor_tool",
+        pass_working_dir=True,
+    ),
+    CategoryToolRoute(
+        tool_names=REVIEW_TOOL_NAMES,
+        requires_session=True,
+        session_error_label="Review tools",
+        executor_name="execute_review_tool",
+    ),
+    CategoryToolRoute(
+        tool_names=DEBUG_TOOL_NAMES,
+        requires_session=False,
+        session_error_label="Debug tools",
+        executor_name="execute_debug_tool",
+    ),
+    CategoryToolRoute(
+        tool_names=WATCHER_TOOL_NAMES,
+        requires_session=True,
+        session_error_label="Watcher tools",
+        executor_name="execute_watcher_tool",
+    ),
+    CategoryToolRoute(
+        tool_names=LSP_TOOL_NAMES,
+        requires_session=True,
+        session_error_label="LSP tools",
+        executor_name="execute_lsp_tool",
+        pass_working_dir=True,
+    ),
+    CategoryToolRoute(
+        tool_names=DOMAIN_TOOL_NAMES,
+        requires_session=True,
+        session_error_label="Domain tools",
+        executor_name="execute_domain_management_tool",
+    ),
+    CategoryToolRoute(
+        tool_names=BROWSER_TOOL_NAMES,
+        requires_session=True,
+        session_error_label="Browser tools",
+        executor_name="execute_browser_tool",
+        pass_working_dir=True,
+    ),
+)
 
 
 def execute_play_midi(args: dict) -> tuple[str, bool]:
