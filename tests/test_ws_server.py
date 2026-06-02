@@ -948,13 +948,13 @@ websocket:
   port: 8765
   jwt:
     enabled: true
-    secret: my-secret-key
+    secret: my-secret-key-32-bytes-minimum!!
     expiration_seconds: 3600
 """)
 
         config = Config._load_from_file(config_file)
         assert config.websocket.jwt.enabled is True
-        assert config.websocket.jwt.secret == "my-secret-key"
+        assert config.websocket.jwt.secret == "my-secret-key-32-bytes-minimum!!"
         assert config.websocket.jwt.expiration_seconds == 3600
 
     def test_parse_jwt_config_disabled(self, tmp_path):

@@ -38,7 +38,7 @@ class TestJWTConfig:
         config = JWTConfig(secret=None)
         secret = config.get_secret()
         assert secret is not None
-        assert len(secret) > 20  # Should be a decent length
+        assert len(secret) >= 32  # Should meet HS256 recommended minimum length
         # Same instance should return same runtime secret
         assert config.get_secret() == secret
 
