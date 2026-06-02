@@ -1457,6 +1457,7 @@ class TestAsyncObservers:
         # Verify observer was notified
         observer.on_turn_delta.assert_called_once()
         call_args = observer.on_turn_delta.call_args[0][0]
+        print("DEBUG event type:", type(call_args), "module:", type(call_args).__module__, "expected:", TurnDeltaEvent, "expected module:", TurnDeltaEvent.__module__)
         assert isinstance(call_args, TurnDeltaEvent)
         assert call_args.session_id == "test-123"
         assert call_args.delta == "Hello"
@@ -1477,6 +1478,7 @@ class TestAsyncObservers:
         # Verify observer was notified
         observer.on_turn_created.assert_called_once()
         call_args = observer.on_turn_created.call_args[0][0]
+        print("DEBUG event type:", type(call_args), "module:", type(call_args).__module__, "expected:", TurnCreatedEvent, "expected module:", TurnCreatedEvent.__module__)
         assert isinstance(call_args, TurnCreatedEvent)
         assert call_args.session_id == "test-123"
         assert call_args.turn_index == 5
@@ -1503,6 +1505,7 @@ class TestAsyncObservers:
         observer.on_stream_done.assert_called_once()
 
         stream_done = observer.on_stream_done.call_args[0][0]
+        print("DEBUG event type:", type(stream_done), "module:", type(stream_done).__module__, "expected:", StreamDoneEvent, "expected module:", StreamDoneEvent.__module__)
         assert isinstance(stream_done, StreamDoneEvent)
         assert stream_done.session_id == "test-123"
         assert stream_done.exchange_id == "exchange-456"
@@ -1527,6 +1530,7 @@ class TestAsyncObservers:
         await service._dispatch_event("test-123", event, ctx)
 
         stream_done = observer.on_stream_done.call_args[0][0]
+        print("DEBUG event type:", type(stream_done), "module:", type(stream_done).__module__, "expected:", StreamDoneEvent, "expected module:", StreamDoneEvent.__module__)
         assert isinstance(stream_done, StreamDoneEvent)
         assert stream_done.stopped_by_kill_switch is True
         assert stream_done.stop_reason == "Session token kill switch triggered: 150 >= 100"
@@ -1566,6 +1570,7 @@ class TestAsyncObservers:
         # Verify observer was notified
         observer.on_stream_error.assert_called_once()
         call_args = observer.on_stream_error.call_args[0][0]
+        print("DEBUG event type:", type(call_args), "module:", type(call_args).__module__, "expected:", StreamErrorEvent, "expected module:", StreamErrorEvent.__module__)
         assert isinstance(call_args, StreamErrorEvent)
 
     @pytest.mark.asyncio
@@ -1606,6 +1611,7 @@ class TestAsyncObservers:
         # Verify observer was notified
         observer.on_tool_use_started.assert_called_once()
         call_args = observer.on_tool_use_started.call_args[0][0]
+        print("DEBUG event type:", type(call_args), "module:", type(call_args).__module__, "expected:", ToolUseStartedEvent, "expected module:", ToolUseStartedEvent.__module__)
         assert isinstance(call_args, ToolUseStartedEvent)
         assert call_args.tool_name == "Bash"
         assert call_args.tool_use_id == "tool-123"
@@ -1633,6 +1639,7 @@ class TestAsyncObservers:
         # Verify observer was notified
         observer.on_tool_result.assert_called_once()
         call_args = observer.on_tool_result.call_args[0][0]
+        print("DEBUG event type:", type(call_args), "module:", type(call_args).__module__, "expected:", ToolResultEvent, "expected module:", ToolResultEvent.__module__)
         assert isinstance(call_args, ToolResultEvent)
         assert call_args.tool_name == "Bash"
         assert call_args.result == "command output"
@@ -1662,6 +1669,7 @@ class TestAsyncObservers:
         # Verify stream_started was emitted
         observer.on_stream_started.assert_called_once()
         call_args = observer.on_stream_started.call_args[0][0]
+        print("DEBUG event type:", type(call_args), "module:", type(call_args).__module__, "expected:", StreamStartedEvent, "expected module:", StreamStartedEvent.__module__)
         assert isinstance(call_args, StreamStartedEvent)
         assert call_args.session_id == mock_session.id
         assert call_args.prompt == "Hello"
@@ -1819,6 +1827,7 @@ class TestHelperRunnerManagement:
         # Verify done was dispatched
         observer.on_helper_done.assert_called_once()
         call_args = observer.on_helper_done.call_args[0][0]
+        print("DEBUG event type:", type(call_args), "module:", type(call_args).__module__, "expected:", HelperDoneEvent, "expected module:", HelperDoneEvent.__module__)
         assert isinstance(call_args, HelperDoneEvent)
         assert call_args.helper_id == "helper-123"
         assert call_args.helper_type == "merge"
