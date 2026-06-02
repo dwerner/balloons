@@ -97,6 +97,12 @@ export const GrepCard = React.memo(function GrepCard({ turn, result }: GrepCardP
       className="grep-card"
       rawData={rawData}
       timestamp={turn.timestamp}
+      dataAttributes={{
+        'data-turn-id': turn.turnId,
+        'data-file-path': path || undefined,
+      }}
+      minimapKind="grep"
+      minimapLabel={path ? `Grep · ${formatRelativePath(path)}` : 'Grep'}
     >
       {hasResult && (
         <>

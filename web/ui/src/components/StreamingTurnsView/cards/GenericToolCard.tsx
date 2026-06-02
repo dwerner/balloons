@@ -89,6 +89,10 @@ export const GenericToolCard = React.memo(function GenericToolCard({ turn, resul
       className="generic-tool-card"
       rawData={rawData}
       timestamp={turn.timestamp}
+      dataAttributes={{
+        'data-turn-id': turn.turnId,
+      }}
+      minimapLabel={toolName}
     >
       {/* Input section - collapsible */}
       {(hasInput || inputIsStreaming) && (

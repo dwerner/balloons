@@ -157,10 +157,11 @@ export const EditCard = React.memo(function EditCard({ turn, result }: EditCardP
     <BaseToolCard
       toolName="Edit"
       dataAttributes={{
-        'data-edit-block': 'true',
         'data-turn-id': turn.turnId,
         'data-file-path': filePath || undefined,
       }}
+      minimapKind="edit"
+      minimapLabel={filePath ? `Edit · ${formatRelativePath(filePath)}` : 'Edit'}
       headerContent={headerContent}
       phase={phase}
       tokens={tokens}

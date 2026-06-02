@@ -165,7 +165,13 @@ export const TextCard = React.memo(function TextCard({ turn }: TextCardProps) {
   };
 
   return (
-    <div className={`turn-card text-card ${roleConfig.className} ${streaming ? 'streaming' : ''} ${showDoneIndicator ? 'done' : ''} ${displayMode === 'raw' ? 'raw-mode' : ''}`}>
+    <div
+      className={`turn-card text-card ${roleConfig.className} ${streaming ? 'streaming' : ''} ${showDoneIndicator ? 'done' : ''} ${displayMode === 'raw' ? 'raw-mode' : ''}`}
+      data-minimap-jump-block={isAssistant ? 'true' : undefined}
+      data-minimap-kind={isAssistant ? 'assistant' : undefined}
+      data-minimap-label={isAssistant ? 'Assistant' : undefined}
+      data-turn-id={isAssistant ? turn.turnId : undefined}
+    >
       <CardBackgroundPattern />
       <div className="turn-card-header">
         <span className="turn-order">{order}</span>

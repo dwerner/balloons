@@ -460,7 +460,7 @@ export function StreamingTurnsView({ sessionId, client, onSelectSession, onScrol
     const turnElement = scrollContainer.querySelector(`[data-turn-id="${CSS.escape(turnId)}"]`) as HTMLElement | null;
     if (!turnElement) return;
 
-    turnElement.scrollIntoView({ behavior: 'smooth', block: 'center' });
+    turnElement.scrollIntoView({ behavior: 'smooth', block: 'start' });
     turnElement.classList.add('turn-highlight');
     window.setTimeout(() => turnElement.classList.remove('turn-highlight'), 1500);
   }, []);
@@ -489,7 +489,7 @@ export function StreamingTurnsView({ sessionId, client, onSelectSession, onScrol
       let tokenCount = 0;
       let turnIndices: number[] = [];
       let turnIds: string[] = [];
-      let editBlocks: ExchangeDOMRect['editBlocks'] = [];
+      let jumpBlocks: ExchangeDOMRect['jumpBlocks'] = [];
 
       if (group) {
         const allTurns = group.items.flatMap(item => item.turns);
@@ -505,16 +505,20 @@ export function StreamingTurnsView({ sessionId, client, onSelectSession, onScrol
         // Collect stable turn IDs for tracking during archive (IDs don't change during reorder)
         turnIds = allTurns.map(t => t.turnId).filter((id): id is string => !!id);
 
-        editBlocks = Array.from(element.querySelectorAll('[data-edit-block="true"]')).map((editElement, index) => {
-          const editHTMLElement = editElement as HTMLElement;
-          const editRect = editHTMLElement.getBoundingClientRect();
-          const turnId = editHTMLElement.getAttribute('data-turn-id') || `edit-${id}-${index}`;
-          const filePath = editHTMLElement.getAttribute('data-file-path') || undefined;
+        jumpBlocks = Array.from(element.querySelectorAll('[data-minimap-jump-block="true"]')).map((blockElement, index) => {
+          const blockHTMLElement = blockElement as HTMLElement;
+          const blockRect = blockHTMLElement.getBoundingClientRect();
+          const turnId = blockHTMLElement.getAttribute('data-turn-id') || `jump-${id}-${index}`;
+          const kind = blockHTMLElement.getAttribute('data-minimap-kind') || 'tool';
+          const label = blockHTMLElement.getAttribute('data-minimap-label') || kind;
+          const filePath = blockHTMLElement.getAttribute('data-file-path') || undefined;
           return {
             id: `${id}:${turnId}`,
             turnId,
-            top: editRect.top - rect.top,
-            height: editRect.height,
+            top: blockRect.top - rect.top,
+            height: blockRect.height,
+            kind,
+            label,
             filePath,
           };
         });
@@ -529,7 +533,7 @@ export function StreamingTurnsView({ sessionId, client, onSelectSession, onScrol
         tokenCount,
         turnIndices,
         turnIds,
-        editBlocks,
+        jumpBlocks,
       });
     });
 

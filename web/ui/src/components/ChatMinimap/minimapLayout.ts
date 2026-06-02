@@ -33,7 +33,8 @@ export function calculateMinimapLayoutFromDOM(
   viewportHeight: number,
   zoom: number = 1,
   zoomAnchorScrollTop?: number,
-  zoomAnchorCanvasY?: number
+  zoomAnchorCanvasY?: number,
+  manualContentOffsetY?: number
 ): MinimapLayout {
   if (exchangeRects.length === 0 || canvasHeight <= 0 || scrollHeight <= 0) {
     return {
@@ -66,7 +67,7 @@ export function calculateMinimapLayoutFromDOM(
       y,
       height,
       turns: [], // Individual turns rendered as a block
-      editBlocks: rect.editBlocks?.map((block) => ({
+      jumpBlocks: rect.jumpBlocks?.map((block) => ({
         block,
         y: block.top * scale,
         height: Math.max(block.height * scale, MIN_EXCHANGE_HEIGHT),
@@ -81,7 +82,7 @@ export function calculateMinimapLayoutFromDOM(
   const anchorScrollTop = yClamp(zoomAnchorScrollTop ?? (scrollTop + viewportHeight / 2), 0, Math.max(scrollHeight, 0));
   const anchorCanvasY = yClamp(zoomAnchorCanvasY ?? (canvasHeight / 2), 0, canvasHeight);
   const anchorContentY = anchorScrollTop * scale;
-  let contentOffsetY = anchorContentY - anchorCanvasY;
+  let contentOffsetY = manualContentOffsetY ?? (anchorContentY - anchorCanvasY);
   const maxOffsetY = Math.max(0, totalHeight - canvasHeight);
   contentOffsetY = Math.max(0, Math.min(contentOffsetY, maxOffsetY));
   const viewportTop = scrollTop * scale - contentOffsetY;
@@ -94,6 +95,7 @@ export function calculateMinimapLayoutFromDOM(
     scale,
     contentOffsetY,
     anchorCanvasY,
+    maxContentOffsetY: maxOffsetY,
   };
 }
 

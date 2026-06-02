@@ -100,6 +100,11 @@ export const BashCard = React.memo(function BashCard({ turn, result }: BashCardP
       className="bash-card"
       rawData={rawData}
       timestamp={turn.timestamp}
+      dataAttributes={{
+        'data-turn-id': turn.turnId,
+      }}
+      minimapKind="bash"
+      minimapLabel="Bash"
     >
       {/* Show full command if we have description in header, or command is long */}
       {command && (description || command.length > maxHeaderLength) && (

@@ -12,9 +12,32 @@ import type {
 } from './minimapTypes';
 import { EXCHANGE_COLORS, getExchangeColor } from './minimapColors';
 
+function getJumpBlockFill(kind: string, colors: MinimapColors, hovered: boolean): string {
+  if (kind === 'assistant') return hovered ? colors.assistantBlockHover : colors.assistantBlock;
+  if (kind === 'edit') return hovered ? colors.editBlockHover : colors.editBlock;
+  if (kind === 'read') return hovered ? colors.toolBlockHover : colors.readBlock;
+  if (kind === 'write') return hovered ? colors.toolBlockHover : colors.writeBlock;
+  if (kind === 'bash') return hovered ? colors.toolBlockHover : colors.bashBlock;
+  if (kind === 'grep') return hovered ? colors.toolBlockHover : colors.grepBlock;
+  if (kind === 'glob') return hovered ? colors.toolBlockHover : colors.globBlock;
+  return hovered ? colors.toolBlockHover : colors.toolBlock;
+}
+
+function getJumpBlockStroke(kind: string, hovered: boolean): string {
+  if (kind === 'assistant') {
+    return hovered ? 'rgba(255, 255, 255, 0.95)' : 'rgba(255, 255, 255, 0.7)';
+  }
+  return hovered ? 'rgba(255, 255, 255, 0.9)' : 'rgba(255, 255, 255, 0.5)';
+}
+
+function getJumpBlockText(kind: string): string | null {
+  if (kind === 'assistant') return null;
+  return kind.slice(0, 4).toUpperCase();
+}
+
 // Rendering constants
 const CONTENT_PADDING_X = 2;  // Pixels on left/right
-const EXCHANGE_BORDER_WIDTH = 2;
+const EXCHANGE_BORDER_WIDTH = 4;
 const EXCHANGE_PADDING_Y = 1;
 
 /**
@@ -98,7 +121,7 @@ export function renderMinimap(
   height: number,
   options: MinimapRenderOptions
 ): void {
-  const { colors, showViewport, newContentFromY, hoveredExchangeId, hoveredEditBlockId, selectedExchangeId, archivingExchangeIds } = options;
+  const { colors, showViewport, newContentFromY, hoveredExchangeId, hoveredJumpBlockId, selectedExchangeId, archivingExchangeIds } = options;
 
   // Clear canvas
   ctx.fillStyle = colors.background;
@@ -110,6 +133,9 @@ export function renderMinimap(
 
   const contentWidth = width - CONTENT_PADDING_X * 2 - EXCHANGE_BORDER_WIDTH;
   const contentX = CONTENT_PADDING_X + EXCHANGE_BORDER_WIDTH;
+  const jumpInsetX = 2;
+  const jumpWidth = Math.max(contentWidth - jumpInsetX * 2, 1);
+  const jumpX = contentX + jumpInsetX;
 
   const contentOffsetY = layout.contentOffsetY ?? 0;
 
@@ -230,18 +256,27 @@ export function renderMinimap(
       }
     }
 
-    if (exLayout.editBlocks && exLayout.editBlocks.length > 0) {
-      for (const editLayout of exLayout.editBlocks) {
-        const editY = renderY + editLayout.y;
-        const editHeight = Math.max(editLayout.height, 3);
-        const isHoveredEdit = editLayout.block.id === hoveredEditBlockId;
+    if (exLayout.jumpBlocks && exLayout.jumpBlocks.length > 0) {
+      for (const jumpLayout of exLayout.jumpBlocks) {
+        const jumpY = renderY + jumpLayout.y;
+        const jumpHeight = Math.max(jumpLayout.height, 3);
+        const isHoveredJump = jumpLayout.block.id === hoveredJumpBlockId;
 
         ctx.save();
-        ctx.fillStyle = isHoveredEdit ? colors.editBlockHover : colors.editBlock;
-        ctx.fillRect(contentX, editY, contentWidth, editHeight);
-        ctx.strokeStyle = isHoveredEdit ? 'rgba(255, 255, 255, 0.9)' : 'rgba(255, 255, 255, 0.5)';
-        ctx.lineWidth = isHoveredEdit ? 1.5 : 1;
-        ctx.strokeRect(contentX + 0.5, editY + 0.5, contentWidth - 1, Math.max(editHeight - 1, 1));
+        ctx.fillStyle = getJumpBlockFill(jumpLayout.block.kind, colors, isHoveredJump);
+        ctx.fillRect(jumpX, jumpY, jumpWidth, jumpHeight);
+        ctx.strokeStyle = getJumpBlockStroke(jumpLayout.block.kind, isHoveredJump);
+        ctx.lineWidth = jumpLayout.block.kind === 'assistant' ? (isHoveredJump ? 2 : 1.25) : (isHoveredJump ? 1.5 : 1);
+        ctx.strokeRect(jumpX + 0.5, jumpY + 0.5, jumpWidth - 1, Math.max(jumpHeight - 1, 1));
+
+        const jumpText = getJumpBlockText(jumpLayout.block.kind);
+        if (jumpText && jumpHeight >= 10 && jumpWidth >= 18) {
+          ctx.fillStyle = 'rgba(255, 255, 255, 0.95)';
+          ctx.font = `bold ${jumpHeight >= 16 ? 8 : 7}px monospace`;
+          ctx.textBaseline = 'middle';
+          ctx.textAlign = 'center';
+          ctx.fillText(jumpText, jumpX + jumpWidth / 2, jumpY + jumpHeight / 2);
+        }
         ctx.restore();
       }
     }

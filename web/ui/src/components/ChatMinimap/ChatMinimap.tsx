@@ -14,7 +14,7 @@
  */
 
 import React, { useRef, useState, useEffect, useCallback, useMemo } from 'react';
-import type { MinimapExchange, ExchangeDOMRect, MinimapExchangeLayout, MinimapEditBlockLayout } from './minimapTypes';
+import type { MinimapExchange, ExchangeDOMRect, MinimapExchangeLayout, MinimapJumpBlockLayout } from './minimapTypes';
 import { calculateMinimapLayout, calculateMinimapLayoutFromDOM, minimapYToScrollPosition, findExchangeAtPosition } from './minimapLayout';
 import { renderMinimap } from './minimapRender';
 import { getMinimapColors } from './minimapColors';
@@ -30,10 +30,10 @@ interface ContextMenuInfo {
   turnIds?: string[];
 }
 
-function findEditBlockAtPosition(exchangeLayout: MinimapExchangeLayout, yWithinExchange: number): MinimapEditBlockLayout | null {
-  for (const editBlock of exchangeLayout.editBlocks ?? []) {
-    if (yWithinExchange >= editBlock.y && yWithinExchange < editBlock.y + editBlock.height) {
-      return editBlock;
+function findJumpBlockAtPosition(exchangeLayout: MinimapExchangeLayout, yWithinExchange: number): MinimapJumpBlockLayout | null {
+  for (const jumpBlock of exchangeLayout.jumpBlocks ?? []) {
+    if (yWithinExchange >= jumpBlock.y && yWithinExchange < jumpBlock.y + jumpBlock.height) {
+      return jumpBlock;
     }
   }
   return null;
@@ -98,13 +98,14 @@ export function ChatMinimap({
   const [isDragging, setIsDragging] = useState(false);
   const [canvasHeight, setCanvasHeight] = useState(0);
   const [hoveredExchangeId, setHoveredExchangeId] = useState<string | null>(null);
-  const [hoveredEditBlockId, setHoveredEditBlockId] = useState<string | null>(null);
+  const [hoveredJumpBlockId, setHoveredJumpBlockId] = useState<string | null>(null);
   const [contextMenu, setContextMenu] = useState<ContextMenuInfo | null>(null);
   const [contextMenuPosition, setContextMenuPosition] = useState<{ left: number; top: number } | null>(null);
   const [tooltip, setTooltip] = useState<{ x: number; y: number; text: string } | null>(null);
   const [zoom, setZoom] = useState(1);
   const [zoomAnchorScrollTop, setZoomAnchorScrollTop] = useState<number | undefined>(undefined);
   const [zoomAnchorCanvasY, setZoomAnchorCanvasY] = useState<number | undefined>(undefined);
+  const [manualContentOffsetY, setManualContentOffsetY] = useState<number | undefined>(undefined);
 
   // Detect theme (check for data-theme attribute or prefers-color-scheme)
   // Possible values: 'dark', 'light', 'dark-flat'
@@ -189,7 +190,8 @@ export function ChatMinimap({
         viewportHeight,
         zoom,
         zoomAnchorScrollTop,
-        zoomAnchorCanvasY
+        zoomAnchorCanvasY,
+        manualContentOffsetY
       );
     } else if (exchanges && exchanges.length > 0) {
       // Fall back to legacy token-based layout
@@ -203,7 +205,7 @@ export function ChatMinimap({
     }
 
     return null;
-  }, [exchanges, exchangeRects, canvasHeight, scrollTop, scrollHeight, viewportHeight, zoom, zoomAnchorScrollTop, zoomAnchorCanvasY]);
+  }, [exchanges, exchangeRects, canvasHeight, scrollTop, scrollHeight, viewportHeight, zoom, zoomAnchorScrollTop, zoomAnchorCanvasY, manualContentOffsetY]);
 
   // Calculate new content Y position (when scrolled away)
   const newContentFromY = useMemo(() => {
@@ -250,11 +252,11 @@ export function ChatMinimap({
       showViewport: true,
       newContentFromY,
       hoveredExchangeId: hoveredExchangeId ?? undefined,
-      hoveredEditBlockId: hoveredEditBlockId ?? undefined,
+      hoveredJumpBlockId: hoveredJumpBlockId ?? undefined,
       selectedExchangeId,
       archivingExchangeIds,
     });
-  }, [layout, colors, newContentFromY, hoveredExchangeId, hoveredEditBlockId, selectedExchangeId, archivingExchangeIds]);
+  }, [layout, colors, newContentFromY, hoveredExchangeId, hoveredJumpBlockId, selectedExchangeId, archivingExchangeIds]);
 
   // Navigation handlers
   const handleNavigateToY = useCallback((clientY: number) => {
@@ -289,9 +291,9 @@ export function ChatMinimap({
         const exLayout = findExchangeAtPosition(layout, y);
         if (exLayout) {
           const contentY = y + (layout.contentOffsetY ?? 0);
-          const editLayout = findEditBlockAtPosition(exLayout, contentY - exLayout.y);
-          if (editLayout && onEditBlockClick) {
-            onEditBlockClick(editLayout.block.turnId);
+          const jumpLayout = findJumpBlockAtPosition(exLayout, contentY - exLayout.y);
+          if (jumpLayout && onEditBlockClick) {
+            onEditBlockClick(jumpLayout.block.turnId);
           } else if (onExchangeClick) {
             onExchangeClick(exLayout.exchange.id);
           }
@@ -310,30 +312,46 @@ export function ChatMinimap({
   }, []);
 
   const handleWheel = useCallback((e: React.WheelEvent) => {
-    if (!e.shiftKey) return;
-    e.preventDefault();
-
     const canvas = canvasRef.current;
     if (!canvas || !layout) return;
 
-    const rect = canvas.getBoundingClientRect();
-    const y = e.clientY - rect.top;
-    const contentY = y + (layout.contentOffsetY ?? 0);
-    const anchorScroll = contentY / layout.scale;
+    if (e.shiftKey) {
+      e.preventDefault();
 
-    setZoomAnchorScrollTop(anchorScroll);
-    setZoomAnchorCanvasY(y);
-    setZoom((currentZoom) => {
-      const zoomDelta = e.deltaY > 0 ? 0.9 : 1.1;
-      const nextZoom = currentZoom * zoomDelta;
-      return Math.max(1, Math.min(nextZoom, 6));
-    });
-  }, [layout]);
+      const rect = canvas.getBoundingClientRect();
+      const y = e.clientY - rect.top;
+      const contentY = y + (layout.contentOffsetY ?? 0);
+      const anchorScroll = contentY / layout.scale;
+
+      setManualContentOffsetY(undefined);
+      setZoomAnchorScrollTop(anchorScroll);
+      setZoomAnchorCanvasY(y);
+      setZoom((currentZoom) => {
+        const zoomDelta = e.deltaY > 0 ? 0.9 : 1.1;
+        const nextZoom = currentZoom * zoomDelta;
+        return Math.max(1, Math.min(nextZoom, 12));
+      });
+      return;
+    }
+
+    if (zoom > 1 && (layout.maxContentOffsetY ?? 0) > 0) {
+      e.preventDefault();
+      setZoomAnchorScrollTop(undefined);
+      setZoomAnchorCanvasY(undefined);
+      setManualContentOffsetY((currentOffset) => {
+        const baseOffset = currentOffset ?? layout.contentOffsetY ?? 0;
+        const nextOffset = baseOffset + e.deltaY;
+        const maxOffset = layout.maxContentOffsetY ?? 0;
+        return Math.max(0, Math.min(nextOffset, maxOffset));
+      });
+    }
+  }, [layout, zoom]);
 
   useEffect(() => {
     if (zoom === 1) {
       setZoomAnchorScrollTop(undefined);
       setZoomAnchorCanvasY(undefined);
+      setManualContentOffsetY(undefined);
     }
   }, [zoom]);
 
@@ -348,17 +366,17 @@ export function ChatMinimap({
     const y = e.clientY - rect.top;
     const exLayout = findExchangeAtPosition(layout, y);
     const contentY = y + (layout.contentOffsetY ?? 0);
-    const editLayout = exLayout ? findEditBlockAtPosition(exLayout, contentY - exLayout.y) : null;
+    const jumpLayout = exLayout ? findJumpBlockAtPosition(exLayout, contentY - exLayout.y) : null;
 
     setHoveredExchangeId(exLayout?.exchange.id ?? null);
-    setHoveredEditBlockId(editLayout?.block.id ?? null);
+    setHoveredJumpBlockId(jumpLayout?.block.id ?? null);
 
-    // Show tooltip with turn range or edit target
-    if (editLayout) {
+    // Show tooltip with turn range or jump target
+    if (jumpLayout) {
       setTooltip({
         x: e.clientX,
         y: e.clientY,
-        text: editLayout.block.filePath ? `Edit · ${editLayout.block.filePath}` : 'Edit',
+        text: jumpLayout.block.label || jumpLayout.block.kind,
       });
     } else if (exLayout) {
       const exchangeRect = exchangeRects?.find(r => r.id === exLayout.exchange.id);
@@ -382,7 +400,7 @@ export function ChatMinimap({
   const handlePointerLeaveHover = useCallback(() => {
     if (!isDragging) {
       setHoveredExchangeId(null);
-      setHoveredEditBlockId(null);
+      setHoveredJumpBlockId(null);
       setTooltip(null);
     }
   }, [isDragging]);
@@ -489,7 +507,7 @@ export function ChatMinimap({
         ref={containerRef}
         className={`chat-minimap ${className} ${isDragging ? 'chat-minimap--dragging' : ''} ${!visible ? 'chat-minimap--hidden' : ''}`}
         style={{ width }}
-        title={zoom > 1 ? `Shift-scroll to zoom (${zoom.toFixed(1)}×)` : 'Shift-scroll to zoom'}
+        title={zoom > 1 ? `Shift-scroll to zoom (${zoom.toFixed(1)}×) · Scroll to pan` : 'Shift-scroll to zoom'}
       >
         <canvas
           ref={canvasRef}
