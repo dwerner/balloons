@@ -78,14 +78,34 @@ export function calculateMinimapLayoutFromDOM(
 
   // Viewport position within virtual minimap content
   const viewportHeightScaled = Math.max(viewportHeight * scale, 10);
-  const defaultAnchorScrollTop = zoom > 1
-    ? (scrollTop + viewportHeight / 2)
-    : (scrollTop + viewportHeight);
-  const anchorScrollTop = yClamp(zoomAnchorScrollTop ?? defaultAnchorScrollTop, 0, Math.max(scrollHeight, 0));
-  const anchorCanvasY = yClamp(zoomAnchorCanvasY ?? (zoom > 1 ? (canvasHeight / 2) : canvasHeight), 0, canvasHeight);
-  const anchorContentY = anchorScrollTop * scale;
-  let contentOffsetY = anchorContentY - anchorCanvasY;
   const maxOffsetY = Math.max(0, totalHeight - canvasHeight);
+  let contentOffsetY: number;
+
+  const visibleTop = scrollTop * scale;
+  const visibleBottom = visibleTop + viewportHeightScaled;
+
+  if (zoom > 1 && zoomAnchorScrollTop !== undefined) {
+    const anchorScrollTop = yClamp(zoomAnchorScrollTop, 0, Math.max(scrollHeight, 0));
+    const anchorCanvasY = yClamp(zoomAnchorCanvasY ?? (canvasHeight / 2), 0, canvasHeight);
+    const anchorContentY = anchorScrollTop * scale;
+    contentOffsetY = anchorContentY - anchorCanvasY;
+
+    const anchoredViewportTop = visibleTop - contentOffsetY;
+    const anchoredViewportBottom = anchoredViewportTop + viewportHeightScaled;
+
+    if (anchoredViewportBottom > canvasHeight) {
+      contentOffsetY += anchoredViewportBottom - canvasHeight;
+    }
+    if (anchoredViewportTop < 0) {
+      contentOffsetY += anchoredViewportTop;
+    }
+  } else {
+    contentOffsetY = Math.max(0, Math.min(visibleBottom - canvasHeight, maxOffsetY));
+    if (visibleTop < contentOffsetY) {
+      contentOffsetY = visibleTop;
+    }
+  }
+
   contentOffsetY = Math.max(0, Math.min(contentOffsetY, maxOffsetY));
   const viewportTop = scrollTop * scale - contentOffsetY;
 
@@ -96,7 +116,7 @@ export function calculateMinimapLayoutFromDOM(
     viewportHeight: viewportHeightScaled,
     scale,
     contentOffsetY,
-    anchorCanvasY,
+    anchorCanvasY: zoomAnchorCanvasY,
     maxContentOffsetY: maxOffsetY,
   };
 }
