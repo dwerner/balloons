@@ -513,7 +513,7 @@ export const FileBrowserView = memo(forwardRef<FileBrowserViewRef, FileBrowserVi
     }
   }, [client, showHidden]);
 
-  // Load initial directory - use initialPath if provided, otherwise home
+  // Load initial directory - prefer initialPath, otherwise fall back to cwd/home
   // Only runs once on mount, or when initialPath changes
   useEffect(() => {
     // Skip if we already loaded and initialPath hasn't changed
@@ -524,8 +524,9 @@ export const FileBrowserView = memo(forwardRef<FileBrowserViewRef, FileBrowserVi
     const loadInitial = async () => {
       setIsInitializing(true);
       try {
-        const startPath = initialPath || await client.getHomeDirectory();
-        debugLog('Loading initial directory', { startPath, initialPath });
+        const cwd = sessionId ? await client.getCwd(sessionId).catch(() => null) : null;
+        const startPath = initialPath || cwd || await client.getHomeDirectory();
+        debugLog('Loading initial directory', { startPath, initialPath, cwd });
         await loadDirectory(startPath);
         initialLoadDone.current = true;
         prevInitialPath.current = initialPath;
@@ -534,7 +535,7 @@ export const FileBrowserView = memo(forwardRef<FileBrowserViewRef, FileBrowserVi
       }
     };
     loadInitial();
-  }, [initialPath, client, loadDirectory]);
+  }, [initialPath, client, loadDirectory, sessionId]);
 
   // Navigate to a directory
   const navigateTo = useCallback(async (path: string) => {
