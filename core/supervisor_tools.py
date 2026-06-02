@@ -26,8 +26,11 @@ if TYPE_CHECKING:
 SUPERVISOR_TOOL_NAMES = {
     "supervisor_start",
     "supervisor_list",
+    "supervisor_query",
+    "supervisor_host_status",
     "supervisor_output",
     "supervisor_stop",
+    "supervisor_input",
 }
 
 # Global supervisor instance - set by app on startup

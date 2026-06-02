@@ -1428,12 +1428,7 @@ class Session:
         }
 
     async def save(self):
-        """Save session to storage.
-
-        Session persistence is async-only. Synchronous callers should fail fast
-        rather than silently creating/running event loops, so call sites can be
-        migrated explicitly.
-        """
+        """Save session to storage."""
         storage = _get_storage()
         await storage.save_session(self)
 

@@ -86,6 +86,7 @@ class LogEntry:
     run_id: str = ""  # Groups entries by LLM call
 
 
+
 class RingBuffer:
     """Fixed-size ring buffer for log entries."""
 

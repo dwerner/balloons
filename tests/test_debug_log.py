@@ -33,7 +33,7 @@ class TestLogEntry:
         )
         assert entry.level == LogLevel.ERROR
         assert entry.session_id == "abc123"
-        assert entry.category == "process"
+        assert entry.category == "runner"
         assert entry.details == {"key": "value"}
 
 
@@ -63,7 +63,7 @@ class TestDebugLog:
         entries = debug_log.get_entries()
         assert len(entries) == 1
         assert entries[0].level == LogLevel.ERROR
-        assert entries[0].category == "test"
+        assert entries[0].category == "runner"
 
     def test_warning_creates_entry(self):
         debug_log.warning("Test warning", session_id="sess123")
@@ -89,7 +89,7 @@ class TestDebugLog:
             assert len(entries) == 1
             assert entries[0].level == LogLevel.TRACE
             assert entries[0].message == "Test trace"
-            assert entries[0].category == "scroll"
+            assert entries[0].category == "client"
         finally:
             debug_log.min_level = original_level
 

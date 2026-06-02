@@ -25,8 +25,11 @@ class TestSupervisorToolNames:
         expected = {
             "supervisor_start",
             "supervisor_list",
+            "supervisor_query",
+            "supervisor_host_status",
             "supervisor_output",
             "supervisor_stop",
+            "supervisor_input",
         }
         assert SUPERVISOR_TOOL_NAMES == expected
 

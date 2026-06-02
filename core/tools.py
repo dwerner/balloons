@@ -895,7 +895,7 @@ Note: The process must be running and have stdin available.""",
 
 # Names of supervisor tools
 SUPERVISOR_TOOL_NAMES = {
-    "supervisor_start", "supervisor_list", "supervisor_output", "supervisor_stop", "supervisor_input",
+    "supervisor_start", "supervisor_list", "supervisor_query", "supervisor_host_status", "supervisor_output", "supervisor_stop", "supervisor_input",
 }
 
 # Session review tools for quality evaluation
