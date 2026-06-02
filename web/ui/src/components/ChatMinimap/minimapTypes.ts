@@ -69,7 +69,9 @@ export interface MinimapLayout {
   totalHeight: number;
   viewportTop: number;
   viewportHeight: number;
-  scale: number; // scrollHeight -> canvasHeight mapping
+  scale: number; // scrollHeight -> minimap content height mapping
+  contentOffsetY?: number; // Top of visible minimap window within virtual content
+  anchorCanvasY?: number; // Canvas-space Y to preserve during zoom
 }
 
 export interface MinimapColors {

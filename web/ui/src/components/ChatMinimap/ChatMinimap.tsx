@@ -102,6 +102,9 @@ export function ChatMinimap({
   const [contextMenu, setContextMenu] = useState<ContextMenuInfo | null>(null);
   const [contextMenuPosition, setContextMenuPosition] = useState<{ left: number; top: number } | null>(null);
   const [tooltip, setTooltip] = useState<{ x: number; y: number; text: string } | null>(null);
+  const [zoom, setZoom] = useState(1);
+  const [zoomAnchorScrollTop, setZoomAnchorScrollTop] = useState<number | undefined>(undefined);
+  const [zoomAnchorCanvasY, setZoomAnchorCanvasY] = useState<number | undefined>(undefined);
 
   // Detect theme (check for data-theme attribute or prefers-color-scheme)
   // Possible values: 'dark', 'light', 'dark-flat'
@@ -183,7 +186,10 @@ export function ChatMinimap({
         canvasHeight,
         scrollTop,
         scrollHeight,
-        viewportHeight
+        viewportHeight,
+        zoom,
+        zoomAnchorScrollTop,
+        zoomAnchorCanvasY
       );
     } else if (exchanges && exchanges.length > 0) {
       // Fall back to legacy token-based layout
@@ -197,7 +203,7 @@ export function ChatMinimap({
     }
 
     return null;
-  }, [exchanges, exchangeRects, canvasHeight, scrollTop, scrollHeight, viewportHeight]);
+  }, [exchanges, exchangeRects, canvasHeight, scrollTop, scrollHeight, viewportHeight, zoom, zoomAnchorScrollTop, zoomAnchorCanvasY]);
 
   // Calculate new content Y position (when scrolled away)
   const newContentFromY = useMemo(() => {
@@ -282,7 +288,8 @@ export function ChatMinimap({
         const y = e.clientY - rect.top;
         const exLayout = findExchangeAtPosition(layout, y);
         if (exLayout) {
-          const editLayout = findEditBlockAtPosition(exLayout, y - exLayout.y);
+          const contentY = y + (layout.contentOffsetY ?? 0);
+          const editLayout = findEditBlockAtPosition(exLayout, contentY - exLayout.y);
           if (editLayout && onEditBlockClick) {
             onEditBlockClick(editLayout.block.turnId);
           } else if (onExchangeClick) {
@@ -302,6 +309,34 @@ export function ChatMinimap({
     setIsDragging(false);
   }, []);
 
+  const handleWheel = useCallback((e: React.WheelEvent) => {
+    if (!e.shiftKey) return;
+    e.preventDefault();
+
+    const canvas = canvasRef.current;
+    if (!canvas || !layout) return;
+
+    const rect = canvas.getBoundingClientRect();
+    const y = e.clientY - rect.top;
+    const contentY = y + (layout.contentOffsetY ?? 0);
+    const anchorScroll = contentY / layout.scale;
+
+    setZoomAnchorScrollTop(anchorScroll);
+    setZoomAnchorCanvasY(y);
+    setZoom((currentZoom) => {
+      const zoomDelta = e.deltaY > 0 ? 0.9 : 1.1;
+      const nextZoom = currentZoom * zoomDelta;
+      return Math.max(1, Math.min(nextZoom, 6));
+    });
+  }, [layout]);
+
+  useEffect(() => {
+    if (zoom === 1) {
+      setZoomAnchorScrollTop(undefined);
+      setZoomAnchorCanvasY(undefined);
+    }
+  }, [zoom]);
+
   // Handle hover to show exchange highlight and tooltip
   const handlePointerMoveHover = useCallback((e: React.PointerEvent) => {
     if (isDragging) return; // Don't update hover during drag
@@ -312,7 +347,8 @@ export function ChatMinimap({
     const rect = canvas.getBoundingClientRect();
     const y = e.clientY - rect.top;
     const exLayout = findExchangeAtPosition(layout, y);
-    const editLayout = exLayout ? findEditBlockAtPosition(exLayout, y - exLayout.y) : null;
+    const contentY = y + (layout.contentOffsetY ?? 0);
+    const editLayout = exLayout ? findEditBlockAtPosition(exLayout, contentY - exLayout.y) : null;
 
     setHoveredExchangeId(exLayout?.exchange.id ?? null);
     setHoveredEditBlockId(editLayout?.block.id ?? null);
@@ -453,6 +489,7 @@ export function ChatMinimap({
         ref={containerRef}
         className={`chat-minimap ${className} ${isDragging ? 'chat-minimap--dragging' : ''} ${!visible ? 'chat-minimap--hidden' : ''}`}
         style={{ width }}
+        title={zoom > 1 ? `Shift-scroll to zoom (${zoom.toFixed(1)}×)` : 'Shift-scroll to zoom'}
       >
         <canvas
           ref={canvasRef}
@@ -469,6 +506,7 @@ export function ChatMinimap({
             handlePointerLeaveHover();
           }}
           onContextMenu={handleContextMenu}
+          onWheel={handleWheel}
         />
       </div>
 

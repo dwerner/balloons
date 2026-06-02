@@ -111,9 +111,16 @@ export function renderMinimap(
   const contentWidth = width - CONTENT_PADDING_X * 2 - EXCHANGE_BORDER_WIDTH;
   const contentX = CONTENT_PADDING_X + EXCHANGE_BORDER_WIDTH;
 
+  const contentOffsetY = layout.contentOffsetY ?? 0;
+
   // Draw each exchange
   for (const exLayout of layout.exchanges) {
-    const { exchange, y, height: exHeight, turns } = exLayout;
+    const renderY = exLayout.y - contentOffsetY;
+    const { exchange, height: exHeight, turns } = exLayout;
+
+    if (renderY + exHeight < 0 || renderY > height) {
+      continue;
+    }
     const isHovered = exchange.id === hoveredExchangeId;
     const isSelected = exchange.id === selectedExchangeId;
     const isArchiving = archivingExchangeIds?.has(exchange.id) ?? false;
@@ -125,7 +132,7 @@ export function renderMinimap(
       ? 'rgba(245, 158, 11, 0.3)'  // Amber for archiving
       : getExchangeColor(exchange.colorIndex, bgAlpha);
     ctx.fillStyle = bgColor;
-    ctx.fillRect(CONTENT_PADDING_X, y, width - CONTENT_PADDING_X * 2, exHeight);
+    ctx.fillRect(CONTENT_PADDING_X, renderY, width - CONTENT_PADDING_X * 2, exHeight);
 
     // Hover/selection outline
     if (isHovered || isSelected) {
@@ -135,7 +142,7 @@ export function renderMinimap(
       ctx.lineWidth = isHovered ? 2 : 1;
       ctx.strokeRect(
         CONTENT_PADDING_X + 0.5,
-        y + 0.5,
+        renderY + 0.5,
         width - CONTENT_PADDING_X * 2 - 1,
         exHeight - 1
       );
@@ -146,7 +153,7 @@ export function renderMinimap(
       ? 'rgb(245, 158, 11)'  // Amber for archiving
       : EXCHANGE_COLORS[exchange.colorIndex % EXCHANGE_COLORS.length] ?? EXCHANGE_COLORS[0]!;
     ctx.fillStyle = borderColor;
-    ctx.fillRect(CONTENT_PADDING_X, y, isHovered ? EXCHANGE_BORDER_WIDTH + 1 : EXCHANGE_BORDER_WIDTH, exHeight);
+    ctx.fillRect(CONTENT_PADDING_X, renderY, isHovered ? EXCHANGE_BORDER_WIDTH + 1 : EXCHANGE_BORDER_WIDTH, exHeight);
 
     // Archiving indicator: pulsing outline
     if (isArchiving) {
@@ -155,7 +162,7 @@ export function renderMinimap(
       ctx.setLineDash([4, 2]);  // Dashed line for "in progress" feel
       ctx.strokeRect(
         CONTENT_PADDING_X + 0.5,
-        y + 0.5,
+        renderY + 0.5,
         width - CONTENT_PADDING_X * 2 - 1,
         exHeight - 1
       );
@@ -166,7 +173,7 @@ export function renderMinimap(
     if (turns && turns.length > 0) {
       // Draw individual turns (legacy token-based layout)
       for (const turnLayout of turns) {
-        const turnY = y + EXCHANGE_PADDING_Y + turnLayout.y;
+        const turnY = renderY + EXCHANGE_PADDING_Y + turnLayout.y;
         const turnX = contentX + turnLayout.x * contentWidth;
         const turnW = Math.max(turnLayout.width * contentWidth, 1);
         const turnH = Math.max(turnLayout.height, 1);
@@ -185,7 +192,7 @@ export function renderMinimap(
     } else {
       // DOM-based layout - fill the exchange block with a gradient or solid color
       // Use a subtle gradient from assistant color to show content
-      const fillY = y + EXCHANGE_PADDING_Y;
+      const fillY = renderY + EXCHANGE_PADDING_Y;
       const fillH = Math.max(exHeight - EXCHANGE_PADDING_Y * 2, 1);
 
       ctx.fillStyle = colors.assistant;
@@ -216,7 +223,7 @@ export function renderMinimap(
 
         // Draw centered in the exchange
         const labelX = CONTENT_PADDING_X + (width - CONTENT_PADDING_X * 2) / 2;
-        const labelY = y + exHeight / 2;
+        const labelY = renderY + exHeight / 2;
 
         ctx.fillText(tokenLabel, labelX, labelY);
         ctx.restore();
@@ -225,7 +232,7 @@ export function renderMinimap(
 
     if (exLayout.editBlocks && exLayout.editBlocks.length > 0) {
       for (const editLayout of exLayout.editBlocks) {
-        const editY = y + editLayout.y;
+        const editY = renderY + editLayout.y;
         const editHeight = Math.max(editLayout.height, 3);
         const isHoveredEdit = editLayout.block.id === hoveredEditBlockId;
 
@@ -253,23 +260,27 @@ export function renderMinimap(
   }
 
   // "New content" highlight when scrolled away
-  if (newContentFromY !== undefined && newContentFromY < height) {
+  const visibleNewContentY = newContentFromY !== undefined
+    ? newContentFromY - (layout.contentOffsetY ?? 0)
+    : undefined;
+
+  if (visibleNewContentY !== undefined && visibleNewContentY < height && visibleNewContentY > -25) {
     // Gradient glow starting at newContentFromY
     const glowHeight = 20;
-    const gradient = ctx.createLinearGradient(0, newContentFromY - 5, 0, newContentFromY + glowHeight);
+    const gradient = ctx.createLinearGradient(0, visibleNewContentY - 5, 0, visibleNewContentY + glowHeight);
     gradient.addColorStop(0, 'rgba(59, 130, 246, 0)');
     gradient.addColorStop(0.3, colors.newContent);
     gradient.addColorStop(1, 'rgba(59, 130, 246, 0)');
 
     ctx.fillStyle = gradient;
-    ctx.fillRect(0, newContentFromY - 5, width, glowHeight + 5);
+    ctx.fillRect(0, visibleNewContentY - 5, width, glowHeight + 5);
 
     // Small indicator line
     ctx.strokeStyle = colors.newContent;
     ctx.lineWidth = 2;
     ctx.beginPath();
-    ctx.moveTo(0, newContentFromY);
-    ctx.lineTo(width, newContentFromY);
+    ctx.moveTo(0, visibleNewContentY);
+    ctx.lineTo(width, visibleNewContentY);
     ctx.stroke();
   }
 }
