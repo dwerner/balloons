@@ -33,8 +33,7 @@ export function calculateMinimapLayoutFromDOM(
   viewportHeight: number,
   zoom: number = 1,
   zoomAnchorScrollTop?: number,
-  zoomAnchorCanvasY?: number,
-  manualContentOffsetY?: number
+  zoomAnchorCanvasY?: number
 ): MinimapLayout {
   if (exchangeRects.length === 0 || canvasHeight <= 0 || scrollHeight <= 0) {
     return {
@@ -79,10 +78,13 @@ export function calculateMinimapLayoutFromDOM(
 
   // Viewport position within virtual minimap content
   const viewportHeightScaled = Math.max(viewportHeight * scale, 10);
-  const anchorScrollTop = yClamp(zoomAnchorScrollTop ?? (scrollTop + viewportHeight / 2), 0, Math.max(scrollHeight, 0));
-  const anchorCanvasY = yClamp(zoomAnchorCanvasY ?? (canvasHeight / 2), 0, canvasHeight);
+  const defaultAnchorScrollTop = zoom > 1
+    ? (scrollTop + viewportHeight / 2)
+    : (scrollTop + viewportHeight);
+  const anchorScrollTop = yClamp(zoomAnchorScrollTop ?? defaultAnchorScrollTop, 0, Math.max(scrollHeight, 0));
+  const anchorCanvasY = yClamp(zoomAnchorCanvasY ?? (zoom > 1 ? (canvasHeight / 2) : canvasHeight), 0, canvasHeight);
   const anchorContentY = anchorScrollTop * scale;
-  let contentOffsetY = manualContentOffsetY ?? (anchorContentY - anchorCanvasY);
+  let contentOffsetY = anchorContentY - anchorCanvasY;
   const maxOffsetY = Math.max(0, totalHeight - canvasHeight);
   contentOffsetY = Math.max(0, Math.min(contentOffsetY, maxOffsetY));
   const viewportTop = scrollTop * scale - contentOffsetY;

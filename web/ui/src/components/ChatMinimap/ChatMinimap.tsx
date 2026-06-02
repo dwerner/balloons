@@ -95,6 +95,9 @@ export function ChatMinimap({
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const containerRef = useRef<HTMLDivElement>(null);
   const contextMenuRef = useRef<HTMLDivElement>(null);
+  const dragAutoPanRef = useRef<number | null>(null);
+  const lastPointerClientYRef = useRef<number | null>(null);
+  const AUTO_PAN_EDGE_ZONE = 14;
   const [isDragging, setIsDragging] = useState(false);
   const [canvasHeight, setCanvasHeight] = useState(0);
   const [hoveredExchangeId, setHoveredExchangeId] = useState<string | null>(null);
@@ -102,10 +105,10 @@ export function ChatMinimap({
   const [contextMenu, setContextMenu] = useState<ContextMenuInfo | null>(null);
   const [contextMenuPosition, setContextMenuPosition] = useState<{ left: number; top: number } | null>(null);
   const [tooltip, setTooltip] = useState<{ x: number; y: number; text: string } | null>(null);
+  const [autoPanDirection, setAutoPanDirection] = useState<'top' | 'bottom' | null>(null);
   const [zoom, setZoom] = useState(1);
   const [zoomAnchorScrollTop, setZoomAnchorScrollTop] = useState<number | undefined>(undefined);
   const [zoomAnchorCanvasY, setZoomAnchorCanvasY] = useState<number | undefined>(undefined);
-  const [manualContentOffsetY, setManualContentOffsetY] = useState<number | undefined>(undefined);
 
   // Detect theme (check for data-theme attribute or prefers-color-scheme)
   // Possible values: 'dark', 'light', 'dark-flat'
@@ -190,8 +193,7 @@ export function ChatMinimap({
         viewportHeight,
         zoom,
         zoomAnchorScrollTop,
-        zoomAnchorCanvasY,
-        manualContentOffsetY
+        zoomAnchorCanvasY
       );
     } else if (exchanges && exchanges.length > 0) {
       // Fall back to legacy token-based layout
@@ -205,7 +207,7 @@ export function ChatMinimap({
     }
 
     return null;
-  }, [exchanges, exchangeRects, canvasHeight, scrollTop, scrollHeight, viewportHeight, zoom, zoomAnchorScrollTop, zoomAnchorCanvasY, manualContentOffsetY]);
+  }, [exchanges, exchangeRects, canvasHeight, scrollTop, scrollHeight, viewportHeight, zoom, zoomAnchorScrollTop, zoomAnchorCanvasY]);
 
   // Calculate new content Y position (when scrolled away)
   const newContentFromY = useMemo(() => {
@@ -280,6 +282,7 @@ export function ChatMinimap({
 
   const handlePointerDown = useCallback((e: React.PointerEvent) => {
     setIsDragging(true);
+    lastPointerClientYRef.current = e.clientY;
     (e.target as HTMLElement).setPointerCapture(e.pointerId);
     handleNavigateToY(e.clientY);
 
@@ -304,12 +307,84 @@ export function ChatMinimap({
 
   const handlePointerMove = useCallback((e: React.PointerEvent) => {
     if (!isDragging) return;
+    lastPointerClientYRef.current = e.clientY;
     handleNavigateToY(e.clientY);
   }, [isDragging, handleNavigateToY]);
 
+  const stopDragAutoPan = useCallback(() => {
+    if (dragAutoPanRef.current !== null) {
+      cancelAnimationFrame(dragAutoPanRef.current);
+      dragAutoPanRef.current = null;
+    }
+  }, []);
+
   const handlePointerUp = useCallback(() => {
     setIsDragging(false);
-  }, []);
+    setAutoPanDirection(null);
+    lastPointerClientYRef.current = null;
+    stopDragAutoPan();
+  }, [stopDragAutoPan]);
+
+  useEffect(() => {
+    if (!isDragging || zoom <= 1) {
+      setAutoPanDirection(null);
+      stopDragAutoPan();
+      return;
+    }
+
+    let lastTick = performance.now();
+
+    const step = (now: number) => {
+      const canvas = canvasRef.current;
+      const currentLayout = layout;
+      const pointerClientY = lastPointerClientYRef.current;
+      if (!canvas || !currentLayout || pointerClientY === null) {
+        dragAutoPanRef.current = requestAnimationFrame(step);
+        return;
+      }
+
+      const rect = canvas.getBoundingClientRect();
+      const overshootTop = Math.max(0, rect.top - pointerClientY);
+      const overshootBottom = Math.max(0, pointerClientY - rect.bottom);
+      const withinTopZone = pointerClientY >= rect.top && pointerClientY <= rect.top + AUTO_PAN_EDGE_ZONE;
+      const withinBottomZone = pointerClientY <= rect.bottom && pointerClientY >= rect.bottom - AUTO_PAN_EDGE_ZONE;
+      const zonePullTop = withinTopZone ? (rect.top + AUTO_PAN_EDGE_ZONE - pointerClientY) : 0;
+      const zonePullBottom = withinBottomZone ? (pointerClientY - (rect.bottom - AUTO_PAN_EDGE_ZONE)) : 0;
+      const overshoot = overshootBottom > 0
+        ? overshootBottom + zonePullBottom
+        : overshootTop > 0
+          ? -(overshootTop + zonePullTop)
+          : withinBottomZone
+            ? zonePullBottom
+            : withinTopZone
+              ? -zonePullTop
+              : 0;
+      const dt = Math.min(now - lastTick, 32);
+      lastTick = now;
+
+      if (overshoot > 0) {
+        setAutoPanDirection('bottom');
+      } else if (overshoot < 0) {
+        setAutoPanDirection('top');
+      } else {
+        setAutoPanDirection(null);
+      }
+
+      if (overshoot !== 0) {
+        const direction = overshoot > 0 ? 1 : -1;
+        const speed = Math.min(40 + Math.abs(overshoot) * 2.5, 220);
+        const scrollDelta = direction * speed * (dt / 1000);
+        const nextScrollTop = scrollTop + scrollDelta;
+        const maxScrollTop = Math.max(0, scrollHeight - viewportHeight);
+        onNavigate(Math.max(0, Math.min(nextScrollTop, maxScrollTop)));
+      }
+
+      dragAutoPanRef.current = requestAnimationFrame(step);
+    };
+
+    dragAutoPanRef.current = requestAnimationFrame(step);
+    return stopDragAutoPan;
+  }, [isDragging, zoom, layout, onNavigate, scrollTop, scrollHeight, viewportHeight, stopDragAutoPan]);
 
   const handleWheel = useCallback((e: React.WheelEvent) => {
     const canvas = canvasRef.current;
@@ -323,7 +398,6 @@ export function ChatMinimap({
       const contentY = y + (layout.contentOffsetY ?? 0);
       const anchorScroll = contentY / layout.scale;
 
-      setManualContentOffsetY(undefined);
       setZoomAnchorScrollTop(anchorScroll);
       setZoomAnchorCanvasY(y);
       setZoom((currentZoom) => {
@@ -334,24 +408,12 @@ export function ChatMinimap({
       return;
     }
 
-    if (zoom > 1 && (layout.maxContentOffsetY ?? 0) > 0) {
-      e.preventDefault();
-      setZoomAnchorScrollTop(undefined);
-      setZoomAnchorCanvasY(undefined);
-      setManualContentOffsetY((currentOffset) => {
-        const baseOffset = currentOffset ?? layout.contentOffsetY ?? 0;
-        const nextOffset = baseOffset + e.deltaY;
-        const maxOffset = layout.maxContentOffsetY ?? 0;
-        return Math.max(0, Math.min(nextOffset, maxOffset));
-      });
-    }
-  }, [layout, zoom]);
+  }, [layout]);
 
   useEffect(() => {
     if (zoom === 1) {
       setZoomAnchorScrollTop(undefined);
       setZoomAnchorCanvasY(undefined);
-      setManualContentOffsetY(undefined);
     }
   }, [zoom]);
 
@@ -507,7 +569,7 @@ export function ChatMinimap({
         ref={containerRef}
         className={`chat-minimap ${className} ${isDragging ? 'chat-minimap--dragging' : ''} ${!visible ? 'chat-minimap--hidden' : ''}`}
         style={{ width }}
-        title={zoom > 1 ? `Shift-scroll to zoom (${zoom.toFixed(1)}×) · Scroll to pan` : 'Shift-scroll to zoom'}
+        title={zoom > 1 ? `Shift-scroll to zoom (${zoom.toFixed(1)}×)` : 'Shift-scroll to zoom'}
       >
         <canvas
           ref={canvasRef}
@@ -526,6 +588,18 @@ export function ChatMinimap({
           onContextMenu={handleContextMenu}
           onWheel={handleWheel}
         />
+        {isDragging && zoom > 1 && (
+          <>
+            <div
+              className={`chat-minimap__edge-zone chat-minimap__edge-zone--top ${autoPanDirection === 'top' ? 'chat-minimap__edge-zone--active' : ''}`}
+              style={{ height: AUTO_PAN_EDGE_ZONE }}
+            />
+            <div
+              className={`chat-minimap__edge-zone chat-minimap__edge-zone--bottom ${autoPanDirection === 'bottom' ? 'chat-minimap__edge-zone--active' : ''}`}
+              style={{ height: AUTO_PAN_EDGE_ZONE }}
+            />
+          </>
+        )}
       </div>
 
       {/* Hover Tooltip */}

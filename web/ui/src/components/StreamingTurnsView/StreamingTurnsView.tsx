@@ -461,9 +461,13 @@ export function StreamingTurnsView({ sessionId, client, onSelectSession, onScrol
     if (!turnElement) return;
 
     turnElement.scrollIntoView({ behavior: 'smooth', block: 'start' });
+    turnElement.classList.remove('turn-highlight');
+    void turnElement.offsetWidth;
     turnElement.classList.add('turn-highlight');
     window.setTimeout(() => turnElement.classList.remove('turn-highlight'), 1500);
   }, []);
+
+  const highlightedAssistantTurnIdsRef = useRef<Set<string>>(new Set());
 
   // Measure exchange DOM positions for minimap
   const measureExchanges = useCallback(() => {
@@ -1023,6 +1027,43 @@ export function StreamingTurnsView({ sessionId, client, onSelectSession, onScrol
       });
     });
   }, [turnsOrGroups, isStreaming, pendingAssistantTurns.length, streamingProgress, animateScrollTo, isInitialLoadComplete, sessionId, checkAtBottom]);
+
+  useEffect(() => {
+    if (!isFollowingRef.current || !scrollContainerRef.current) return;
+
+    const assistantTurns = turns.filter(turn => turn.role === 'assistant' && !!turn.turnId);
+    const newAssistantTurns = assistantTurns.filter(turn => !highlightedAssistantTurnIdsRef.current.has(turn.turnId));
+    if (newAssistantTurns.length === 0) return;
+
+    const lastAssistantTurn = newAssistantTurns[newAssistantTurns.length - 1];
+    if (!lastAssistantTurn?.turnId) return;
+
+    highlightedAssistantTurnIdsRef.current = new Set([
+      ...highlightedAssistantTurnIdsRef.current,
+      ...newAssistantTurns.map(turn => turn.turnId).filter((id): id is string => !!id),
+    ]);
+
+    const attemptHighlight = (remainingAttempts: number) => {
+      requestAnimationFrame(() => {
+        if (!scrollContainerRef.current) return;
+
+        const turnElement = scrollContainerRef.current.querySelector(`[data-turn-id="${CSS.escape(lastAssistantTurn.turnId)}"]`) as HTMLElement | null;
+        if (!turnElement) {
+          if (remainingAttempts > 0) {
+            attemptHighlight(remainingAttempts - 1);
+          }
+          return;
+        }
+
+        turnElement.classList.remove('turn-highlight');
+        void turnElement.offsetWidth;
+        turnElement.classList.add('turn-highlight');
+        window.setTimeout(() => turnElement.classList.remove('turn-highlight'), 1500);
+      });
+    };
+
+    attemptHighlight(8);
+  }, [turns]);
 
   // Early returns AFTER all hooks have been called
   if (!sessionId) {
