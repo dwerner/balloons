@@ -340,16 +340,45 @@ class DomainRegistry:
     # Prompt Aggregation
 
     def get_all_prompts(self) -> str:
-        """Get combined prompt fragments from all loaded domains.
-
-        Returns:
-            Combined prompt string with sections for each domain
-        """
+        """Get combined domain-level prompt fragments from all loaded domains."""
         parts = []
         for domain_id, domain in self._domains.items():
             prompt = domain.get_prompt()
             if prompt:
                 parts.append(f"## {domain.name} Domain\n\n{prompt}")
+        return "\n\n".join(parts)
+
+    def get_all_tool_prompts(self, enabled_tools: list[str] | None = None) -> str:
+        """Get combined tool-level prompt fragments from all loaded domains.
+
+        Only prompts for enabled tools are included when enabled_tools is provided.
+        Order follows the provided enabled_tools list where possible.
+        """
+        enabled_order = list(enabled_tools) if enabled_tools is not None else None
+        enabled_set = set(enabled_order) if enabled_order is not None else None
+
+        prompt_map: dict[str, tuple[str, str]] = {}
+        for domain in self._domains.values():
+            for tool_name, prompt in domain.get_tool_prompts(enabled_order).items():
+                if not prompt:
+                    continue
+                if enabled_set is not None and tool_name not in enabled_set:
+                    continue
+                prompt_map[tool_name] = (domain.name, prompt)
+
+        parts: list[str] = []
+        if enabled_order is not None:
+            for tool_name in enabled_order:
+                item = prompt_map.get(tool_name)
+                if item is None:
+                    continue
+                domain_name, prompt = item
+                parts.append(f"### {tool_name} ({domain_name})\n\n{prompt}")
+        else:
+            for tool_name in sorted(prompt_map):
+                domain_name, prompt = prompt_map[tool_name]
+                parts.append(f"### {tool_name} ({domain_name})\n\n{prompt}")
+
         return "\n\n".join(parts)
 
     # Tool Execution

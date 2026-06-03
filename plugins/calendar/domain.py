@@ -116,16 +116,13 @@ class CalendarDomain(DecoratedStatefulDomain):
         return "0.1.0"
 
     def get_prompt(self) -> str:
-        """Load prompt from prompt.md file."""
+        """Load domain-level prompt from prompt.md file."""
         prompt_path = os.path.join(os.path.dirname(__file__), "prompt.md")
         try:
             with open(prompt_path, "r") as f:
                 return f.read()
         except FileNotFoundError:
-            return """## Calendar Domain
-
-You can create and manage calendars and events using the calendar_* tools.
-Supports local calendars and iCal feed imports."""
+            return ""
 
     def get_ui_config(self) -> dict | None:
         """Return UI configuration for the calendar domain."""

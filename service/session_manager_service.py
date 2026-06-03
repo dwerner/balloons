@@ -3883,14 +3883,30 @@ Then I'll mark the session as concluded."""
         """
         try:
             from plugins.integration import load_domain
+            from plugins.registry import get_registry
             # Event emission is handled by integration.load_domain()
             load_domain(domain_id, emit_event=True)
 
-            # Track on session if provided
+            # Track on session if provided and auto-enable the domain's tools
             if session_id:
                 session = self._manager.get_session(session_id)
-                if session and domain_id not in session.loaded_domains:
-                    session.loaded_domains.append(domain_id)
+                if not session:
+                    session = await self._manager.load_session(session_id)
+                if session:
+                    if domain_id not in session.loaded_domains:
+                        session.loaded_domains.append(domain_id)
+
+                    registry = get_registry()
+                    domain = registry.get_domain(domain_id)
+                    if domain:
+                        enabled = session.get_enabled_tools_list()
+                        enabled_set = set(enabled)
+                        for tool in domain.get_tools():
+                            if tool.name not in enabled_set:
+                                enabled.append(tool.name)
+                                enabled_set.add(tool.name)
+                        session.enabled_tools = enabled
+
                     await self._manager.save_session(session)
 
             return {"success": True, "domain_id": domain_id}
@@ -3909,15 +3925,29 @@ Then I'll mark the session as concluded."""
             Dict with success status and error message if any
         """
         try:
+            from plugins.registry import get_registry
+
+            registry = get_registry()
+            domain = registry.get_domain(domain_id)
+            domain_tool_names = [tool.name for tool in domain.get_tools()] if domain else []
+
             from plugins.integration import unload_domain
             # Event emission is handled by integration.unload_domain()
             unload_domain(domain_id, emit_event=True)
 
-            # Remove from session if provided
+            # Remove from session if provided and auto-disable the domain's tools
             if session_id:
                 session = self._manager.get_session(session_id)
-                if session and domain_id in session.loaded_domains:
-                    session.loaded_domains.remove(domain_id)
+                if not session:
+                    session = await self._manager.load_session(session_id)
+                if session:
+                    if domain_id in session.loaded_domains:
+                        session.loaded_domains.remove(domain_id)
+                    if domain_tool_names:
+                        session.enabled_tools = [
+                            tool_name for tool_name in session.get_enabled_tools_list()
+                            if tool_name not in domain_tool_names
+                        ]
                     await self._manager.save_session(session)
 
             return {"success": True, "domain_id": domain_id}
@@ -7628,11 +7658,11 @@ Summary:""")
             if session:
                 tools_list = session.get_enabled_tools_list()
 
-        # Get all tools that would be sent to the OpenAI API
-        # This includes core tools, balloon tools, domain tools, etc.
+        # Get all tools that would be sent to the OpenAI API based strictly
+        # on the currently selected enabled tool list.
         all_schemas = get_tools_for_request(
             allowed_tools=tools_list,
-            include_domain_tools=True,  # Include loaded domain tools
+            include_domain_tools=True,
             include_browser_tools=True,
         )
 

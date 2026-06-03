@@ -21,6 +21,7 @@ from .exceptions import InputRequiredError
 from .tools import get_tools_for_request
 from .tool_executor import execute_tool
 from .tool_result import ToolExecutionResult
+from .openai_runner import _parse_embedded_tool_calls
 from .strict_openai_packaging import (
     MISTRAL_STRICT_PROFILE,
     StrictOpenAIMessagePackager,
@@ -163,7 +164,9 @@ class StrictOpenAICompatibleRunner(BaseRunner):
                          This is combined with balloons tools and domain prompts per-turn.
             context_window: Max context tokens for this backend
         """
-        self.client = AsyncOpenAI(base_url=base_url, api_key=api_key)
+        # llama.cpp and other local servers can spend a long time generating
+        # before the first streamed token arrives, so disable SDK timeouts here.
+        self.client = AsyncOpenAI(base_url=base_url, api_key=api_key, timeout=None)
         self.model = model
         self._user_prompt = user_prompt  # Base prompt from backend config
         self.context_window = context_window
@@ -634,7 +637,11 @@ class StrictOpenAICompatibleRunner(BaseRunner):
                         input_required = tool_result.input_required
                         # Check if domain tools changed (load_domain/unload_domain)
                         if tool_result.domains_changed:
-                            tools = get_tools_for_request(allowed_tools, disable_tools)
+                            tools = get_tools_for_request(
+                                allowed_tools=allowed_tools,
+                                disable_tools=disable_tools,
+                                include_domain_tools=True,
+                            )
                             debug_log.info(
                                 f"Domain tools changed, refreshed tool list",
                                 category=Category.RUNNER,
@@ -919,12 +926,26 @@ class StrictOpenAICompatibleRunner(BaseRunner):
             delta = choice.delta
 
             if not delta:
+                debug_log.trace(
+                    "Chunk with empty delta",
+                    category=Category.RUNNER,
+                    details={"choice_index": getattr(choice, 'index', None), "finish_reason": choice.finish_reason},
+                    run_id=self._run_id,
+                )
                 continue
 
             # Handle visible text content
             if delta.content:
                 content_buffer += delta.content
                 events.append(TextDelta(text=delta.content))
+            elif getattr(delta, "refusal", None):
+                refusal_text = delta.refusal
+                content_buffer += refusal_text
+                events.append(TextDelta(text=refusal_text))
+            elif getattr(delta, "reasoning_content", None):
+                reasoning_text = delta.reasoning_content
+                content_buffer += reasoning_text
+                events.append(ThinkingDelta(text=reasoning_text))
                 await asyncio.sleep(0)  # Yield to event loop
 
             # Handle reasoning / thinking text if the backend exposes it
@@ -1083,7 +1104,7 @@ class StrictOpenAICompatibleRunner(BaseRunner):
             run_id=self._run_id,
         )
 
-        # Detect embedded tool calls in content (common with some models)
+        # Detect and parse embedded tool calls in content (common with some models)
         # These patterns indicate the model is trying to call tools but not using the API
         embedded_patterns = [
             (r'<function_call>', "XML function_call tag"),
@@ -1095,8 +1116,10 @@ class StrictOpenAICompatibleRunner(BaseRunner):
             (r'\b(chess_\w+|supervisor_\w+|Read|Write|Edit|Bash|Glob|Grep)\s*\(\s*\w+\s*=', "Python-style function call"),
         ]
 
+        embedded_detected = False
         for pattern, description in embedded_patterns:
             if re.search(pattern, content_buffer):
+                embedded_detected = True
                 debug_log.warning(
                     f"Possible embedded tool call detected: {description}",
                     category=Category.RUNNER,
@@ -1110,26 +1133,53 @@ class StrictOpenAICompatibleRunner(BaseRunner):
                     },
                     run_id=self._run_id,
                 )
-                # Dump interaction for analysis if no proper tool calls were made.
-                # For strict backends, this also serves as the error-file path for
-                # invalid responses that lead to runner-level failures.
-                if len(finalized_tool_calls) == 0:
-                    dump_path = _dump_interaction(
-                        context="embedded_tool_call",
-                        model=self.model,
-                        messages=openai_messages,
-                        tools=tools,
-                        chunks=self._collected_chunks,
-                        error=f"Detected {description} in content",
+                break  # Only detect once
+
+        # If we detected embedded tool calls AND didn't get any native tool calls,
+        # try to parse the embedded ones
+        if embedded_detected and len(finalized_tool_calls) == 0:
+            parsed_embedded = _parse_embedded_tool_calls(content_buffer)
+            if parsed_embedded:
+                debug_log.info(
+                    f"Successfully parsed {len(parsed_embedded)} embedded tool calls",
+                    category=Category.RUNNER,
+                    details={
+                        "tools": [tc["name"] for tc in parsed_embedded],
+                    },
+                    run_id=self._run_id,
+                )
+                # Emit tool use events for parsed embedded calls
+                for tc in parsed_embedded:
+                    # Normalize arguments
+                    tc["arguments"] = _normalize_tool_arguments(tc["name"], tc["arguments"])
+                    events.append(ToolUseStartEvent(
+                        tool_use_id=tc["id"],
+                        tool_name=tc["name"],
+                    ))
+                    events.append(ToolUseEvent(
+                        tool_use_id=tc["id"],
+                        tool_name=tc["name"],
+                        tool_input=tc["arguments"],
+                    ))
+                # Add parsed calls to finalized list
+                finalized_tool_calls.extend(parsed_embedded)
+            else:
+                # Failed to parse - dump for analysis
+                dump_path = _dump_interaction(
+                    context="embedded_tool_call",
+                    model=self.model,
+                    messages=openai_messages,
+                    tools=tools,
+                    chunks=self._collected_chunks,
+                    error=f"Detected embedded tool call but failed to parse",
+                )
+                if dump_path is not None:
+                    debug_log.warning(
+                        f"Strict runner error dump created: {dump_path}",
+                        category=Category.RUNNER,
+                        details={"file": str(dump_path), "context": "embedded_tool_call", "error_dump_path": str(dump_path)},
+                        run_id=self._run_id,
                     )
-                    if dump_path is not None:
-                        debug_log.warning(
-                            f"Strict runner error dump created: {dump_path}",
-                            category=Category.RUNNER,
-                            details={"file": str(dump_path), "context": "embedded_tool_call", "error_dump_path": str(dump_path)},
-                            run_id=self._run_id,
-                        )
-                break  # Only warn once per response
 
         return {
             "events": events,

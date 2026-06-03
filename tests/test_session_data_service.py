@@ -14,6 +14,7 @@ from service.session_data_service import (
     SessionTurnDeltaEvent,
     SessionTurnFinishedEvent,
 )
+from service.session_events import TurnDeltaEvent
 from models import TextBlock, ToolUseBlock, ToolResultBlock, ContextMode
 
 # Default layers for full subscription (equivalent to legacy subscribe_session)
@@ -375,6 +376,36 @@ class TestEventData:
             "delta": "Hello, ",
             "accumulated_length": 7,
             "content_block_type": "text",
+        }
+
+    @pytest.mark.asyncio
+    async def test_on_turn_delta_forwards_content_block_type(self, service):
+        """Observer path should preserve content_block_type from SessionManagerService."""
+        events = []
+
+        def handler(event_name, data, target_clients):
+            events.append(data)
+
+        service.add_event_handler(handler)
+        await service.subscribe_add("session-1", "client-a", ["delta"])
+
+        await service.on_turn_delta(
+            TurnDeltaEvent(
+                session_id="session-1",
+                turn_id="turn-uuid-thinking",
+                turn_index=3,
+                delta="pondering",
+                accumulated_length=9,
+                content_block_type="thinking",
+            )
+        )
+
+        assert events[0] == {
+            "session_id": "session-1",
+            "turn_id": "turn-uuid-thinking",
+            "delta": "pondering",
+            "accumulated_length": 9,
+            "content_block_type": "thinking",
         }
 
     @pytest.mark.asyncio

@@ -44,20 +44,23 @@ class TestChessEngine:
 
     def test_simple_move(self):
         engine = ChessEngine()
-        error = engine.make_move("e2e4")
+        error, captured = engine.make_move("e2e4")
         assert error is None
+        assert captured is None
         assert engine.turn == Color.BLACK
 
     def test_illegal_move_wrong_turn(self):
         engine = ChessEngine()
-        error = engine.make_move("e7e5")  # Black's pawn, but White to move
+        error, captured = engine.make_move("e7e5")  # Black's pawn, but White to move
         assert error is not None
+        assert captured is None
         assert "White" in error or "turn" in error.lower()
 
     def test_illegal_move_no_piece(self):
         engine = ChessEngine()
-        error = engine.make_move("e4e5")  # No piece on e4
+        error, captured = engine.make_move("e4e5")  # No piece on e4
         assert error is not None
+        assert captured is None
 
     def test_scholar_mate(self):
         """Test scholar's mate (4-move checkmate)."""
@@ -65,7 +68,7 @@ class TestChessEngine:
 
         moves = ["e2e4", "e7e5", "f1c4", "b8c6", "d1h5", "g8f6", "h5f7"]
         for move in moves:
-            error = engine.make_move(move)
+            error, _captured = engine.make_move(move)
             assert error is None, f"Move {move} failed: {error}"
 
         assert engine.is_checkmate()
@@ -77,8 +80,9 @@ class TestChessEngine:
         engine.state.set_piece(Square.from_str("f1"), None)
         engine.state.set_piece(Square.from_str("g1"), None)
 
-        error = engine.make_move("e1g1")
+        error, captured = engine.make_move("e1g1")
         assert error is None
+        assert captured is None
 
         # Check king and rook positions
         king = engine.state.get_piece(Square.from_str("g1"))
@@ -93,8 +97,9 @@ class TestChessEngine:
             engine.make_move(move)
 
         # Now e5xd6 should be legal (en passant)
-        error = engine.make_move("e5d6")
+        error, captured = engine.make_move("e5d6")
         assert error is None
+        assert captured == "p"
 
         # Check that black pawn on d5 is captured
         assert engine.state.get_piece(Square.from_str("d5")) is None
@@ -104,8 +109,9 @@ class TestChessEngine:
         engine = ChessEngine()
         engine.set_position("8/P7/8/8/8/8/8/4K2k w - - 0 1")
 
-        error = engine.make_move("a7a8q")
+        error, captured = engine.make_move("a7a8q")
         assert error is None
+        assert captured is None
 
         piece = engine.state.get_piece(Square.from_str("a8"))
         assert piece is not None

@@ -1,7 +1,7 @@
 // AUTO-GENERATED CODE - DO NOT EDIT
 //
 // Generated from Python @ws_expose and @ws_event decorators.
-// Generated: 2026-06-01T14:31:38.529241
+// Generated: 2026-06-02T17:04:27.111975
 //
 // To regenerate:
 //     python -m codegen.generate_typescript
@@ -507,14 +507,6 @@ export interface SessionManagerService {
    * Info about the created session
    */
   createSession(workingDirectory?: string | null): Promise<Types.ManagedSessionInfo>;
-
-  /**
-   * Create a watcher session to observe another session.
-   * 
-   * Deprecated convenience wrapper. Prefer creating a normal session and then
-   * calling start_watching_session.
-   */
-  createWatcherSession(targetSessionId: string): Promise<Types.CreateWatcherSessionResult>;
 
   /**
    * Delete a session.
@@ -1366,10 +1358,6 @@ export class SessionManagerServiceClient implements SessionManagerService {
 
   async createSession(workingDirectory?: string | null): Promise<Types.ManagedSessionInfo> {
     return this.call('createSession', { workingDirectory: workingDirectory });
-  }
-
-  async createWatcherSession(targetSessionId: string): Promise<Types.CreateWatcherSessionResult> {
-    return this.call('createWatcherSession', { targetSessionId: targetSessionId });
   }
 
   async deleteSession(sessionId: string): Promise<boolean> {

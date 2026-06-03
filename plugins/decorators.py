@@ -120,7 +120,8 @@ class LLMCallableSpec:
 
     name: str  # Tool name (e.g., "chart_delete")
     method_name: str  # Python method name
-    description: str  # From docstring
+    description: str  # Short schema-facing description
+    prompt: str  # Tool-level prompt/help text for system prompt injection
     parameters: dict[str, Any]  # JSON Schema for parameters
     required: list[str]  # Required parameter names
     handler: Callable  # The decorated method
@@ -353,6 +354,7 @@ def llm_callable(
     *,
     name: str = None,
     description: str = None,
+    prompt: str = None,
     params: dict[str, Param] | None = None,
 ):
     """Mark a method as LLM-callable.
@@ -368,7 +370,9 @@ def llm_callable(
     Args:
         method: The method to decorate (when used without parentheses)
         name: Override the tool name (default: method name)
-        description: Override the description (default: docstring)
+        description: Override the short schema-facing description (default: docstring)
+        prompt: Override the tool-level prompt/help text injected into the system prompt
+                when this tool is enabled (default: description/docstring)
         params: Dict of param_name -> Param for rich schemas (enums, descriptions)
 
     Usage:
@@ -427,8 +431,12 @@ def llm_callable(
                 if param.default is inspect.Parameter.empty:
                     required.append(param_name)
 
-        # Get description from docstring or override
-        tool_description = description or (fn.__doc__ or "").strip()
+        # Get description/prompt text from docstring or overrides.
+        # Tool prompt should be explicitly authored in code; do not implicitly
+        # inject the schema description/docstring into the system prompt.
+        base_text = (fn.__doc__ or "").strip()
+        tool_description = description or base_text
+        tool_prompt = prompt or ""
 
         # Determine tool name
         tool_name = name or fn.__name__
@@ -438,6 +446,7 @@ def llm_callable(
             name=tool_name,
             method_name=fn.__name__,
             description=tool_description,
+            prompt=tool_prompt,
             parameters=parameters,
             required=required,
             handler=fn,
@@ -460,16 +469,9 @@ def llm_callable(
     return decorator
 
 
-def collect_llm_tools(domain_class: type) -> list[ToolDef]:
-    """Collect all @llm_callable tools from a domain class.
-
-    Call this in get_tools() to automatically include decorated methods.
-
-    Usage:
-        def get_tools(self) -> list[ToolDef]:
-            return collect_llm_tools(self.__class__)
-    """
-    tools = []
+def _iter_llm_callable_specs(domain_class: type) -> list[LLMCallableSpec]:
+    """Collect all llm-callable specs from a domain class in declaration order."""
+    specs: list[LLMCallableSpec] = []
 
     for attr_name in dir(domain_class):
         if attr_name.startswith("_"):
@@ -480,18 +482,43 @@ def collect_llm_tools(domain_class: type) -> list[ToolDef]:
             continue
 
         if hasattr(attr, "_llm_callable_spec"):
-            spec: LLMCallableSpec = attr._llm_callable_spec
-            tools.append(ToolDef(
-                name=spec.name,
-                description=spec.description,
-                parameters={
-                    "type": "object",
-                    "properties": spec.parameters,
-                    "required": spec.required,
-                },
-            ))
+            specs.append(attr._llm_callable_spec)
 
-    return tools
+    return specs
+
+
+
+def collect_llm_tools(domain_class: type) -> list[ToolDef]:
+    """Collect all @llm_callable tools from a domain class.
+
+    Call this in get_tools() to automatically include decorated methods.
+
+    Usage:
+        def get_tools(self) -> list[ToolDef]:
+            return collect_llm_tools(self.__class__)
+    """
+    return [
+        ToolDef(
+            name=spec.name,
+            description=spec.description,
+            parameters={
+                "type": "object",
+                "properties": spec.parameters,
+                "required": spec.required,
+            },
+        )
+        for spec in _iter_llm_callable_specs(domain_class)
+    ]
+
+
+
+def collect_llm_tool_prompts(domain_class: type) -> dict[str, str]:
+    """Collect tool-level prompt/help text for @llm_callable tools."""
+    prompts: dict[str, str] = {}
+    for spec in _iter_llm_callable_specs(domain_class):
+        if spec.prompt:
+            prompts[spec.name] = spec.prompt
+    return prompts
 
 
 async def dispatch_llm_tool(

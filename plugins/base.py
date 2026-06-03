@@ -5,7 +5,7 @@ Defines the interface that all domains must implement.
 
 from abc import ABC, abstractmethod
 from dataclasses import dataclass, field
-from typing import Any, Callable, Protocol, TYPE_CHECKING
+from typing import Any, Callable, Protocol, TYPE_CHECKING, Sequence
 from enum import Enum
 
 # Re-export DomainEvent from the new events module for backwards compatibility
@@ -125,12 +125,22 @@ class Domain(ABC):
 
     # Prompt Interface
     def get_prompt(self) -> str:
-        """Return static system prompt fragment.
+        """Return domain-level system prompt fragment.
 
         This is injected into the system prompt when the domain is loaded.
-        Should document the available tools and how to use them.
+        It should describe domain-wide concepts and context, not per-tool usage.
+        Tool-specific usage/help belongs in tool-level prompt fragments.
         """
         return ""
+
+    def get_tool_prompts(self, enabled_tools: Sequence[str] | None = None) -> dict[str, str]:
+        """Return tool-level prompt fragments keyed by tool name.
+
+        Domains using decorator-based tools can override this automatically.
+        The enabled_tools filter is optional and lets domains return only the
+        prompts relevant to the currently selected tool set.
+        """
+        return {}
 
     # Event Interface
     async def handle_event(
@@ -303,6 +313,15 @@ class DecoratedDomain(Domain):
         from .decorators import collect_llm_tools
         return collect_llm_tools(self.__class__)
 
+    def get_tool_prompts(self, enabled_tools: Sequence[str] | None = None) -> dict[str, str]:
+        """Automatically collect tool-level prompts from @llm_callable methods."""
+        from .decorators import collect_llm_tool_prompts
+        prompts = collect_llm_tool_prompts(self.__class__)
+        if enabled_tools is None:
+            return prompts
+        enabled = set(enabled_tools)
+        return {name: prompt for name, prompt in prompts.items() if name in enabled}
+
     async def handle_tool(
         self,
         tool_name: str,
@@ -352,6 +371,15 @@ class DecoratedStatefulDomain(StatefulDomain):
         """Automatically collect tools from @llm_callable methods."""
         from .decorators import collect_llm_tools
         return collect_llm_tools(self.__class__)
+
+    def get_tool_prompts(self, enabled_tools: Sequence[str] | None = None) -> dict[str, str]:
+        """Automatically collect tool-level prompts from @llm_callable methods."""
+        from .decorators import collect_llm_tool_prompts
+        prompts = collect_llm_tool_prompts(self.__class__)
+        if enabled_tools is None:
+            return prompts
+        enabled = set(enabled_tools)
+        return {name: prompt for name, prompt in prompts.items() if name in enabled}
 
     async def handle_tool(
         self,

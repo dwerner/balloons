@@ -6,6 +6,13 @@ from unittest.mock import MagicMock
 from core.runner_factory import validate_backend_config, create_runner
 
 
+class DummyAsyncOpenAI:
+    def __init__(self, *args, **kwargs):
+        self.args = args
+        self.kwargs = kwargs
+
+
+
 class TestValidateBackendConfig:
     """Tests for validate_backend_config function."""
 
@@ -129,7 +136,8 @@ class TestValidateBackendConfig:
 
 
 class TestCreateRunner:
-    def test_openai_strict_type_uses_experimental_runner(self):
+    def test_openai_strict_type_uses_experimental_runner(self, monkeypatch):
+        monkeypatch.setattr("core.strict_openai_runner.AsyncOpenAI", DummyAsyncOpenAI)
         backend = MagicMock(
             type="openai_strict",
             name="strict-openai",
