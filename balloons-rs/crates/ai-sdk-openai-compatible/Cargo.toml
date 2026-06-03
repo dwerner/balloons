@@ -1,0 +1,43 @@
+[package]
+name = "ai-sdk-openai-compatible"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+publish.workspace = true
+
+[dependencies]
+# Async runtime
+tokio = { version = "1", features = ["full"] }
+async-trait.workspace = true
+
+# HTTP client
+reqwest = { version = "0.11", features = ["json", "stream"] }
+
+# Serialization
+serde = { version = "1", features = ["derive"] }
+serde_json.workspace = true
+
+# Schema validation
+schemars = { version = "0.8", features = ["preserve_order"] }
+
+# Error handling
+thiserror.workspace = true
+
+# Streaming
+eventsource-stream = "0.2"
+
+# Utilities
+uuid = { version = "1", features = ["v4"] }
+tracing.workspace = true
+
+# Bytes for streaming
+bytes = "1"
+
+# Async streaming
+async-stream = "0.3"
+futures = "0.3"
+
+[dev-dependencies]
+tokio = { version = "1", features = ["full", "test-util"] }
+wiremock = "0.5"
+serde_json = "1"

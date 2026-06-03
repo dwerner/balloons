@@ -250,8 +250,6 @@ def build_system_prompt(
     if session_prompts:
         parts.append(session_prompts)
 
-    # 5. Future: Goal binding context
-
     return "\n\n".join(parts) if parts else None
 
 

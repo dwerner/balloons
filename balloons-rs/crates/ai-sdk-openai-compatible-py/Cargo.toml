@@ -1,0 +1,19 @@
+[package]
+name = "ai-sdk-openai-compatible-py"
+version = "0.1.0"
+edition = "2021"
+description = "Python bindings for ai-sdk-openai-compatible"
+
+[lib]
+name = "ai_sdk_openai_compatible_py"
+crate-type = ["cdylib"]
+
+[dependencies]
+ai-sdk-openai-compatible = { path = "../ai-sdk-openai-compatible" }
+pyo3 = "0.28"
+pyo3-async-runtimes = { git = "https://github.com/dwerner/pyo3-async-runtimes", branch = "add-smol-runtime", features = [
+    "tokio-runtime",
+] }
+tokio = { version = "1", features = ["full"] }
+serde_json = "1"
+futures = "0.3"

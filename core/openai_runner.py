@@ -311,6 +311,10 @@ class OpenAICompatibleRunner(BaseRunner):
 
         # Build system prompt fresh for this turn (includes domain prompts)
         system_prompt = self._get_system_prompt()
+        
+        # Always include system prompt at the start of every request.
+        # Each API call is stateless - the server doesn't cache anything.
+        # The FULL chat history (including system) must be sent every time.
         if system_prompt:
             openai_messages.append({
                 "role": "system",
