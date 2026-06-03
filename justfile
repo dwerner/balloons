@@ -54,3 +54,15 @@ test-scope scope: setup
 build: setup gen
     @just banner {{quote(yellow)}} 'build: developing balloons-py with maturin'
     {{uv}} run maturin develop --release --manifest-path balloons-rs/crates/balloons-py/Cargo.toml
+    @just banner {{quote(yellow)}} 'build: developing ai-sdk-openai-compatible-py with maturin'
+    {{uv}} run maturin develop --release --manifest-path balloons-rs/crates/ai-sdk-openai-compatible-py/Cargo.toml
+
+test-ai-sdk: setup
+    @just banner {{quote(green)}} 'test-ai-sdk: running ai-sdk Python bindings tests'
+    cd balloons-rs/crates/ai-sdk-openai-compatible-py
+    {{py}} pytest tests -v
+
+test-ai-sdk-integration: setup
+    @just banner {{quote(green)}} 'test-ai-sdk-integration: running integration tests (requires server)'
+    cd balloons-rs/crates/ai-sdk-openai-compatible-py
+    {{py}} pytest tests/integration -v -s

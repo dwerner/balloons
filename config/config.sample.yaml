@@ -97,13 +97,23 @@ backends:
   #   system_prompt: ~/.balloons/prompts/minimal.md
 
   # Google Gemini - Google AI Studio API
-  # gemini:
-  #   type: gemini
-  #   api_key: ${GOOGLE_AI_API_KEY}  # Get from https://aistudio.google.com/apikey
-  #   model: gemini-2.5-flash  # or gemini-2.5-pro, gemini-1.5-flash, etc.
-  #   context_window: 200000  # Gemini supports up to 1M+ tokens
-  #   # Optional: Custom system prompt
-  #   # system_prompt: ~/.balloons/prompts/coding-assistant.md
+   # gemini:
+   #   type: gemini
+   #   api_key: ${GOOGLE_AI_API_KEY}  # Get from https://aistudio.google.com/apikey
+   #   model: gemini-2.5-flash  # or gemini-2.5-pro, gemini-1.5-flash, etc.
+   #   context_window: 200000  # Gemini supports up to 1M+ tokens
+   #   # Optional: Custom system prompt
+   #   # system_prompt: ~/.balloons/prompts/coding-assistant.md
+
+   # AI SDK - Rust ai-sdk-openai-compatible crate (high-performance)
+   # Requires: maturin develop in balloons-rs/crates/ai-sdk-openai-compatible-py
+   # ai_sdk:
+   #   type: ai_sdk
+   #   base_url: http://localhost:8000  # OpenAI-compatible server (llama.cpp, vLLM, etc.)
+   #   model: Qwen3.5-122B-A10B-Q6_K-00001-of-00004.gguf  # Model loaded on server
+   #   api_key: not-needed  # Optional, for servers requiring auth
+   #   context_window: 200000
+   #   system_prompt: ~/.balloons/prompts/coding-assistant.md
 
 # WebSocket server for web UI and external integrations
 # Enables the React web UI (web/ui/) to connect to the running TUI

@@ -221,7 +221,7 @@ class BackendConfig:
 
     Attributes:
         name: Backend identifier
-        type: Backend type - "claude" (CLI subprocess), "openai" (OpenAI-compatible API), or "openai_strict" (strict Jinja-compatible OpenAI API)
+        type: Backend type - "claude" (CLI subprocess), "openai" (OpenAI-compatible API), "openai_strict" (strict Jinja-compatible OpenAI API), or "ai_sdk" (Rust ai-sdk-openai-compatible)
         base_url: API base URL (required for openai type, optional for claude)
         api_key: API key (supports ${ENV_VAR} syntax)
         model: Model identifier (required for openai type)

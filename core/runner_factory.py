@@ -62,8 +62,12 @@ def validate_backend_config(backend: BackendConfig) -> str | None:
         if not backend.api_key:
             return f"Backend '{backend.name}' requires api_key for type 'gemini'"
         # Note: model defaults to gemini-2.5-flash if not specified
+    elif backend_type == "ai_sdk":
+        if not backend.base_url:
+            return f"Backend '{backend.name}' requires base_url for type 'ai_sdk'"
+        # Note: model is optional for local servers
     elif backend_type != "claude":
-        return f"Unknown backend type: {backend_type}. Valid types: 'claude', 'openai', 'openai_strict', 'gemini'"
+        return f"Unknown backend type: {backend_type}. Valid types: 'claude', 'openai', 'openai_strict', 'gemini', 'ai_sdk'"
 
     return None
 
@@ -162,6 +166,24 @@ def create_runner(backend: BackendConfig) -> BaseRunner:
             context_window=backend.context_window or 200000,
         )
 
+    elif backend_type == "ai_sdk":
+        # AI SDK runner using Rust ai-sdk-openai-compatible crate
+        from .ai_sdk_runner import AISDKRunner
+
+        if not backend.base_url:
+            raise ValueError(f"Backend '{backend.name}' requires base_url for type 'ai_sdk'")
+
+        api_key = resolve_env_var(backend.api_key or "")
+        model = backend.model or "default"
+
+        return AISDKRunner(
+            base_url=backend.base_url,
+            model=model,
+            api_key=api_key if api_key else None,
+            user_prompt=user_prompt,
+            context_window=backend.context_window,
+        )
+
     elif backend_type == "claude":
         # Claude CLI backend
         from claude_runner import ClaudeRunner
@@ -181,4 +203,4 @@ def create_runner(backend: BackendConfig) -> BaseRunner:
         )
 
     else:
-        raise ValueError(f"Unknown backend type: {backend_type}. Valid types: 'claude', 'openai', 'openai_strict', 'gemini'")
+        raise ValueError(f"Unknown backend type: {backend_type}. Valid types: 'claude', 'openai', 'openai_strict', 'gemini', 'ai_sdk'")
