@@ -307,14 +307,18 @@ export const EnabledToolsView = memo(function EnabledToolsView({
     }
   }, [client, sessionId]);
 
-  // Refresh domain info from backend
-  const refreshDomainInfo = useCallback(async () => {
+  // Refresh domain info and available tools from backend
+  const refreshDomainState = useCallback(async () => {
     if (!client) return;
     try {
-      const domainInfo = await client.sessions.getDomainInfo() as { available: string[]; loaded: string[] };
+      const [domainInfo, available] = await Promise.all([
+        client.sessions.getDomainInfo() as Promise<{ available: string[]; loaded: string[] }>,
+        client.sessions.getAvailableTools() as unknown as Promise<AvailableTools>,
+      ]);
       setAvailableDomains(domainInfo.available);
       setLoadedDomains(domainInfo.loaded);
-      debugLog('Refreshed domain info', domainInfo);
+      setAvailableTools(available);
+      debugLog('Refreshed domain state', { domainInfo, available });
     } catch {
       // Domain system might not be available
     }
@@ -335,10 +339,21 @@ export const EnabledToolsView = memo(function EnabledToolsView({
         await client.sessions.loadDomain(domainId, sessionId || undefined);
         debugLog('Loaded domain', { domainId, sessionId });
       }
-      // Refresh domain info from backend to get actual state
-      await refreshDomainInfo();
-      // Refresh preview after domain change
-      setTimeout(loadPromptPreview, 100);
+      // Refresh domain/tool state from backend to get actual state
+      await refreshDomainState();
+
+      // Reload enabled tools from the persisted session because domain load/unload
+      // mutates session.enabled_tools on the backend.
+      if (!isGlobalSettings && sessionId) {
+        const refreshedEnabled = await client.sessions.getSessionEnabledTools(sessionId);
+        setEnabledTools(new Set(refreshedEnabled));
+        debugLog('Reloaded session enabled tools after domain toggle', {
+          sessionId,
+          domainId,
+          enabledCount: refreshedEnabled.length,
+          enabled: refreshedEnabled,
+        });
+      }
     } catch (e) {
       const msg = e instanceof Error ? e.message : String(e);
       setError(msg);
@@ -346,7 +361,7 @@ export const EnabledToolsView = memo(function EnabledToolsView({
     } finally {
       setIsSaving(false);
     }
-  }, [client, sessionId, isSaving, loadPromptPreview, refreshDomainInfo]);
+  }, [client, sessionId, isSaving, loadPromptPreview, loadToolSchemasPreview, backendType, refreshDomainState]);
 
   // Load backend type on mount
   useEffect(() => {
@@ -362,7 +377,7 @@ export const EnabledToolsView = memo(function EnabledToolsView({
         loadToolSchemasPreview();
       }
     }
-  }, [isLoading, loadPromptPreview, loadToolSchemasPreview, backendType]);
+  }, [isLoading, loadPromptPreview, loadToolSchemasPreview, backendType, enabledTools]);
 
   // Subscribe to domain loaded/unloaded events to stay in sync with DomainsTab
   useEffect(() => {
@@ -379,6 +394,7 @@ export const EnabledToolsView = memo(function EnabledToolsView({
         if (event.eventType === 'domain_loaded') {
           debugLog('Domain loaded event received', { domainId });
           setLoadedDomains(prev => prev.includes(domainId) ? prev : [...prev, domainId]);
+          void refreshDomainState();
           // Refresh previews when domains change
           loadPromptPreview();
           if (backendType === 'openai') {
@@ -387,6 +403,7 @@ export const EnabledToolsView = memo(function EnabledToolsView({
         } else if (event.eventType === 'domain_unloaded') {
           debugLog('Domain unloaded event received', { domainId });
           setLoadedDomains(prev => prev.filter(d => d !== domainId));
+          void refreshDomainState();
           // Refresh previews when domains change
           loadPromptPreview();
           if (backendType === 'openai') {
@@ -397,15 +414,16 @@ export const EnabledToolsView = memo(function EnabledToolsView({
     });
 
     return unsubscribe;
-  }, [client, loadPromptPreview, loadToolSchemasPreview, backendType]);
+  }, [client, loadPromptPreview, loadToolSchemasPreview, backendType, refreshDomainState]);
 
   // Build category groups
   const categoryGroups = useMemo(() => {
     if (!availableTools) return [];
 
     const groups: Array<{ key: string; label: string; tools: string[] }> = [];
+    const domainToolsByPlugin = availableTools.domain_tools || {};
     const domainPluginTools = new Set(
-      Object.values(availableTools.domain_tools || {}).flat()
+      Object.values(domainToolsByPlugin).flat()
     );
 
     if (availableTools.core.length > 0) {
@@ -428,11 +446,15 @@ export const EnabledToolsView = memo(function EnabledToolsView({
       });
     }
 
-    if (domainPluginTools.size > 0) {
+    const pluginToolGroups = Object.entries(domainToolsByPlugin)
+      .filter(([, tools]) => tools && tools.length > 0)
+      .sort(([a], [b]) => a.localeCompare(b));
+
+    for (const [pluginId, tools] of pluginToolGroups) {
       groups.push({
-        key: 'domain_plugins',
-        label: 'Domain Plugin Tools',
-        tools: [...domainPluginTools].sort((a, b) => a.localeCompare(b)),
+        key: `domain_plugin:${pluginId}`,
+        label: `${pluginId} Plugin Tools`,
+        tools: [...tools].sort((a, b) => a.localeCompare(b)),
       });
     }
 
@@ -602,10 +624,8 @@ export const EnabledToolsView = memo(function EnabledToolsView({
                 className={`enabled-tools-view__preview-tab ${!showingPrompt ? 'enabled-tools-view__preview-tab--active' : ''}`}
                 onClick={() => {
                   setPreviewTab('schemas');
-                  // Load schemas on first click if not loaded
-                  if (toolSchemasPreview === '') {
-                    loadToolSchemasPreview();
-                  }
+                  // Always reload schemas when switching to this tab to ensure fresh data
+                  loadToolSchemasPreview();
                 }}
               >
                 Tool Schemas

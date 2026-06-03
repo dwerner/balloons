@@ -65,18 +65,14 @@ class ChessDomain(DecoratedStatefulDomain):
         return "0.1.0"
 
     def get_prompt(self) -> str:
-        """Load prompt from prompt.md file."""
+        """Load domain-level prompt from prompt.md file."""
         import os
         prompt_path = os.path.join(os.path.dirname(__file__), "prompt.md")
         try:
             with open(prompt_path, "r") as f:
                 return f.read()
         except FileNotFoundError:
-            # Fallback if file not found
-            return """## Chess Domain
-
-You can play chess using the chess_* tools. The board uses standard algebraic notation.
-Use chess_new_game to start, chess_move to play, chess_show to see the board."""
+            return ""
 
     def get_ui_config(self) -> dict | None:
         """Return UI configuration for the chess domain.

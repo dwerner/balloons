@@ -73,16 +73,16 @@ def is_domain_tool(tool_name: str) -> bool:
 
 
 def get_domain_prompt() -> str:
-    """Get combined prompt fragments from all loaded domains.
-
-    Call this from runner_factory to include domain documentation
-    in the system prompt.
-
-    Returns:
-        Combined prompt string, or empty string if no domains loaded
-    """
+    """Get combined domain-level prompt fragments from all loaded domains."""
     registry = get_registry()
     return registry.get_prompt()
+
+
+
+def get_domain_tool_prompt(enabled_tools: list[str] | None = None) -> str:
+    """Get combined tool-level prompt fragments from all loaded domains."""
+    registry = get_registry()
+    return registry.get_all_tool_prompts(enabled_tools)
 
 
 async def execute_domain_tool(

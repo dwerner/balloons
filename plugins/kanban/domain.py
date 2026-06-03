@@ -152,16 +152,13 @@ class KanbanDomain(DecoratedStatefulDomain):
         await storage.delete(assoc_id)
 
     def get_prompt(self) -> str:
-        """Load prompt from prompt.md file."""
+        """Load domain-level prompt from prompt.md file."""
         prompt_path = os.path.join(os.path.dirname(__file__), "prompt.md")
         try:
             with open(prompt_path, "r") as f:
                 return f.read()
         except FileNotFoundError:
-            return """## Kanban Board Tools
-
-You can create and manage kanban boards using the kanban_* tools.
-Boards are session-scoped and persist across turns."""
+            return ""
 
     def get_ui_config(self) -> dict | None:
         """Return UI configuration for the kanban domain."""

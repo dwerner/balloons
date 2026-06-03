@@ -1,7 +1,7 @@
 set shell := ["bash", "-cu"]
 
 uv := "uv"
-py := uv + " run"
+py := uv + " run --python " + venv_python
 venv_python := ".venv/bin/python"
 blue := '\033[1;34m'
 green := '\033[1;32m'
@@ -16,8 +16,8 @@ default:
 
 setup:
     @just banner {{quote(blue)}} 'setup: ensuring .venv and Python deps'
-    {{uv}} venv --allow-existing
-    {{uv}} pip install --python {{venv_python}} -r requirements.txt maturin
+    {{uv}} venv --allow-existing .venv
+    {{uv}} pip install --python {{venv_python}} -r requirements.txt maturin PyJWT pytest pytest-asyncio
 
 gen: setup
     @just banner {{quote(blue)}} 'gen: regenerating Rust schema'

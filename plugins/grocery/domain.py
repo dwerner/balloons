@@ -834,14 +834,14 @@ class GroceryDomain(DecoratedStatefulDomain):
                     state._browser = None
 
     def get_prompt(self) -> str:
-        """Load prompt from prompt.md file."""
+        """Load domain-level prompt from prompt.md file."""
         import os
         prompt_path = os.path.join(os.path.dirname(__file__), "prompt.md")
         try:
             with open(prompt_path, "r") as f:
                 return f.read()
         except FileNotFoundError:
-            return "## Grocery Domain\n\nUse grocery_* tools to search and build a shopping cart."
+            return ""
 
     # --- Store Setup ---
 

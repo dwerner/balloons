@@ -155,14 +155,21 @@ def _load_balloons_tools_prompt(
 
 
 def _get_domain_prompt() -> str:
-    """Get combined prompt fragments from all loaded domains.
-
-    Returns:
-        Combined prompt string, or empty string if no domains loaded
-    """
+    """Get combined domain-level prompt fragments from all loaded domains."""
     try:
         from plugins.integration import get_domain_prompt
         return get_domain_prompt()
+    except ImportError:
+        return ""
+
+
+
+def _get_domain_tool_prompt(enabled_tools: Optional[Sequence[str]] = None) -> str:
+    """Get combined tool-level prompt fragments from all loaded domains."""
+    try:
+        from plugins.integration import get_domain_tool_prompt
+        tools = list(enabled_tools) if enabled_tools is not None else None
+        return get_domain_tool_prompt(tools)
     except ImportError:
         return ""
 
@@ -228,12 +235,17 @@ def build_system_prompt(
     if balloons_prompt:
         parts.append(balloons_prompt)
 
-    # 3. Domain plugin prompts (from currently loaded domains)
+    # 3. Domain plugin prompts (domain-level only)
     domain_prompt = _get_domain_prompt()
     if domain_prompt:
         parts.append(domain_prompt)
 
-    # 4. Session-specific prompt files
+    # 4. Domain plugin tool prompts (enabled tools only)
+    domain_tool_prompt = _get_domain_tool_prompt(enabled_tools)
+    if domain_tool_prompt:
+        parts.append(domain_tool_prompt)
+
+    # 5. Session-specific prompt files
     session_prompts = _get_session_prompt_files_content(session)
     if session_prompts:
         parts.append(session_prompts)
