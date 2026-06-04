@@ -201,24 +201,41 @@ impl LanguageModel for OpenAICompatibleChatModel {
                                 if let Some(ref calls) = choice.delta.tool_calls {
                                     for call in calls {
                                         if let Some(ref function) = call.function {
-                                            if function.name.is_some() {
-                                                return Some(Ok(StreamPart::ToolCallStart {
-                                                    id: call.id.clone().unwrap_or_default(),
-                                                }));
-                                            }
+                                            let tool_id = call.id.clone().unwrap_or_default();
+                                            
+                                            // Always send ToolCallDelta with name and arguments when available
+                                            // This handles both incremental deltas and complete tool calls in one chunk
                                             if let Some(ref args) = function.arguments {
                                                 return Some(Ok(StreamPart::ToolCallDelta {
-                                                    id: call.id.clone().unwrap_or_default(),
-                                                    name: None,
+                                                    id: tool_id,
+                                                    name: function.name.clone(),
                                                     arguments: args.clone(),
+                                                }));
+                                            }
+                                            
+                                            // If we have a name but no arguments yet, send ToolCallStart
+                                            if function.name.is_some() {
+                                                return Some(Ok(StreamPart::ToolCallStart {
+                                                    id: tool_id,
                                                 }));
                                             }
                                         }
                                     }
                                 }
 
-                                // Check for finish
+                                // Check for finish - send ToolCallEnd before Finish if tool_calls
                                 if let Some(ref reason) = choice.finish_reason {
+                                    if reason == "tool_calls" {
+                                        // Send ToolCallEnd for all tool calls in this chunk
+                                        if let Some(ref calls) = choice.delta.tool_calls {
+                                            for call in calls {
+                                                return Some(Ok(StreamPart::ToolCallEnd {
+                                                    id: call.id.clone().unwrap_or_default(),
+                                                }));
+                                            }
+                                        }
+                                    }
+                                    
                                     let finish_reason = match reason.as_str() {
                                         "stop" => FinishReason::Stop,
                                         "length" => FinishReason::Length,

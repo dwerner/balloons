@@ -63,6 +63,20 @@ impl Message {
             provider_options: None,
         })
     }
+
+    pub fn user_with_parts(content: Vec<ContentPart>) -> Self {
+        Self::User(UserMessage {
+            content,
+            provider_options: None,
+        })
+    }
+
+    pub fn assistant_with_parts(content: Vec<ContentPart>) -> Self {
+        Self::Assistant(AssistantMessage {
+            content,
+            provider_options: None,
+        })
+    }
 }
 
 /// System message providing instructions to the model.

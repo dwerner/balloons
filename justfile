@@ -63,6 +63,14 @@ test-ai-sdk: setup
     {{py}} pytest tests -v
 
 test-ai-sdk-integration: setup
-    @just banner {{quote(green)}} 'test-ai-sdk-integration: running integration tests (requires server)'
+    @just banner {{quote(green)}} 'test-ai-sdk-integration: running Rust integration tests (requires server)'
     cd balloons-rs/crates/ai-sdk-openai-compatible-py
     {{py}} pytest tests/integration -v -s
+
+test-ai-sdk-runner: setup build
+    @just banner {{quote(green)}} 'test-ai-sdk-runner: running AISDKRunner tests'
+    {{py}} pytest tests/test_ai_sdk_runner.py -v
+
+test-ai-sdk-runner-integration: setup build
+    @just banner {{quote(green)}} 'test-ai-sdk-runner-integration: running AISDKRunner integration tests (requires server)'
+    {{py}} pytest tests/test_ai_sdk_runner_integration.py -v -s

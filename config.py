@@ -228,7 +228,7 @@ class BackendConfig:
         system_prompt: Path to system prompt file (supports ~ expansion)
     """
     name: str
-    type: str = "claude"  # "claude", "openai", or "openai_strict"
+    type: str = "claude"  # "claude", "openai", "openai_strict", "gemini", or "ai_sdk"
     base_url: Optional[str] = None
     api_key: Optional[str] = None
     model: Optional[str] = None

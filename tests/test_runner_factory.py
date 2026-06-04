@@ -134,6 +134,42 @@ class TestValidateBackendConfig:
         # Empty model is fine - will default to "default" when runner is created
         assert result is None
 
+    def test_ai_sdk_type_requires_base_url(self):
+        """AI SDK type requires base_url."""
+        backend = MagicMock(
+            type="ai_sdk",
+            name="test-ai-sdk",
+            base_url=None,
+            model="qwen3.5",
+        )
+        result = validate_backend_config(backend)
+        assert result is not None
+        assert "requires base_url" in result
+        assert "test-ai-sdk" in result
+
+    def test_ai_sdk_type_valid_with_all_fields(self):
+        """AI SDK type is valid when base_url present."""
+        backend = MagicMock(
+            type="ai_sdk",
+            name="test-ai-sdk",
+            base_url="http://localhost:8000",
+            model="qwen3.5",
+            api_key="test-key",
+        )
+        result = validate_backend_config(backend)
+        assert result is None
+
+    def test_ai_sdk_type_model_optional(self):
+        """AI SDK type doesn't require model (for local servers like llama.cpp)."""
+        backend = MagicMock(
+            type="ai_sdk",
+            name="test-ai-sdk",
+            base_url="http://localhost:8000",
+            model=None,
+        )
+        result = validate_backend_config(backend)
+        assert result is None
+
 
 class TestCreateRunner:
     def test_openai_strict_type_uses_experimental_runner(self, monkeypatch):
@@ -152,3 +188,31 @@ class TestCreateRunner:
 
         from core.strict_openai_runner import StrictOpenAICompatibleRunner
         assert type(runner) is StrictOpenAICompatibleRunner
+
+    def test_ai_sdk_type_creates_aisdk_runner(self, monkeypatch):
+        """AI SDK type creates AISDKRunner instance."""
+        # Mock the AISDKRunner to avoid actual imports
+        mock_runner = MagicMock()
+        mock_runner_class = MagicMock(return_value=mock_runner)
+        monkeypatch.setattr("core.ai_sdk_runner.AISDKRunner", mock_runner_class)
+
+        backend = MagicMock(
+            type="ai_sdk",
+            name="ai-sdk-test",
+            base_url="http://localhost:8000",
+            model="qwen3.5",
+            api_key="test-key",
+            context_window=12345,
+        )
+        backend.load_system_prompt.return_value = None
+
+        runner = create_runner(backend)
+
+        # Verify AISDKRunner was called with correct arguments
+        mock_runner_class.assert_called_once_with(
+            base_url="http://localhost:8000",
+            model="qwen3.5",
+            api_key="test-key",
+            user_prompt=None,
+            context_window=12345,
+        )
