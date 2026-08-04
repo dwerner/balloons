@@ -4,9 +4,76 @@ This runner uses the high-performance Rust implementation of the OpenAI-compatib
 protocol, providing better streaming support and native reasoning/text separation.
 """
 
+from pathlib import Path
+from datetime import datetime
 import asyncio
 import json
 from typing import AsyncIterator, TYPE_CHECKING
+
+# Timeout constants
+STREAM_READLINE_TIMEOUT = 30.0  # Hard timeout for stream reading
+TOOL_EXECUTION_TIMEOUT = 300.0  # Soft timeout for tool execution (warn only)
+
+
+def dump_failed_context(
+    context: str,
+    model: str,
+    messages: list,
+    error: str,
+    run_id: str = "",
+) -> Path | None:
+    """Dump failed context to debug file.
+    
+    Args:
+        context: Context identifier (e.g., "stream_error", "tool_parse_error")
+        model: Model identifier
+        messages: Messages that were sent
+        error: Error description
+        run_id: For logging
+    
+    Returns:
+        Path to dump file, or None on failure
+    """
+    try:
+        debug_dir = Path.home() / ".balloons" / "dumps"
+        debug_dir.mkdir(parents=True, exist_ok=True)
+        
+        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S_%f")
+        filename = f"ai_sdk_{context}_{timestamp}.json"
+        filepath = debug_dir / filename
+        
+        dump_data = {
+            "timestamp": datetime.now().isoformat(),
+            "context": context,
+            "model": model,
+            "run_id": run_id,
+            "error": error,
+            "messages": [
+                {
+                    "role": getattr(msg, 'role', 'unknown'),
+                    "content_type": "text" if isinstance(getattr(msg, 'content', None), str) else "structured",
+                    "content_preview": str(getattr(msg, 'content', ''))[:500] if isinstance(getattr(msg, 'content', None), str) else "structured blocks",
+                }
+                for msg in messages
+            ],
+        }
+        
+        filepath.write_text(json.dumps(dump_data, indent=2))
+        
+        debug_log.error(
+            f"Dumped failed context to {filepath}",
+            category=Category.RUNNER,
+            run_id=run_id,
+        )
+        
+        return filepath
+    except Exception as e:
+        debug_log.error(
+            f"Failed to write error dump: {e}",
+            category=Category.RUNNER,
+            run_id=run_id,
+        )
+        return None
 
 from ai_sdk_openai_compatible_py import (
     create_chat_model_py,
@@ -20,15 +87,18 @@ from ai_sdk_openai_compatible_py import (
 )
 
 from models import (
-    Message, TextDelta, ResultEvent, InitEvent,
+    Message, TextDelta, ResultEvent, InitEvent, ContextTokensEvent,
     TextBlock, ImageBlock, ToolUseBlock, ToolResultBlock, InterruptionBlock, ErrorBlock, ArchiveBlock, ContextMode,
     ToolUseStartEvent, ToolInputDeltaEvent, ToolUseEvent, ToolResultDeltaEvent, ToolResultEvent, SteeringInjectedEvent,
+    RawEvent,
 )
 from .base_runner import BaseRunner, RunnerEvent, SteeringCapability
 from .tools import get_tools_for_request
 from .tool_executor import execute_tool
 from .tool_result import ToolExecutionResult
 from .debug_log import debug_log, Category
+from .context import ContextBuilder, OutputFormat
+from .tokenizer import count_tokens
 
 if TYPE_CHECKING:
     from session import Session
@@ -67,6 +137,8 @@ class AISDKRunner(BaseRunner):
         self._session: "Session | None" = None
         self._injection_callback = None
         self._tool_event_callback = None
+        self._pending_images: list[ImageBlock] = []
+        self._error_dumps: list[tuple[str, str]] = []
 
     @property
     def steering_capability(self) -> SteeringCapability:
@@ -84,6 +156,7 @@ class AISDKRunner(BaseRunner):
         allowed_tools: list[str] | None = None,
         working_dir: str | None = None,
         disable_tools: bool = False,
+        images: list[ImageBlock] | None = None,
     ) -> AsyncIterator[RunnerEvent]:
         """Stream a response from the AI SDK model.
 
@@ -143,7 +216,7 @@ class AISDKRunner(BaseRunner):
 
                 # Stream one response
                 result, events = await self._stream_one_response(
-                    messages, prompt, tools, working_dir
+                    messages, prompt, tools, working_dir, images
                 )
 
                 # Yield all events
@@ -290,6 +363,17 @@ class AISDKRunner(BaseRunner):
             )
 
         except Exception as e:
+            # Dump failed context for debugging
+            dump_path = dump_failed_context(
+                context="stream_error",
+                model=self.model,
+                messages=py_messages if 'py_messages' in locals() else [],
+                error=str(e),
+                run_id=self._run_id or "",
+            )
+            if dump_path:
+                self._error_dumps.append(("stream_error", str(dump_path)))
+            
             yield ErrorBlock(str(e))
         finally:
             self._running = False
@@ -300,6 +384,7 @@ class AISDKRunner(BaseRunner):
         prompt: str,
         tools: list[dict] | None,
         working_dir: str | None,
+        images: list[ImageBlock] | None = None,
     ) -> tuple[dict, list[RunnerEvent]]:
         """Stream a single response from the model.
 
@@ -314,14 +399,14 @@ class AISDKRunner(BaseRunner):
             'text', 'reasoning', 'tool_calls', 'usage', 'finish_reason'
             and events_list contains all events for streaming.
         """
-        # Build message list
-        py_messages = []
-
-       # Add system prompt if configured
+        # Build context using ContextBuilder (single source of truth)
+        builder = ContextBuilder()
+        
+        # Add system prompt if configured
         if self.user_prompt:
-            py_messages.append(RustMessage("system", self.user_prompt))
-
-       # Add conversation history
+            builder.add_message(Message("system", self.user_prompt))
+        
+        # Add conversation history with proper tool result handling
         for msg in messages:
             role = msg.role
             
@@ -329,57 +414,24 @@ class AISDKRunner(BaseRunner):
             if role == "tool":
                 for block in msg.content_blocks or []:
                     if hasattr(block, 'type') and block.type == "tool_result":
-                        py_messages.append(tool_result_message(
-                            block.tool_use_id,
-                            block.content or ""
-                        ))
+                        builder.add_message(Message("tool", "", content_blocks=[block]))
                 continue
             
+            # Handle regular messages
             if role in ("system", "user", "assistant"):
-                if isinstance(msg.content, str):
-                    py_messages.append(RustMessage(role, msg.content))
-                elif isinstance(msg.content, list):
-                    # Handle content blocks - convert to complex message format
-                    content_parts = []
-                    for block in msg.content:
-                        if hasattr(block, 'type'):
-                            if block.type == "text":
-                                content_parts.append({
-                                    "type": "text",
-                                    "text": block.text,
-                                })
-                            elif block.type == "image":
-                                # Convert image to base64 if needed
-                                image_data = block.source.get("data", "") if hasattr(block, 'source') else ""
-                                media_type = block.source.get("media_type", "image/png") if hasattr(block, 'source') else "image/png"
-                                content_parts.append({
-                                   "type": "image",
-                                    "data": image_data,
-                                    "media_type": media_type,
-                                })
-                            elif block.type == "tool_use":
-                                content_parts.append({
-                                    "type": "tool_call",
-                                    "tool_call_id": block.id,
-                                    "tool_name": block.name,
-                                    "input": json.dumps(block.input) if hasattr(block, 'input') else "{}",
-                                })
-                            elif block.type == "reasoning":
-                                content_parts.append({
-                                    "type": "reasoning",
-                                    "text": block.text if hasattr(block, 'text') else "",
-                                })
-                    
-                    if content_parts:
-                        py_messages.append(RustMessage(role, content_parts))
+                builder.add_message(msg)
+        
+        # Build structured content for the current prompt
+        content = builder.build_message_content(
+            messages=[],  # History already added via add_messages
+            new_prompt=prompt,
+            images=images or [],
+        )
+        
+        # Convert to RustMessage format
+        py_messages = [RustMessage("user", content)]
 
-        # Add current prompt
-        py_messages.append(RustMessage("user", prompt))
-
-        # Create model instance
-        model = create_chat_model_py(self.base_url, self.model, self.api_key)
-
-        # Accumulation variables
+        # Accumulation variables (must be before token counting)
         result = {
             "text": "",
             "reasoning": "",
@@ -389,123 +441,193 @@ class AISDKRunner(BaseRunner):
         }
         events: list[RunnerEvent] = []
         
-        # Track current tool call being processed
+        # Count tokens using tiktoken (accurate pre-send count)
+        context_text = builder.build(OutputFormat.TEXT_UNWRAPPED).as_text()
+        context_tokens = count_tokens(context_text)
+        
+        # Emit ContextTokensEvent for UI
+        events.append(ContextTokensEvent(context_tokens=context_tokens))
+        
+        debug_log.info(
+            f"Context tokens: {context_tokens}",
+            category=Category.RUNNER,
+            run_id=self._run_id or "",
+        )
+
+        # Create model instance
+        model = create_chat_model_py(self.base_url, self.model, self.api_key)
+
+      # Track current tool call being processed
         current_tool_id: str | None = None
         # Track which tool IDs have had ToolUseStartEvent emitted
         tool_start_emitted: set[str] = set()
 
-        try:
-            # Convert tools to Rust format
-            rust_tools = None
-            if tools:
-                rust_tools = []
-                for tool in tools:
-                    func = tool.get("function", {})
-                    params = func.get("parameters", {})
-                    rust_tools.append(ToolDefinition(
-                        name=func.get("name", ""),
-                        description=func.get("description"),
-                        parameters=json.dumps(params),
-                    ))
-  
- 
+        # Convert tools to Rust format
+        rust_tools = None
+        if tools:
+            rust_tools = []
+            for tool in tools:
+                func = tool.get("function", {})
+                params = func.get("parameters", {})
+                rust_tools.append(ToolDefinition(
+                    name=func.get("name", ""),
+                    description=func.get("description"),
+                    parameters=json.dumps(params),
+                ))
 
-            stream = await model.stream(
-                messages=py_messages,
-                max_tokens=min(4000, self.context_window // 4),
-                temperature=0.7,
-                tools=rust_tools,
-                tool_choice="auto",
-            )
+        stream = await model.stream(
+            messages=py_messages,
+            max_tokens=min(4000, self.context_window // 4),
+            temperature=0.7,
+            tools=rust_tools,
+            tool_choice="auto",
+       )
 
-            async for chunk in stream:
-                if self._cancelled:
-                    break
-
-                # Handle typed StreamPart objects
-                if isinstance(chunk, StreamPart.Done):
-                    break
-                elif isinstance(chunk, StreamPart.TextDelta):
-                    delta = chunk.delta
-                    result["text"] += delta
-                    events.append(TextDelta(delta))
-                elif isinstance(chunk, StreamPart.ReasoningDelta):
-                    delta = chunk.delta
-                    result["reasoning"] += delta
-                    events.append(TextDelta(delta))
-                elif isinstance(chunk, StreamPart.ToolCallStart):
-                    tool_id = chunk.id
-                    current_tool_id = tool_id
-                    
-                    # Only emit ToolUseStartEvent if we have a tool name
-                    # Some APIs don't send the name in the start event
-                    if chunk.tool_name:
-                        events.append(ToolUseStartEvent(
+        # Track if we're waiting for tool execution (soft timeout applies)
+        awaiting_tool_execution = False
+        
+        async for chunk in stream:
+            if self._cancelled:
+                break
+            
+            # Apply timeout based on state
+            # Note: This is a soft timeout for tool execution, hard for stream reading
+            timeout = TOOL_EXECUTION_TIMEOUT if awaiting_tool_execution else STREAM_READLINE_TIMEOUT
+            
+            try:
+                with asyncio.timeout(timeout):
+                    # Handle typed StreamPart objects
+                    if isinstance(chunk, StreamPart.Done):
+                        break
+                    elif isinstance(chunk, StreamPart.TextDelta):
+                        delta = chunk.delta
+                        result["text"] += delta
+                        events.append(TextDelta(delta))
+                        events.append(RawEvent(data={"type": "text_delta", "delta": delta}))
+                    elif isinstance(chunk, StreamPart.ReasoningDelta):
+                        delta = chunk.delta
+                        result["reasoning"] += delta
+                        events.append(TextDelta(delta))
+                        events.append(RawEvent(data={"type": "reasoning_delta", "delta": delta}))
+                    elif isinstance(chunk, StreamPart.ToolCallStart):
+                        tool_id = chunk.id
+                        current_tool_id = tool_id
+                        
+                        # Only emit ToolUseStartEvent if we have a tool name
+                        # Some APIs don't send the name in the start event
+                        if chunk.tool_name:
+                            events.append(ToolUseStartEvent(
+                                tool_use_id=tool_id,
+                                tool_name=chunk.tool_name,
+                            ))
+                            tool_start_emitted.add(tool_id)
+                        events.append(RawEvent(data={"type": "tool_call_start", "id": tool_id, "tool_name": chunk.tool_name}))
+                    elif isinstance(chunk, StreamPart.ToolCallDelta):
+                        tool_id = chunk.id
+                        delta = chunk.delta  # ← accumulated JSON from Rust
+                        
+                        # Emit delta for UI
+                        events.append(ToolInputDeltaEvent(
                             tool_use_id=tool_id,
-                            tool_name=chunk.tool_name,
+                            delta=delta,
+                            partial_json=delta,
                         ))
-                        tool_start_emitted.add(tool_id)
-                elif isinstance(chunk, StreamPart.ToolCallDelta):
-                    tool_id = chunk.id
-                    delta = chunk.delta  # ← accumulated JSON from Rust
-                    
-                    # Emit delta for UI
-                    events.append(ToolInputDeltaEvent(
-                        tool_use_id=tool_id,
-                        delta=delta,
-                        partial_json=delta,
-                    ))
-                elif isinstance(chunk, StreamPart.ToolCallEnd):
-                    tool_id = chunk.id
-                    # Just signals end - no action needed
-                    
-                elif isinstance(chunk, StreamPart.ToolCall):
-                    tool_id = chunk.id
-                    tool_name = chunk.tool_name
-                    
-                    # If we didn't emit ToolUseStartEvent earlier (because tool_name was empty),
-                    # emit it now that we have the name
-                    if tool_name and tool_id not in tool_start_emitted:
-                        events.append(ToolUseStartEvent(
-                            tool_use_id=tool_id,
-                            tool_name=tool_name,
-                        ))
-                        tool_start_emitted.add(tool_id)
-                    
-                    # Parse accumulated JSON from Rust
-                    tool_args = {}
-                    if chunk.arguments:
-                        try:
-                            tool_args = json.loads(chunk.arguments)
-                        except json.JSONDecodeError as e:
-                            events.append(ErrorBlock(f"Invalid tool arguments for {tool_name}: {e}"))
-                            continue
-                    
-                    if tool_name and tool_args:
-                        result["tool_calls"].append({
+                        events.append(RawEvent(data={"type": "tool_call_delta", "id": tool_id, "delta": delta}))
+                    elif isinstance(chunk, StreamPart.ToolCallEnd):
+                        tool_id = chunk.id
+                        # Just signals end - no action needed
+                        awaiting_tool_execution = True  # Set to True after tool call received
+                        events.append(RawEvent(data={"type": "tool_call_end", "id": tool_id}))
+                        
+                    elif isinstance(chunk, StreamPart.ToolCall):
+                        tool_id = chunk.id
+                        tool_name = chunk.tool_name
+                        
+                        # If we didn't emit ToolUseStartEvent earlier (because tool_name was empty),
+                        # emit it now that we have the name
+                        if tool_name and tool_id not in tool_start_emitted:
+                            events.append(ToolUseStartEvent(
+                                tool_use_id=tool_id,
+                                tool_name=tool_name,
+                            ))
+                            tool_start_emitted.add(tool_id)
+                        
+                        # Parse accumulated JSON from Rust
+                        tool_args = {}
+                        if chunk.arguments:
+                            try:
+                                tool_args = json.loads(chunk.arguments)
+                                # Validate structure
+                                if not isinstance(tool_args, dict):
+                                    raise ValueError(f"Expected dict, got {type(tool_args).__name__}")
+                            except json.JSONDecodeError as e:
+                                debug_log.error(
+                                    f"Invalid tool arguments for {tool_name}",
+                                    category=Category.RUNNER,
+                                    details={"error": str(e), "tool_id": tool_id},
+                                    run_id=self._run_id or "",
+                                )
+                                events.append(ErrorBlock(f"Invalid tool arguments for {tool_name}: {e}"))
+                                continue
+                            except ValueError as e:
+                                debug_log.error(
+                                    f"Malformed tool arguments for {tool_name}",
+                                    category=Category.RUNNER,
+                                    details={"error": str(e), "tool_id": tool_id},
+                                    run_id=self._run_id or "",
+                                )
+                                events.append(ErrorBlock(f"Malformed tool arguments for {tool_name}: {e}"))
+                                continue
+                        
+                        if tool_name and tool_args:
+                            result["tool_calls"].append({
+                                "id": tool_id,
+                                "name": tool_name,
+                                "arguments": tool_args,
+                            })
+                            events.append(ToolUseEvent(
+                                tool_use_id=tool_id,
+                                tool_name=tool_name,
+                                tool_input=tool_args,
+                            ))
+                        
+                        # Reset for next tool call
+                        current_tool_id = None
+                        events.append(RawEvent(data={
+                            "type": "tool_call",
                             "id": tool_id,
-                            "name": tool_name,
+                            "tool_name": tool_name,
                             "arguments": tool_args,
-                        })
-                        events.append(ToolUseEvent(
-                            tool_use_id=tool_id,
-                            tool_name=tool_name,
-                            tool_input=tool_args,
-                        ))
-                    
-                    # Reset for next tool call
-                    current_tool_id = None
-                elif isinstance(chunk, StreamPart.Finish):
-                    if chunk.usage:
-                        result["usage"]["input_tokens"] = chunk.usage.input_tokens
-                        result["usage"]["output_tokens"] = chunk.usage.output_tokens
-                        result["usage"]["total_tokens"] = (
-                            result["usage"]["input_tokens"] + result["usage"]["output_tokens"]
-                        )
-
-        except Exception as e:
-            # Handle streaming errors
-            events.append(ErrorBlock(f"Stream error: {str(e)}"))
+                        }))
+                    elif isinstance(chunk, StreamPart.Finish):
+                        if chunk.usage:
+                            result["usage"]["input_tokens"] = chunk.usage.input_tokens
+                            result["usage"]["output_tokens"] = chunk.usage.output_tokens
+                            result["usage"]["total_tokens"] = (
+                                result["usage"]["input_tokens"] + result["usage"]["output_tokens"]
+                            )
+                        events.append(RawEvent(data={
+                            "type": "finish",
+                            "usage": {
+                                "input_tokens": result["usage"]["input_tokens"],
+                                "output_tokens": result["usage"]["output_tokens"],
+                            }
+                        }))
+            except asyncio.TimeoutError:
+                if awaiting_tool_execution:
+                    # Soft timeout - warn and continue waiting
+                    debug_log.warning(
+                        f"Tool execution taking long ({timeout}s)",
+                        category=Category.RUNNER,
+                        run_id=self._run_id or "",
+                    )
+                    continue
+                else:
+                    # Hard timeout - raise error
+                    raise
+            except Exception as e:
+                # Handle streaming errors
+                events.append(ErrorBlock(f"Stream error: {str(e)}"))
 
         return result, events
 

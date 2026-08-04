@@ -249,4 +249,4 @@ This project is in active development. The service layer and storage backend are
 
 ## License
 
-See [PROPRIETARY-LICENSE](PROPRIETARY-LICENSE)
+See [LICENSE](LICENSE)

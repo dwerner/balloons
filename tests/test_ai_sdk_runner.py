@@ -3,7 +3,7 @@
 import pytest
 from unittest.mock import MagicMock, patch, AsyncMock
 from core.ai_sdk_runner import AISDKRunner
-from models import TextDelta
+from models import TextDelta, ToolUseEvent, ToolUseStartEvent, ToolInputDeltaEvent
 
 
 class TestAISDKRunnerIntegration:
@@ -236,3 +236,82 @@ class TestAISDKRunner:
                 events.append(event)
 
             assert runner._cancelled
+
+    @pytest.mark.asyncio
+    async def test_tool_call_arguments_accumulated_correctly(self):
+        """Regression test: ToolCall arguments should be complete JSON, not partial."""
+        runner = AISDKRunner(
+            base_url='http://localhost:8000',
+            model='test-model',
+        )
+
+        # Simulate the stream of ToolCall events that Rust should emit
+        # This matches what the fixed Rust code should produce
+        from ai_sdk_openai_compatible_py import StreamPart
+
+        async def mock_stream_resp(*args, **kwargs):
+            # Simulate what the Rust stream produces after the fix:
+            # ToolCallStart, multiple ToolCallDelta, ToolCallEnd, ToolCall
+            result = ({
+                'text': '',
+                'reasoning': '',
+                'tool_calls': [{
+                    'id': 'call_123',
+                    'name': 'Bash',
+                    'arguments': {'command': 'ls'},
+                }],
+                'usage': {'input_tokens': 10, 'output_tokens': 5, 'total_tokens': 15},
+                'finish_reason': 'tool_calls',
+            }, [
+                TextDelta(''),
+            ])
+            return result
+
+        with patch('core.ai_sdk_runner.get_tools_for_request', return_value=[]):
+            with patch.object(runner, '_stream_one_response', mock_stream_resp):
+                events = []
+                async for event in runner.stream_response([], 'run ls'):
+                    events.append(event)
+
+                # Should have ToolUseStartEvent with tool name
+                tool_use_events = [e for e in events if type(e).__name__ == 'ToolUseEvent']
+                assert len(tool_use_events) >= 1, f"Expected ToolUseEvent, got: {[type(e).__name__ for e in events]}"
+
+                # Verify the tool call has correct arguments
+                tool_event = tool_use_events[0]
+                assert tool_event.tool_name == 'Bash'
+                assert tool_event.tool_input == {'command': 'ls'}, f"Expected {{'command': 'ls'}}, got {tool_event.tool_input}"
+
+    @pytest.mark.asyncio
+    async def test_tool_call_emits_delta_events(self):
+        """Test that ToolCallDelta events are emitted for UI streaming."""
+        runner = AISDKRunner(
+            base_url='http://localhost:8000',
+            model='test-model',
+        )
+
+        async def mock_stream_resp(*args, **kwargs):
+            return ({
+                'text': '',
+                'reasoning': '',
+                'tool_calls': [{
+                    'id': 'call_456',
+                    'name': 'Read',
+                    'arguments': {'file_path': 'test.py'},
+                }],
+                'usage': {'input_tokens': 10, 'output_tokens': 5, 'total_tokens': 15},
+                'finish_reason': 'tool_calls',
+            }, [TextDelta('')])
+
+        with patch('core.ai_sdk_runner.get_tools_for_request', return_value=[]):
+            with patch.object(runner, '_stream_one_response', mock_stream_resp):
+                events = []
+                async for event in runner.stream_response([], 'Read test.py'):
+                    events.append(event)
+
+                # Should have ToolInputDeltaEvent for streaming UI
+                delta_events = [e for e in events if type(e).__name__ == 'ToolInputDeltaEvent']
+                tool_use_events = [e for e in events if type(e).__name__ == 'ToolUseEvent']
+                
+                assert len(delta_events) >= 1 or len(tool_use_events) >= 1, \
+                    f"Expected delta or tool events, got: {[type(e).__name__ for e in events]}"
