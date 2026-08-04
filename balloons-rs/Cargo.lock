@@ -42,6 +42,7 @@ name = "ai-sdk-openai-compatible-py"
 version = "0.1.0"
 dependencies = [
  "ai-sdk-openai-compatible",
+ "async-lock 3.4.2",
  "futures",
  "pyo3",
  "pyo3-async-runtimes",

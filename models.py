@@ -1,6 +1,6 @@
 import uuid
 from dataclasses import dataclass, field
-from typing import Optional, Any, Union
+from typing import Optional, Any, Union, TYPE_CHECKING
 from datetime import datetime
 from enum import Enum
 
@@ -548,6 +548,7 @@ class ToolInputDeltaEvent:
     """Partial tool input JSON."""
     tool_use_id: str
     partial_json: str
+    delta: str | None = None
 
 
 @dataclass

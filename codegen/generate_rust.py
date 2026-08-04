@@ -33,12 +33,10 @@ def get_rust_output_dir() -> Path:
 
 def generate_header(imports: set[str]) -> str:
     """Generate the file header comment and imports."""
-    timestamp = datetime.now().isoformat()
     header = f'''//! AUTO-GENERATED CODE - DO NOT EDIT
 //!
 //! Generated from Python domain entities marked with @rust_schema.
 //! Source: models.py and other domain modules
-//! Generated: {timestamp}
 //!
 //! To regenerate:
 //!     python -m codegen.generate_rust

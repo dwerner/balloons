@@ -10,6 +10,7 @@ pub struct ImageConfig {
 
 /// OpenAI-compatible image model.
 pub struct OpenAICompatibleImageModel {
+    #[allow(dead_code)]
     config: ImageConfig,
 }
 

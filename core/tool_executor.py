@@ -16,9 +16,8 @@ from typing import TYPE_CHECKING, Awaitable, Callable
 import aiofiles
 
 from .debug_log import debug_log, Category
-from plugins.decorators import BuiltinLLMCallableRegistry, llm_callable_builtin
-from .tools import BALLOON_TOOL_NAMES, SUPERVISOR_TOOL_NAMES, REVIEW_TOOL_NAMES
 from .link_tools import LINK_TOOL_NAMES, execute_link_tool
+from plugins.decorators import llm_callable_builtin
 from .supervisor_tools import SUPERVISOR_TOOL_NAMES as SUP_TOOL_NAMES, execute_supervisor_tool
 from .debug_tools import DEBUG_TOOL_NAMES, execute_debug_tool
 from .watcher_tools import WATCHER_TOOL_NAMES, execute_watcher_tool
@@ -163,18 +162,15 @@ async def execute_tool(
 
     Args:
         name: Tool name (Read, Write, Bash, list_links, supervisor_start, etc.)
-        args: Tool arguments from the model
+        args: Tool arguments from the model (already parsed dict)
         working_dir: Working directory for file operations
-        run_id: Run ID for debug logging
-        session: Session for link/supervisor tools
 
     Returns:
-        Tuple of (result_string, is_error) for backwards compatibility, or
-        ToolExecutionResult for richer return values (e.g., domains_changed).
-
-        Domain management tools (load_domain, unload_domain) return ToolExecutionResult
-        with domains_changed=True to signal that the tool list needs refreshing.
+        Tuple of (result_text, is_error) or ToolExecutionResult for complex tools
     """
+    # Lazy import to avoid circular imports
+    from plugins.decorators import BuiltinLLMCallableRegistry
+    
     debug_log.info(
         f"Executing tool: {name}",
         category=Category.RUNNER,
@@ -183,13 +179,16 @@ async def execute_tool(
     )
 
     try:
+        # Args are already parsed dict
+        args_dict = args if isinstance(args, dict) else {}
+
         # Domain plugin tools (check first for clean routing)
         try:
             from plugins.integration import is_domain_tool, execute_domain_tool
             if is_domain_tool(name):
                 if session is None:
                     return "Error: Domain tools require a session context", True
-                return await execute_domain_tool(name, args, session, working_dir)
+                return await execute_domain_tool(name, args_dict, session, working_dir)
         except ImportError:
             pass  # Plugin system not available
 
@@ -197,7 +196,7 @@ async def execute_tool(
         handler = BuiltinLLMCallableRegistry.get_handler(name)
         if handler is not None:
             result = handler(
-                **args,
+                **args_dict,
                 session=session,
                 working_dir=working_dir,
                 output_callback=output_callback,
@@ -207,7 +206,7 @@ async def execute_tool(
             return result
 
         # Remaining category-based built-in families
-        for route in CATEGORY_TOOL_ROUTES:
+        for route in get_category_tool_routes():
             if name not in route.tool_names:
                 continue
             if route.requires_session and session is None:
@@ -1238,59 +1237,73 @@ async def execute_save_review(args: dict, session: "Session") -> tuple[str, bool
         return f"Error saving review: {e}", True
 
 
-CATEGORY_TOOL_ROUTES: tuple[CategoryToolRoute, ...] = (
-    CategoryToolRoute(
-        tool_names=LINK_TOOL_NAMES,
-        requires_session=True,
-        session_error_label="Link tools",
-        executor_name="execute_link_tool",
-    ),
-    CategoryToolRoute(
-        tool_names=SUP_TOOL_NAMES,
-        requires_session=True,
-        session_error_label="Supervisor tools",
-        executor_name="execute_supervisor_tool",
-        pass_working_dir=True,
-    ),
-    CategoryToolRoute(
-        tool_names=REVIEW_TOOL_NAMES,
-        requires_session=True,
-        session_error_label="Review tools",
-        executor_name="execute_review_tool",
-    ),
-    CategoryToolRoute(
-        tool_names=DEBUG_TOOL_NAMES,
-        requires_session=False,
-        session_error_label="Debug tools",
-        executor_name="execute_debug_tool",
-    ),
-    CategoryToolRoute(
-        tool_names=WATCHER_TOOL_NAMES,
-        requires_session=True,
-        session_error_label="Watcher tools",
-        executor_name="execute_watcher_tool",
-    ),
-    CategoryToolRoute(
-        tool_names=LSP_TOOL_NAMES,
-        requires_session=True,
-        session_error_label="LSP tools",
-        executor_name="execute_lsp_tool",
-        pass_working_dir=True,
-    ),
-    CategoryToolRoute(
-        tool_names=DOMAIN_TOOL_NAMES,
-        requires_session=True,
-        session_error_label="Domain tools",
-        executor_name="execute_domain_management_tool",
-    ),
-    CategoryToolRoute(
-        tool_names=BROWSER_TOOL_NAMES,
-        requires_session=True,
-        session_error_label="Browser tools",
-        executor_name="execute_browser_tool",
-        pass_working_dir=True,
-    ),
-)
+def _get_category_tool_routes() -> tuple[CategoryToolRoute, ...]:
+    from .tools import BALLOON_TOOL_NAMES, SUPERVISOR_TOOL_NAMES, REVIEW_TOOL_NAMES
+    from .domain_tools import DOMAIN_TOOL_NAMES
+    from .browser_tools import BROWSER_TOOL_NAMES
+    
+    return (
+        CategoryToolRoute(
+            tool_names=LINK_TOOL_NAMES,
+            requires_session=True,
+            session_error_label="Link tools",
+            executor_name="execute_link_tool",
+        ),
+        CategoryToolRoute(
+            tool_names=SUPERVISOR_TOOL_NAMES,
+            requires_session=True,
+            session_error_label="Supervisor tools",
+            executor_name="execute_supervisor_tool",
+            pass_working_dir=True,
+        ),
+        CategoryToolRoute(
+            tool_names=REVIEW_TOOL_NAMES,
+            requires_session=True,
+            session_error_label="Review tools",
+            executor_name="execute_review_tool",
+        ),
+        CategoryToolRoute(
+            tool_names=DEBUG_TOOL_NAMES,
+            requires_session=False,
+            session_error_label="Debug tools",
+            executor_name="execute_debug_tool",
+        ),
+        CategoryToolRoute(
+            tool_names=WATCHER_TOOL_NAMES,
+            requires_session=True,
+            session_error_label="Watcher tools",
+            executor_name="execute_watcher_tool",
+        ),
+        CategoryToolRoute(
+            tool_names=LSP_TOOL_NAMES,
+            requires_session=True,
+            session_error_label="LSP tools",
+            executor_name="execute_lsp_tool",
+            pass_working_dir=True,
+        ),
+        CategoryToolRoute(
+            tool_names=DOMAIN_TOOL_NAMES,
+            requires_session=True,
+            session_error_label="Domain tools",
+            executor_name="execute_domain_management_tool",
+        ),
+        CategoryToolRoute(
+            tool_names=BROWSER_TOOL_NAMES,
+            requires_session=True,
+            session_error_label="Browser tools",
+            executor_name="execute_browser_tool",
+            pass_working_dir=True,
+        ),
+    )
+
+# Lazy initialization to avoid circular import
+_CATEGORY_TOOL_ROUTES: tuple[CategoryToolRoute, ...] | None = None
+
+def get_category_tool_routes() -> tuple[CategoryToolRoute, ...]:
+    global _CATEGORY_TOOL_ROUTES
+    if _CATEGORY_TOOL_ROUTES is None:
+        _CATEGORY_TOOL_ROUTES = _get_category_tool_routes()
+    return _CATEGORY_TOOL_ROUTES
 
 
 def execute_play_midi(args: dict) -> tuple[str, bool]:

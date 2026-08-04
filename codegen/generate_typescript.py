@@ -39,11 +39,9 @@ def get_ts_output_dir() -> Path:
 
 def generate_types_header() -> str:
     """Generate the types.ts file header."""
-    timestamp = datetime.now().isoformat()
     return f'''// AUTO-GENERATED CODE - DO NOT EDIT
 //
 // Generated from Python @ws_expose and @ws_type decorators.
-// Generated: {timestamp}
 //
 // To regenerate:
 //     python -m codegen.generate_typescript
@@ -71,11 +69,9 @@ def generate_types_file() -> str:
 
 def generate_client_header() -> str:
     """Generate the client.ts file header."""
-    timestamp = datetime.now().isoformat()
     return f'''// AUTO-GENERATED CODE - DO NOT EDIT
 //
 // Generated from Python @ws_expose and @ws_event decorators.
-// Generated: {timestamp}
 //
 // To regenerate:
 //     python -m codegen.generate_typescript

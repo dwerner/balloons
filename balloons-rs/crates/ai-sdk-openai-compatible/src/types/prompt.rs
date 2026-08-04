@@ -120,6 +120,7 @@ pub enum ContentPart {
     File(FileContent),
     Reasoning(ReasoningContent),
     ToolCall(ToolCallContent),
+    ToolResult(ToolContent),
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

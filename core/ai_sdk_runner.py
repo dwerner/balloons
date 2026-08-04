@@ -8,6 +8,17 @@ import asyncio
 import json
 from typing import AsyncIterator, TYPE_CHECKING
 
+from ai_sdk_openai_compatible_py import (
+    create_chat_model_py,
+    Message as RustMessage,
+    ToolDefinition,
+    ImageContent,
+    ReasoningContent,
+    ToolCallContent,
+    StreamPart,
+    tool_result_message,
+)
+
 from models import (
     Message, TextDelta, ResultEvent, InitEvent,
     TextBlock, ImageBlock, ToolUseBlock, ToolResultBlock, InterruptionBlock, ErrorBlock, ArchiveBlock, ContextMode,
@@ -56,20 +67,6 @@ class AISDKRunner(BaseRunner):
         self._session: "Session | None" = None
         self._injection_callback = None
         self._tool_event_callback = None
-
-        # Import Python bindings lazily
-        try:
-            from ai_sdk_openai_compatible_py import (
-                create_chat_model_py,
-                PyMessage,
-            )
-            self._create_chat_model = create_chat_model_py
-            self._PyMessage = PyMessage
-        except ImportError as e:
-            raise RuntimeError(
-                "ai-sdk-openai-compatible-py not installed. "
-                "Install with: cd balloons-rs/crates/ai-sdk-openai-compatible-py && maturin develop"
-            ) from e
 
     @property
     def steering_capability(self) -> SteeringCapability:
@@ -154,7 +151,7 @@ class AISDKRunner(BaseRunner):
                     yield event
 
                 # Check if we have tool calls to execute
-                tool_calls = result.get("tool_calls", [])
+                tool_calls = result.tool_calls if hasattr(result, 'tool_calls') else result.get("tool_calls", [])
                 if not tool_calls:
                     # No tool calls, we're done
                     break
@@ -164,9 +161,9 @@ class AISDKRunner(BaseRunner):
                     if self._cancelled:
                         break
 
-                    tool_name = tc["name"]
-                    tool_id = tc["id"]
-                    tool_args = tc["arguments"]
+                    tool_name = tc.name if hasattr(tc, 'name') else tc["name"]
+                    tool_id = tc.id if hasattr(tc, 'id') else tc["id"]
+                    tool_args = tc.arguments if hasattr(tc, 'arguments') else tc["arguments"]
 
                     # Client-only tools - UI handles them from the tool_use event
                     CLIENT_ONLY_TOOLS = {"play_midi", "propose_fork", "propose_merge"}
@@ -230,6 +227,29 @@ class AISDKRunner(BaseRunner):
                         result=result_text,
                     )
 
+                    # Add tool result to messages for next model turn
+                    from models import ToolResultBlock
+                    tool_result_block = ToolResultBlock(
+                        tool_use_id=tool_id,
+                        content=result_text,
+                        is_error=is_error,
+                    )
+                    # Find or create tool message for this tool result
+                    tool_message_found = False
+                    for msg in messages:
+                        if msg.role == "tool" and msg.content_blocks:
+                            for block in msg.content_blocks:
+                                if hasattr(block, 'tool_use_id') and block.tool_use_id == tool_id:
+                                    block.content = result_text
+                                    block.is_error = is_error
+                                    tool_message_found = True
+                                    break
+                        if tool_message_found:
+                            break
+                    
+                    if not tool_message_found:
+                        messages.append(Message("tool", "", content_blocks=[tool_result_block]))
+
                     # Check for steering after tool execution
                     if self._injection_callback:
                         steering_msg = await self._injection_callback()
@@ -247,9 +267,9 @@ class AISDKRunner(BaseRunner):
                     for tc in tool_calls:
                         tool_call_blocks.append({
                             "type": "tool_use",
-                            "id": tc["id"],
-                            "name": tc["name"],
-                            "input": tc["arguments"],
+                            "id": tc.id if hasattr(tc, 'id') else tc["id"],
+                            "name": tc.name if hasattr(tc, 'name') else tc["name"],
+                            "input": tc.arguments if hasattr(tc, 'arguments') else tc["arguments"],
                         })
 
                     messages.append(Message("assistant", tool_call_blocks))
@@ -258,14 +278,15 @@ class AISDKRunner(BaseRunner):
                 # Break from tool loop due to steering or cancellation
                 break
 
-            # Yield final result event
-            usage = result.get("usage", {})
+             # Yield final result event
+            usage = result.usage if hasattr(result, 'usage') else result.get("usage", {})
+            finish_reason = result.finish_reason if hasattr(result, 'finish_reason') else result.get("finish_reason", "stop")
             yield ResultEvent(
-                input_tokens=usage.get("input_tokens", 0),
-                output_tokens=usage.get("output_tokens", 0),
+                input_tokens=usage.input_tokens if hasattr(usage, 'input_tokens') else usage.get("input_tokens", 0),
+                output_tokens=usage.output_tokens if hasattr(usage, 'output_tokens') else usage.get("output_tokens", 0),
                 total_cost_usd=0.0,
                 context_window=self.context_window,
-                raw={"finish_reason": result.get("finish_reason", "stop")},
+                raw={"finish_reason": finish_reason},
             )
 
         except Exception as e:
@@ -296,20 +317,29 @@ class AISDKRunner(BaseRunner):
         # Build message list
         py_messages = []
 
-        # Add system prompt if configured
+       # Add system prompt if configured
         if self.user_prompt:
-            py_messages.append(self._PyMessage("system", self.user_prompt))
+            py_messages.append(RustMessage("system", self.user_prompt))
 
-           # Add conversation history
+       # Add conversation history
         for msg in messages:
             role = msg.role
+            
+            # Handle tool result messages (role="tool")
+            if role == "tool":
+                for block in msg.content_blocks or []:
+                    if hasattr(block, 'type') and block.type == "tool_result":
+                        py_messages.append(tool_result_message(
+                            block.tool_use_id,
+                            block.content or ""
+                        ))
+                continue
+            
             if role in ("system", "user", "assistant"):
                 if isinstance(msg.content, str):
-                    py_messages.append(self._PyMessage(role, msg.content))
+                    py_messages.append(RustMessage(role, msg.content))
                 elif isinstance(msg.content, list):
                     # Handle content blocks - convert to complex message format
-                    from ai_sdk_openai_compatible_py import PyImageContent, PyReasoningContent, PyToolCallContent
-                    
                     content_parts = []
                     for block in msg.content:
                         if hasattr(block, 'type'):
@@ -323,12 +353,11 @@ class AISDKRunner(BaseRunner):
                                 image_data = block.source.get("data", "") if hasattr(block, 'source') else ""
                                 media_type = block.source.get("media_type", "image/png") if hasattr(block, 'source') else "image/png"
                                 content_parts.append({
-                                    "type": "image",
+                                   "type": "image",
                                     "data": image_data,
                                     "media_type": media_type,
                                 })
                             elif block.type == "tool_use":
-                                import json
                                 content_parts.append({
                                     "type": "tool_call",
                                     "tool_call_id": block.id,
@@ -342,13 +371,13 @@ class AISDKRunner(BaseRunner):
                                 })
                     
                     if content_parts:
-                        py_messages.append(self._PyMessage(role, content_parts))
+                        py_messages.append(RustMessage(role, content_parts))
 
         # Add current prompt
-        py_messages.append(self._PyMessage("user", prompt))
+        py_messages.append(RustMessage("user", prompt))
 
         # Create model instance
-        model = self._create_chat_model(self.base_url, self.model, self.api_key)
+        model = create_chat_model_py(self.base_url, self.model, self.api_key)
 
         # Accumulation variables
         result = {
@@ -360,25 +389,25 @@ class AISDKRunner(BaseRunner):
         }
         events: list[RunnerEvent] = []
         
-        # Track current tool call being accumulated
+        # Track current tool call being processed
         current_tool_id: str | None = None
-        current_tool_name: str | None = None
-        current_tool_args: dict = {}
+        # Track which tool IDs have had ToolUseStartEvent emitted
+        tool_start_emitted: set[str] = set()
 
         try:
             # Convert tools to Rust format
-            from ai_sdk_openai_compatible_py import PyToolDefinition
             rust_tools = None
             if tools:
                 rust_tools = []
                 for tool in tools:
                     func = tool.get("function", {})
                     params = func.get("parameters", {})
-                    rust_tools.append(PyToolDefinition(
+                    rust_tools.append(ToolDefinition(
                         name=func.get("name", ""),
                         description=func.get("description"),
                         parameters=json.dumps(params),
                     ))
+  
  
 
             stream = await model.stream(
@@ -393,117 +422,86 @@ class AISDKRunner(BaseRunner):
                 if self._cancelled:
                     break
 
-                if chunk == "[DONE]":
+                # Handle typed StreamPart objects
+                if isinstance(chunk, StreamPart.Done):
                     break
-
-                try:
-                    data = json.loads(chunk)
-                    chunk_type = data.get("type", "")
+                elif isinstance(chunk, StreamPart.TextDelta):
+                    delta = chunk.delta
+                    result["text"] += delta
+                    events.append(TextDelta(delta))
+                elif isinstance(chunk, StreamPart.ReasoningDelta):
+                    delta = chunk.delta
+                    result["reasoning"] += delta
+                    events.append(TextDelta(delta))
+                elif isinstance(chunk, StreamPart.ToolCallStart):
+                    tool_id = chunk.id
+                    current_tool_id = tool_id
                     
-  
-
-                    if chunk_type == "text":
-                        delta = data.get("delta", "")
-                        result["text"] += delta
-                        events.append(TextDelta(delta))
-
-                    elif chunk_type == "reasoning":
-                        delta = data.get("delta", "")
-                        result["reasoning"] += delta
-                        events.append(TextDelta(delta))
-
-                    elif chunk_type == "tool_call_start":
-                        tool_id = data.get("tool_id", "")
-                        current_tool_id = tool_id
-                        current_tool_name = None
-                        current_tool_args_str = ""
-                        events.append(ToolUseStartEvent(tool_id=tool_id))
-
-                    elif chunk_type == "tool_call_delta":
-                        # Accumulate tool call data
-                        # Name might come in the first delta or separately
-                        name = data.get("name")
-                        if name:
-                            current_tool_name = name
-                        
-                        # Arguments come as incremental JSON strings
-                        arguments = data.get("arguments", "")
-                        if arguments:
-                            current_tool_args_str += arguments
-                        
-                        # If we have tool_id in this delta, update current_tool_id
-                        tool_id = data.get("tool_id", "")
-                        if tool_id:
-                            current_tool_id = tool_id
-
-                    elif chunk_type == "tool_call_end":
-                        tool_id = data.get("tool_id", "")
-                        # Use accumulated data from tool_call_delta
-                        tool_name = current_tool_name
-                        tool_args_str = current_tool_args_str
-                        
-                        # Parse the accumulated arguments JSON
-                        tool_args = {}
-                        if tool_args_str:
-                            try:
-                                tool_args = json.loads(tool_args_str)
-                            except json.JSONDecodeError:
-                                # If parsing fails, use the raw string
-                                tool_args = {"raw": tool_args_str}
-                        
-                        if tool_name:
-                            result["tool_calls"].append({
-                                "id": current_tool_id,
-                                "name": tool_name,
-                                "arguments": tool_args,
-                            })
-                            events.append(ToolUseEvent(
-                                tool_use_id=current_tool_id,
-                                name=tool_name,
-                                input=tool_args,
-                            ))
-                        
-                        # Reset for next tool call
-                        current_tool_id = None
-                        current_tool_name = None
-                        current_tool_args_str = ""
-
-                    elif chunk_type == "finish":
-                        # If we have pending tool call data, finalize it
-                        if current_tool_name and current_tool_args_str:
-                            tool_args = {}
-                            try:
-                                tool_args = json.loads(current_tool_args_str)
-                            except json.JSONDecodeError:
-                                tool_args = {"raw": current_tool_args_str}
-                            
-                            if current_tool_name:
-                                result["tool_calls"].append({
-                                    "id": current_tool_id,
-                                    "name": current_tool_name,
-                                    "arguments": tool_args,
-                                })
-                                events.append(ToolUseEvent(
-                                    tool_use_id=current_tool_id,
-                                    name=current_tool_name,
-                                    input=tool_args,
-                                ))
-                            
-                            # Reset for next tool call
-                            current_tool_id = None
-                            current_tool_name = None
-                            current_tool_args_str = ""
-                        
-                        usage = data.get("usage", {})
-                        result["usage"]["input_tokens"] = usage.get("input_tokens", 0)
-                        result["usage"]["output_tokens"] = usage.get("output_tokens", 0)
+                    # Only emit ToolUseStartEvent if we have a tool name
+                    # Some APIs don't send the name in the start event
+                    if chunk.tool_name:
+                        events.append(ToolUseStartEvent(
+                            tool_use_id=tool_id,
+                            tool_name=chunk.tool_name,
+                        ))
+                        tool_start_emitted.add(tool_id)
+                elif isinstance(chunk, StreamPart.ToolCallDelta):
+                    tool_id = chunk.id
+                    delta = chunk.delta  # ← accumulated JSON from Rust
+                    
+                    # Emit delta for UI
+                    events.append(ToolInputDeltaEvent(
+                        tool_use_id=tool_id,
+                        delta=delta,
+                        partial_json=delta,
+                    ))
+                elif isinstance(chunk, StreamPart.ToolCallEnd):
+                    tool_id = chunk.id
+                    # Just signals end - no action needed
+                    
+                elif isinstance(chunk, StreamPart.ToolCall):
+                    tool_id = chunk.id
+                    tool_name = chunk.tool_name
+                    
+                    # If we didn't emit ToolUseStartEvent earlier (because tool_name was empty),
+                    # emit it now that we have the name
+                    if tool_name and tool_id not in tool_start_emitted:
+                        events.append(ToolUseStartEvent(
+                            tool_use_id=tool_id,
+                            tool_name=tool_name,
+                        ))
+                        tool_start_emitted.add(tool_id)
+                    
+                    # Parse accumulated JSON from Rust
+                    tool_args = {}
+                    if chunk.arguments:
+                        try:
+                            tool_args = json.loads(chunk.arguments)
+                        except json.JSONDecodeError as e:
+                            events.append(ErrorBlock(f"Invalid tool arguments for {tool_name}: {e}"))
+                            continue
+                    
+                    if tool_name and tool_args:
+                        result["tool_calls"].append({
+                            "id": tool_id,
+                            "name": tool_name,
+                            "arguments": tool_args,
+                        })
+                        events.append(ToolUseEvent(
+                            tool_use_id=tool_id,
+                            tool_name=tool_name,
+                            tool_input=tool_args,
+                        ))
+                    
+                    # Reset for next tool call
+                    current_tool_id = None
+                elif isinstance(chunk, StreamPart.Finish):
+                    if chunk.usage:
+                        result["usage"]["input_tokens"] = chunk.usage.input_tokens
+                        result["usage"]["output_tokens"] = chunk.usage.output_tokens
                         result["usage"]["total_tokens"] = (
                             result["usage"]["input_tokens"] + result["usage"]["output_tokens"]
                         )
-
-                except json.JSONDecodeError:
-                    # Skip malformed chunks
-                    continue
 
         except Exception as e:
             # Handle streaming errors

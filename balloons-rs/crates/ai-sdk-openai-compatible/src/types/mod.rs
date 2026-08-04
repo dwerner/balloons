@@ -112,11 +112,11 @@ pub type LanguageModelStream = std::pin::Pin<
 pub enum StreamPart {
     TextDelta { delta: String },
     ReasoningDelta { delta: String },
-    ToolCallStart { id: String },
-    ToolCallDelta { id: String, name: Option<String>, arguments: String },
+    ToolCallStart { id: String, tool_name: String },
+    ToolCallDelta { id: String, delta: String },
     ToolCallEnd { id: String },
+    ToolCall { id: String, tool_name: String, arguments: String },
     Finish { reason: FinishReason, usage: Option<Usage> },
-    Metadata { provider_metadata: serde_json::Value },
 }
 
 /// Language model trait for async generation and streaming.

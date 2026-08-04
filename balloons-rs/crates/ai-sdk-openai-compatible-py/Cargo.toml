@@ -17,3 +17,4 @@ pyo3-async-runtimes = { git = "https://github.com/dwerner/pyo3-async-runtimes", 
 tokio = { version = "1", features = ["full"] }
 serde_json = "1"
 futures = "0.3"
+async-lock = "3"

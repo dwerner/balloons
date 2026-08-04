@@ -34,8 +34,12 @@ clippy:
     cargo clippy --workspace --all-targets --all-features
 
 test-core: setup
-    @just banner {{quote(green)}} 'test-core: running core pytest suite'
-    {{py}} pytest -q tests
+    @just banner {{quote(green)}} 'test-core: running core pytest suite (excludes integration tests)'
+    {{py}} pytest -q tests -m "not integration"
+
+test-core-integration: setup
+    @just banner {{quote(green)}} 'test-core-integration: running core integration tests'
+    {{py}} pytest -q tests -m integration
 
 test-plugins: setup
     @just banner {{quote(green)}} 'test-plugins: running plugin pytest suite'
@@ -52,8 +56,14 @@ test-scope scope: setup
     {{py}} python -m pytest -q {{scope}}
 
 build: setup gen
+    just build-py
+    just build-ai-sdk-py
+
+build-py: setup
     @just banner {{quote(yellow)}} 'build: developing balloons-py with maturin'
     {{uv}} run maturin develop --release --manifest-path balloons-rs/crates/balloons-py/Cargo.toml
+
+build-ai-sdk-py: setup
     @just banner {{quote(yellow)}} 'build: developing ai-sdk-openai-compatible-py with maturin'
     {{uv}} run maturin develop --release --manifest-path balloons-rs/crates/ai-sdk-openai-compatible-py/Cargo.toml
 

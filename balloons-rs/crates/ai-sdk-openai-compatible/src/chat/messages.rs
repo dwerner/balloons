@@ -8,16 +8,19 @@ use crate::chat::types::{
 };
 
 /// Convert internal prompt to OpenAI-compatible chat messages.
-pub fn convert_to_chat_messages(prompt: &Prompt) -> Vec<ChatMessage> {
-    prompt.messages.iter().map(convert_message).collect()
+pub fn convert_to_chat_messages(prompt: &Prompt) -> Result<Vec<ChatMessage>, crate::Error> {
+    prompt.messages
+        .iter()
+        .map(|m| convert_message(m).map_err(|e| crate::Error::InvalidResponse(e)))
+        .collect()
 }
 
-fn convert_message(message: &Message) -> ChatMessage {
+fn convert_message(message: &Message) -> Result<ChatMessage, String> {
     match message {
-        Message::System(msg) => convert_system_message(msg),
+        Message::System(msg) => Ok(convert_system_message(msg)),
         Message::User(msg) => convert_user_message(msg),
-        Message::Assistant(msg) => convert_assistant_message(msg),
-        Message::Tool(msg) => convert_tool_message(msg),
+        Message::Assistant(msg) => Ok(convert_assistant_message(msg)),
+        Message::Tool(msg) => Ok(convert_tool_message(msg)),
     }
 }
 
@@ -27,41 +30,50 @@ fn convert_system_message(msg: &SystemMessage) -> ChatMessage {
     })
 }
 
-fn convert_user_message(msg: &UserMessage) -> ChatMessage {
+fn convert_user_message(msg: &UserMessage) -> Result<ChatMessage, String> {
     if msg.content.len() == 1 {
         if let crate::types::prompt::ContentPart::Text(text) = &msg.content[0] {
-            return ChatMessage::User(ApiUserMessage::Simple {
+            return Ok(ChatMessage::User(ApiUserMessage::Simple {
                 content: text.text.clone(),
-            });
+            }));
         }
     }
 
-    let content = msg
-        .content
-        .iter()
-        .filter_map(|part| match part {
-            crate::types::prompt::ContentPart::Text(t) => Some(UserContentPart::Text {
-                text: t.text.clone(),
-            }),
-            crate::types::prompt::ContentPart::Image(i) => Some(UserContentPart::ImageUrl {
-                image_url: crate::chat::types::ImageUrl {
-                    url: format!("data:{};base64,{}", i.media_type, i.data),
-                    detail: None,
-                },
-            }),
-            crate::types::prompt::ContentPart::File(_) => {
-                // TODO: Handle file parts
-                Some(UserContentPart::Text {
-                    text: "[file content]".to_string(),
-                })
+    let mut content = Vec::new();
+    for part in &msg.content {
+        match part {
+            crate::types::prompt::ContentPart::Text(t) => {
+                content.push(UserContentPart::Text {
+                    text: t.text.clone(),
+                });
             }
-            // Ignore reasoning and tool calls in user messages
-            crate::types::prompt::ContentPart::Reasoning(_) |
-            crate::types::prompt::ContentPart::ToolCall(_) => None,
-        })
-        .collect();
+            crate::types::prompt::ContentPart::Image(i) => {
+                content.push(UserContentPart::ImageUrl {
+                    image_url: crate::chat::types::ImageUrl {
+                        url: format!("data:{};base64,{}", i.media_type, i.data),
+                        detail: None,
+                    },
+                });
+            }
+            crate::types::prompt::ContentPart::File(_) => {
+                // TODO: Handle file parts properly
+                content.push(UserContentPart::Text {
+                    text: "[file content]".to_string(),
+                });
+            }
+            crate::types::prompt::ContentPart::Reasoning(_) => {
+                return Err("Reasoning content is not valid in user messages".to_string());
+            }
+            crate::types::prompt::ContentPart::ToolCall(_) => {
+                return Err("Tool calls are not valid in user messages".to_string());
+            }
+            crate::types::prompt::ContentPart::ToolResult(_) => {
+                return Err("Tool results are not valid in user messages".to_string());
+            }
+        }
+    }
 
-    ChatMessage::User(ApiUserMessage::Complex { content })
+    Ok(ChatMessage::User(ApiUserMessage::Complex { content }))
 }
 
 fn convert_assistant_message(msg: &AssistantMessage) -> ChatMessage {
@@ -88,8 +100,9 @@ fn convert_assistant_message(msg: &AssistantMessage) -> ChatMessage {
                 });
             }
             crate::types::prompt::ContentPart::Image(_) |
-            crate::types::prompt::ContentPart::File(_) => {
-                // Ignore images/files in assistant messages
+            crate::types::prompt::ContentPart::File(_) |
+            crate::types::prompt::ContentPart::ToolResult(_) => {
+                // Ignore images/files/tool results in assistant messages
             }
         }
     }
@@ -132,7 +145,7 @@ mod tests {
     #[test]
     fn test_simple_user_message() {
         let prompt = Prompt::with_user("Hello");
-        let messages = convert_to_chat_messages(&prompt);
+        let messages = convert_to_chat_messages(&prompt).unwrap();
         assert_eq!(messages.len(), 1);
         assert!(matches!(messages[0], ChatMessage::User(_)));
     }
@@ -141,8 +154,65 @@ mod tests {
     fn test_system_message() {
         let mut prompt = Prompt::with_system("You are helpful");
         prompt.messages.push(Message::user("Hi"));
-        let messages = convert_to_chat_messages(&prompt);
+        let messages = convert_to_chat_messages(&prompt).unwrap();
         assert_eq!(messages.len(), 2);
         assert!(matches!(messages[0], ChatMessage::System(_)));
+    }
+
+    #[test]
+    fn test_invalid_user_message_with_tool_call() {
+        use crate::types::prompt::{ContentPart, ToolCallContent};
+        use serde_json::json;
+        
+        let mut prompt = Prompt::new(vec![]);
+        prompt.messages.push(Message::user_with_parts(vec![
+            ContentPart::ToolCall(ToolCallContent {
+                tool_call_id: "call_1".to_string(),
+                tool_name: "test".to_string(),
+                input: json!({}),
+                provider_options: None,
+            })
+        ]));
+        
+        let result = convert_to_chat_messages(&prompt);
+        assert!(result.is_err());
+        let err = result.unwrap_err().to_string();
+        assert!(err.contains("Tool calls"));
+    }
+
+    #[test]
+    fn test_invalid_user_message_with_tool_result() {
+        use crate::types::prompt::{ContentPart, ToolContent};
+        
+        let mut prompt = Prompt::new(vec![]);
+        prompt.messages.push(Message::user_with_parts(vec![
+            ContentPart::ToolResult(ToolContent {
+                tool_call_id: "call_1".to_string(),
+                output: crate::types::ToolOutput::Text { value: "result".to_string() },
+            })
+        ]));
+        
+        let result = convert_to_chat_messages(&prompt);
+        assert!(result.is_err());
+        let err = result.unwrap_err().to_string();
+        assert!(err.contains("Tool results"));
+    }
+
+    #[test]
+    fn test_invalid_user_message_with_reasoning() {
+        use crate::types::prompt::{ContentPart, ReasoningContent};
+        
+        let mut prompt = Prompt::new(vec![]);
+        prompt.messages.push(Message::user_with_parts(vec![
+            ContentPart::Reasoning(ReasoningContent {
+                text: "thinking".to_string(),
+                provider_options: None,
+            })
+        ]));
+        
+        let result = convert_to_chat_messages(&prompt);
+        assert!(result.is_err());
+        let err = result.unwrap_err().to_string();
+        assert!(err.contains("Reasoning"));
     }
 }

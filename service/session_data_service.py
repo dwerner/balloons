@@ -3196,11 +3196,15 @@ class SessionDataService:
         if not subscribers:
             return
 
+        # Delta is already a string
+        delta = event.delta
+
         event_data = {
             "session_id": session_id,
             "exchange_id": event.exchange_id,
             "tool_use_id": event.tool_use_id,
             "partial_json": event.partial_json,
+            "delta": delta,
         }
         self._emit_event("sessionDataToolInputDelta", event_data, subscribers)
 
@@ -3214,20 +3218,22 @@ class SessionDataService:
         if not subscribers:
             return
 
+        # Tool input is already a dict
+        tool_input = event.tool_input if isinstance(event.tool_input, dict) else {}
+
         event_data = {
             "session_id": session_id,
             "exchange_id": event.exchange_id,
             "turn_index": event.turn_index,
             "tool_use_id": event.tool_use_id,
             "tool_name": event.tool_name,
-            "tool_input": event.tool_input,
+            "tool_input": tool_input,
             "tool_index": event.tool_index,
         }
 
         # DEBUG: Log Edit tool inputs to help diagnose missing diff data
         if event.tool_name == "Edit":
             from core.debug_log import debug_log
-            tool_input = event.tool_input or {}
             debug_log.info(
                 f"[SessionDataService] Edit tool_input: file_path={tool_input.get('file_path', 'N/A')}, "
                 f"old_string_len={len(tool_input.get('old_string', ''))}, "

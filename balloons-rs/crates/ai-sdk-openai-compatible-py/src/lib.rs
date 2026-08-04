@@ -3,12 +3,15 @@
 //! Provides async Python access to OpenAI-compatible LLM APIs.
 
 use pyo3::prelude::*;
+use pyo3::types::PyAny;
 use pyo3_async_runtimes::tokio::future_into_py;
 
-use ai_sdk_openai_compatible::{
+
+use ::ai_sdk_openai_compatible::{
     create_chat_model, create_completion_model, create_embedding_model,
-    CallOptions, EmbeddingOptions, LanguageModel, Prompt, ProviderConfig,
+    CallOptions, LanguageModel, Prompt, ProviderConfig,
 };
+use async_lock;
 
 // ============================================================================
 // Python Exceptions
@@ -27,8 +30,8 @@ impl AIError {
     }
 }
 
-impl From<ai_sdk_openai_compatible::Error> for AIError {
-    fn from(e: ai_sdk_openai_compatible::Error) -> Self {
+impl From<::ai_sdk_openai_compatible::Error> for AIError {
+    fn from(e: ::ai_sdk_openai_compatible::Error) -> Self {
         AIError {
             message: e.to_string(),
         }
@@ -42,12 +45,222 @@ impl From<AIError> for PyErr {
 }
 
 // ============================================================================
-// Python Tool Definition Type
+// Result Types
 // ============================================================================
 
-#[pyclass]
+#[pyclass(get_all, from_py_object)]
 #[derive(Debug, Clone)]
-struct PyToolDefinition {
+struct Usage {
+    input_tokens: u32,
+    output_tokens: u32,
+    total_tokens: u32,
+}
+
+impl From<::ai_sdk_openai_compatible::Usage> for Usage {
+    fn from(u: ::ai_sdk_openai_compatible::Usage) -> Self {
+        Self {
+            input_tokens: u.input_tokens,
+            output_tokens: u.output_tokens,
+            total_tokens: u.total_tokens,
+        }
+    }
+}
+
+#[pyclass(get_all, from_py_object)]
+#[derive(Debug, Clone)]
+struct ToolCall {
+    id: String,
+    name: String,
+    arguments: JsonValue,
+}
+
+impl From<::ai_sdk_openai_compatible::ToolCall> for ToolCall {
+    fn from(tc: ::ai_sdk_openai_compatible::ToolCall) -> Self {
+        Self {
+            id: tc.tool_call_id,
+            name: tc.tool_name,
+            arguments: JsonValue(tc.input),
+        }
+    }
+}
+
+#[pyclass(from_py_object)]
+#[derive(Debug, Clone)]
+pub struct JsonValue(pub serde_json::Value);
+
+#[pymethods]
+impl JsonValue {
+    #[new]
+    fn new(value: &Bound<'_, PyAny>) -> PyResult<Self> {
+        // Convert Python value to serde_json::Value
+        let json_str = value.call_method1("__json__", ())
+            .or_else(|_| {
+                // If no __json__ method, use json.dumps
+                let json_module = value.py().import("json")?;
+                json_module.call_method1("dumps", (value,))
+            })?;
+        
+        let json_str = json_str.extract::<String>()?;
+        let json_value: serde_json::Value = serde_json::from_str(&json_str)
+            .map_err(|e| pyo3::exceptions::PyValueError::new_err(e.to_string()))?;
+        
+        Ok(JsonValue(json_value))
+    }
+
+    fn __repr__(&self) -> String {
+        format!("JsonValue({})", self.0)
+    }
+
+    fn __str__(&self) -> String {
+        self.0.to_string()
+    }
+
+    fn is_object(&self) -> bool {
+        matches!(self.0, serde_json::Value::Object(_))
+    }
+
+    fn is_array(&self) -> bool {
+        matches!(self.0, serde_json::Value::Array(_))
+    }
+
+    fn is_string(&self) -> bool {
+        matches!(self.0, serde_json::Value::String(_))
+    }
+
+    fn is_number(&self) -> bool {
+        matches!(self.0, serde_json::Value::Number(_))
+    }
+
+    fn is_bool(&self) -> bool {
+        matches!(self.0, serde_json::Value::Bool(_))
+    }
+
+    fn is_null(&self) -> bool {
+        matches!(self.0, serde_json::Value::Null)
+    }
+
+    fn as_string(&self) -> Option<&str> {
+        self.0.as_str()
+    }
+
+    fn as_number(&self) -> Option<f64> {
+        self.0.as_f64()
+    }
+
+    fn as_bool(&self) -> Option<bool> {
+        self.0.as_bool()
+    }
+
+    fn keys(&self, _py: Python<'_>) -> PyResult<Vec<String>> {
+        if let serde_json::Value::Object(map) = &self.0 {
+            Ok(map.keys().cloned().collect())
+        } else {
+            Err(pyo3::exceptions::PyTypeError::new_err("Not a JSON object"))
+        }
+    }
+
+    fn get(&self, _py: Python<'_>, key: &str) -> PyResult<JsonValue> {
+        if let serde_json::Value::Object(map) = &self.0 {
+            if let Some(v) = map.get(key) {
+                Ok(JsonValue(v.clone()))
+            } else {
+                Err(pyo3::exceptions::PyKeyError::new_err(key.to_string()))
+            }
+        } else {
+            Err(pyo3::exceptions::PyTypeError::new_err("Not a JSON object"))
+        }
+    }
+
+    fn __len__(&self) -> PyResult<usize> {
+        match &self.0 {
+            serde_json::Value::Array(arr) => Ok(arr.len()),
+            serde_json::Value::Object(map) => Ok(map.len()),
+            _ => Err(pyo3::exceptions::PyTypeError::new_err("Object has no length")),
+        }
+    }
+
+   /// Deep merge two JSON values. If both are objects, merge keys recursively.
+    /// If types differ or not objects, other wins.
+    fn merge(&self, other: &JsonValue) -> PyResult<JsonValue> {
+        match (&self.0, &other.0) {
+            (serde_json::Value::Object(a), serde_json::Value::Object(b)) => {
+                let mut merged = a.clone();
+                for (k, v) in b {
+                    merged.insert(k.clone(), v.clone());
+                }
+                Ok(JsonValue(serde_json::Value::Object(merged)))
+            }
+            _ => Ok(other.clone()),
+        }
+    }
+
+    /// Convert to native Python dict (for tool execution boundary)
+    fn to_dict<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyAny>> {
+        // Use serde_json's built-in conversion to Python via JSON string
+        let json_str = self.0.to_string();
+        let json_module = py.import("json")?;
+        json_module.call_method1("loads", (json_str,))
+    }
+}
+
+#[pyclass(get_all, from_py_object)]
+#[derive(Debug, Clone)]
+struct GenerateResult {
+    text: Option<String>,
+    reasoning: Option<String>,
+    tool_calls: Vec<ToolCall>,
+    usage: Usage,
+    finish_reason: String,
+    response_id: String,
+}
+
+// ============================================================================
+// Completion Result Types
+// ============================================================================
+
+#[pyclass(get_all, from_py_object)]
+#[derive(Debug, Clone)]
+struct CompletionResult {
+    text: String,
+    usage: Usage,
+    finish_reason: String,
+}
+
+// ============================================================================
+// Embedding Result Types
+// ============================================================================
+
+#[pyclass(get_all, from_py_object)]
+#[derive(Debug, Clone)]
+struct EmbeddingResult {
+    embeddings: Vec<Vec<f64>>,
+    usage: Usage,
+}
+
+// ============================================================================
+// Streaming Event Types (mirrors Rust SDK StreamPart)
+// ============================================================================
+
+#[pyclass(from_py_object)]
+#[derive(Debug, Clone)]
+enum StreamPart {
+    TextDelta { delta: String },
+    ReasoningDelta { delta: String },
+    ToolCallStart { id: String, tool_name: String },
+    ToolCallDelta { id: String, delta: String },
+    ToolCallEnd { id: String },
+    ToolCall { id: String, tool_name: String, arguments: String },
+    Finish { usage: Option<Usage> },
+    Done(),
+}
+
+// ============================================================================
+// Tool Definition Type
+// ============================================================================
+
+#[pyclass(from_py_object)]
+#[derive(Debug, Clone)]
+struct ToolDefinition {
     #[pyo3(get)]
     name: String,
     #[pyo3(get)]
@@ -57,7 +270,7 @@ struct PyToolDefinition {
 }
 
 #[pymethods]
-impl PyToolDefinition {
+impl ToolDefinition {
     #[new]
     fn new(name: &str, description: Option<String>, parameters: &str) -> Self {
         Self {
@@ -74,7 +287,7 @@ impl PyToolDefinition {
 
 #[pyclass]
 struct ChatModel {
-    model: std::sync::Arc<ai_sdk_openai_compatible::OpenAICompatibleChatModel>,
+    model: std::sync::Arc<::ai_sdk_openai_compatible::OpenAICompatibleChatModel>,
 }
 
 #[pymethods]
@@ -88,14 +301,14 @@ impl ChatModel {
     ///     tools: List of tool definitions (optional)
     ///
     /// Returns:
-    ///     dict with 'text', 'usage', and 'finish_reason' keys
+    ///     GenerateResult with text, reasoning, tool_calls, usage, and finish_reason
     fn generate<'py>(
         &'py self,
         py: Python<'py>,
-        messages: Vec<PyMessage>,
+        messages: Vec<Message>,
         max_tokens: Option<u32>,
         temperature: Option<f32>,
-        tools: Option<Vec<PyToolDefinition>>,
+        tools: Option<Vec<ToolDefinition>>,
     ) -> PyResult<Bound<'py, PyAny>> {
         let model = self.model.clone();
         let prompt = convert_messages_to_prompt(messages);
@@ -113,7 +326,7 @@ impl ChatModel {
                 .map(|py_tool| {
                     let params: serde_json::Value = serde_json::from_str(&py_tool.parameters)
                         .unwrap_or_else(|_| serde_json::json!({}));
-                    ai_sdk_openai_compatible::ToolDefinition {
+                    ::ai_sdk_openai_compatible::ToolDefinition {
                         name: py_tool.name,
                         description: py_tool.description,
                         parameters: params,
@@ -128,37 +341,14 @@ impl ChatModel {
             let result = model.do_generate(prompt, options).await
                 .map_err(|e| AIError { message: e.to_string() })?;
 
-            let mut response = serde_json::json!({
-                "text": result.text.unwrap_or_default(),
-                "usage": {
-                    "input_tokens": result.usage.input_tokens,
-                    "output_tokens": result.usage.output_tokens,
-                    "total_tokens": result.usage.total_tokens,
-                },
-                "finish_reason": format!("{:?}", result.finish_reason),
-            });
-
-            if let Some(ref reasoning) = result.reasoning {
-                response["reasoning"] = serde_json::json!(reasoning);
-            }
-
-            // Add tool calls if present
-            if !result.tool_calls.is_empty() {
-                let tool_calls: Vec<_> = result.tool_calls
-                    .iter()
-                    .map(|tc| {
-                        serde_json::json!({
-                            "id": tc.tool_call_id,
-                            "name": tc.tool_name,
-                            "arguments": tc.input,
-                        })
-                    })
-                    .collect();
-                response["tool_calls"] = serde_json::json!(tool_calls);
-            }
-
-            serde_json::to_string(&response)
-                .map_err(|e| AIError { message: e.to_string() }.into())
+            Ok(GenerateResult {
+                text: result.text,
+                reasoning: result.reasoning,
+                tool_calls: result.tool_calls.into_iter().map(Into::into).collect(),
+                usage: result.usage.into(),
+                finish_reason: format!("{:?}", result.finish_reason),
+                response_id: result.response_id,
+            })
         })
     }
 
@@ -172,14 +362,14 @@ impl ChatModel {
     ///     tool_choice: How the model chooses tools: "auto", "none", "required" (optional, default "auto")
     ///
     /// Returns:
-    ///     Async generator yielding text deltas
+    ///     Async generator yielding StreamChunk objects
     fn stream<'py>(
         &'py self,
         py: Python<'py>,
-        messages: Vec<PyMessage>,
+        messages: Vec<Message>,
         max_tokens: Option<u32>,
         temperature: Option<f32>,
-        tools: Option<Vec<PyToolDefinition>>,
+        tools: Option<Vec<ToolDefinition>>,
         tool_choice: Option<String>,
     ) -> PyResult<Bound<'py, PyAny>> {
         let model = self.model.clone();
@@ -198,7 +388,7 @@ impl ChatModel {
                 .map(|py_tool| {
                     let params: serde_json::Value = serde_json::from_str(&py_tool.parameters)
                         .unwrap_or_else(|_| serde_json::json!({}));
-                    ai_sdk_openai_compatible::ToolDefinition {
+                    ::ai_sdk_openai_compatible::ToolDefinition {
                         name: py_tool.name,
                         description: py_tool.description,
                         parameters: params,
@@ -212,9 +402,9 @@ impl ChatModel {
         // Set tool_choice if provided
         if let Some(choice) = tool_choice {
             options.tool_choice = Some(match choice.as_str() {
-                "none" => ai_sdk_openai_compatible::ToolChoice::None,
-                "required" => ai_sdk_openai_compatible::ToolChoice::Required,
-                _ => ai_sdk_openai_compatible::ToolChoice::Auto,
+                "none" => ::ai_sdk_openai_compatible::ToolChoice::None,
+                "required" => ::ai_sdk_openai_compatible::ToolChoice::Required,
+                _ => ::ai_sdk_openai_compatible::ToolChoice::Auto,
             });
         }
 
@@ -234,7 +424,7 @@ impl ChatModel {
 
 #[pyclass]
 struct CompletionModel {
-    model: std::sync::Arc<ai_sdk_openai_compatible::OpenAICompatibleCompletionModel>,
+    model: std::sync::Arc<::ai_sdk_openai_compatible::OpenAICompatibleCompletionModel>,
 }
 
 #[pymethods]
@@ -247,7 +437,7 @@ impl CompletionModel {
     ///     temperature: Sampling temperature (0.0-2.0)
     ///
     /// Returns:
-    ///     dict with 'text', 'usage', and 'finish_reason' keys
+    ///     CompletionResult with text, usage, and finish_reason
     fn generate<'py>(
         &'py self,
         py: Python<'py>,
@@ -268,18 +458,11 @@ impl CompletionModel {
             let result = model.do_generate(prompt_obj, options).await
                 .map_err(|e| AIError { message: e.to_string() })?;
 
-            let response = serde_json::json!({
-                "text": result.text.unwrap_or_default(),
-                "usage": {
-                    "input_tokens": result.usage.input_tokens,
-                    "output_tokens": result.usage.output_tokens,
-                    "total_tokens": result.usage.total_tokens,
-                },
-                "finish_reason": format!("{:?}", result.finish_reason),
-            });
-
-            serde_json::to_string(&response)
-                .map_err(|e| AIError { message: e.to_string() }.into())
+            Ok(CompletionResult {
+                text: result.text.unwrap_or_default(),
+                usage: result.usage.into(),
+                finish_reason: format!("{:?}", result.finish_reason),
+            })
         })
     }
 }
@@ -290,19 +473,19 @@ impl CompletionModel {
 
 #[pyclass]
 struct EmbeddingModel {
-    model: std::sync::Arc<ai_sdk_openai_compatible::OpenAICompatibleEmbeddingModel>,
+    model: std::sync::Arc<::ai_sdk_openai_compatible::OpenAICompatibleEmbeddingModel>,
 }
 
 #[pymethods]
 impl EmbeddingModel {
-    /// Generate embeddings for text values.
+  /// Generate embeddings for text values.
     ///
     /// Args:
     ///     texts: List of text strings to embed
     ///     dimensions: Number of dimensions (optional)
     ///
     /// Returns:
-    ///     dict with 'embeddings' (list of lists) and 'usage' keys
+    ///     EmbeddingResult with embeddings and usage
     fn embed<'py>(
         &'py self,
         py: Python<'py>,
@@ -311,25 +494,24 @@ impl EmbeddingModel {
     ) -> PyResult<Bound<'py, PyAny>> {
         let model = self.model.clone();
 
-        let options = EmbeddingOptions {
-            dimensions,
-            user: None,
-        };
+        let mut options = ::ai_sdk_openai_compatible::EmbeddingOptions::default();
+        if let Some(dim) = dimensions {
+            options.dimensions = Some(dim);
+        }
 
         future_into_py(py, async move {
             let result = model.do_embed(texts, options).await
                 .map_err(|e| AIError { message: e.to_string() })?;
 
-            let response = serde_json::json!({
-                "embeddings": result.embeddings,
-                "usage": {
-                    "input_tokens": result.usage.input_tokens,
-                    "total_tokens": result.usage.total_tokens,
-                },
-            });
+            let embeddings: Vec<Vec<f64>> = result.embeddings
+                .into_iter()
+                .map(|e| e.into_iter().map(|x| x as f64).collect())
+                .collect();
 
-            serde_json::to_string(&response)
-                .map_err(|e| AIError { message: e.to_string() }.into())
+            Ok(EmbeddingResult {
+                embeddings,
+                usage: result.usage.into(),
+            })
         })
     }
 }
@@ -413,9 +595,9 @@ fn create_embedding_model_py(
 // Helper Types
 // ============================================================================
 
-#[pyclass]
+#[pyclass(from_py_object)]
 #[derive(Debug, Clone)]
-struct PyImageContent {
+struct ImageContent {
     #[pyo3(get)]
     data: String,  // base64 encoded or URL
     #[pyo3(get)]
@@ -423,7 +605,7 @@ struct PyImageContent {
 }
 
 #[pymethods]
-impl PyImageContent {
+impl ImageContent {
     #[new]
     fn new(data: &str, media_type: &str) -> Self {
         Self {
@@ -433,9 +615,9 @@ impl PyImageContent {
     }
 }
 
-#[pyclass]
+#[pyclass(from_py_object)]
 #[derive(Debug, Clone)]
-struct PyToolCallContent {
+struct ToolCallContent {
     #[pyo3(get)]
     tool_call_id: String,
     #[pyo3(get)]
@@ -445,7 +627,7 @@ struct PyToolCallContent {
 }
 
 #[pymethods]
-impl PyToolCallContent {
+impl ToolCallContent {
     #[new]
     fn new(tool_call_id: &str, tool_name: &str, input: &str) -> Self {
         Self {
@@ -456,15 +638,35 @@ impl PyToolCallContent {
     }
 }
 
-#[pyclass]
+#[pyclass(from_py_object)]
 #[derive(Debug, Clone)]
-struct PyReasoningContent {
+struct ToolResultContent {
+    #[pyo3(get)]
+    tool_call_id: String,
+    #[pyo3(get)]
+    output: String,
+}
+
+#[pymethods]
+impl ToolResultContent {
+    #[new]
+    fn new(tool_call_id: &str, output: &str) -> Self {
+        Self {
+            tool_call_id: tool_call_id.to_string(),
+            output: output.to_string(),
+        }
+    }
+}
+
+#[pyclass(from_py_object)]
+#[derive(Debug, Clone)]
+struct ReasoningContent {
     #[pyo3(get)]
     text: String,
 }
 
 #[pymethods]
-impl PyReasoningContent {
+impl ReasoningContent {
     #[new]
     fn new(text: &str) -> Self {
         Self {
@@ -473,77 +675,101 @@ impl PyReasoningContent {
     }
 }
 
-#[pyclass]
+#[pyclass(from_py_object)]
 #[derive(Debug, Clone)]
-enum PyContentPart {
+enum ContentPart {
     Text { text: String },
-    Image { image: PyImageContent },
-    Reasoning { reasoning: PyReasoningContent },
-    ToolCall { tool_call: PyToolCallContent },
+    Image { image: ImageContent },
+    Reasoning { reasoning: ReasoningContent },
+    ToolCall { tool_call: ToolCallContent },
+    ToolResult { tool_result: ToolResultContent },
 }
 
-#[pyclass]
+#[pyclass(from_py_object)]
 #[derive(Debug, Clone)]
-struct PyMessage {
+struct Message {
     #[pyo3(get)]
     role: String,
     #[pyo3(get)]
-    content: PyMessageContent,
+    content: MessageContent,
 }
 
-#[pyclass]
+#[pyclass(from_py_object)]
 #[derive(Debug, Clone)]
-enum PyMessageContent {
+enum MessageContent {
     Simple { text: String },
-    Complex { parts: Vec<PyContentPart> },
+    Complex { parts: Vec<ContentPart> },
 }
 
 #[pymethods]
-impl PyMessage {
+impl Message {
     #[new]
-    fn new(role: &str, content: &Bound<'_, PyAny>) -> PyResult<Self> {
+    #[pyo3(signature = (role, content, tool_call_id=None))]
+    fn new(role: &str, content: &Bound<'_, PyAny>, tool_call_id: Option<String>) -> PyResult<Self> {
         let role_str = role.to_string();
+        
+        // For tool role with string content, create ToolResultContent
+        if role_str == "tool" {
+            if let Ok(text) = content.extract::<String>() {
+                let tool_result = ToolResultContent::new(
+                    &tool_call_id.unwrap_or_default(),
+                    &text
+                );
+                return Ok(Self {
+                    role: role_str,
+                    content: MessageContent::Complex {
+                        parts: vec![ContentPart::ToolResult { tool_result }],
+                    },
+                });
+            }
+        }
         
         // Check if content is a string (simple message)
         if content.is_instance_of::<pyo3::types::PyString>() {
             let text = content.extract::<String>()?;
             return Ok(Self {
                 role: role_str,
-                content: PyMessageContent::Simple { text },
+                content: MessageContent::Simple { text },
             });
         }
         
         // Check if content is a list (complex message with parts)
         if content.is_instance_of::<pyo3::types::PyList>() {
-            let parts_list = content.downcast::<pyo3::types::PyList>()?;
+            let parts_list = content.cast::<pyo3::types::PyList>()?;
             let mut parts = Vec::new();
             
             for part_obj in parts_list {
-                let part_dict = part_obj.downcast::<pyo3::types::PyDict>()?;
+                let part_dict = part_obj.cast::<pyo3::types::PyDict>()?;
                 let part_type = part_dict.get_item("type")?.unwrap().extract::<String>()?;
                 
                 match part_type.as_str() {
                     "text" => {
                         let text = part_dict.get_item("text")?.unwrap().extract::<String>()?;
-                        parts.push(PyContentPart::Text { text });
+                        parts.push(ContentPart::Text { text });
                     }
                     "image" => {
                         let image_data = part_dict.get_item("data")?.unwrap().extract::<String>()?;
                         let media_type = part_dict.get_item("media_type")?.unwrap().extract::<String>()?;
-                        let image = PyImageContent::new(&image_data, &media_type);
-                        parts.push(PyContentPart::Image { image });
+                        let image = ImageContent::new(&image_data, &media_type);
+                        parts.push(ContentPart::Image { image });
                     }
                     "reasoning" => {
                         let text = part_dict.get_item("text")?.unwrap().extract::<String>()?;
-                        let reasoning = PyReasoningContent::new(&text);
-                        parts.push(PyContentPart::Reasoning { reasoning });
+                        let reasoning = ReasoningContent::new(&text);
+                        parts.push(ContentPart::Reasoning { reasoning });
                     }
                     "tool_call" => {
                         let tool_call_id = part_dict.get_item("tool_call_id")?.unwrap().extract::<String>()?;
                         let tool_name = part_dict.get_item("tool_name")?.unwrap().extract::<String>()?;
                         let input = part_dict.get_item("input")?.unwrap().extract::<String>()?;
-                        let tool_call = PyToolCallContent::new(&tool_call_id, &tool_name, &input);
-                        parts.push(PyContentPart::ToolCall { tool_call });
+                        let tool_call = ToolCallContent::new(&tool_call_id, &tool_name, &input);
+                        parts.push(ContentPart::ToolCall { tool_call });
+                    }
+                    "tool_result" => {
+                        let tool_call_id = part_dict.get_item("tool_call_id")?.unwrap().extract::<String>()?;
+                        let output = part_dict.get_item("output")?.unwrap().extract::<String>()?;
+                        let tool_result = ToolResultContent::new(&tool_call_id, &output);
+                        parts.push(ContentPart::ToolResult { tool_result });
                     }
                     _ => {}
                 }
@@ -551,7 +777,7 @@ impl PyMessage {
             
             return Ok(Self {
                 role: role_str,
-                content: PyMessageContent::Complex { parts },
+                content: MessageContent::Complex { parts },
             });
         }
         
@@ -561,51 +787,51 @@ impl PyMessage {
     }
 }
 
-fn convert_messages_to_prompt(messages: Vec<PyMessage>) -> Prompt {
+fn convert_messages_to_prompt(messages: Vec<Message>) -> Prompt {
     let mut prompt = Prompt::new(vec![]);
     
     for msg in messages {
         match msg.role.as_str() {
             "system" => {
                 let content = match &msg.content {
-                    PyMessageContent::Simple { text } => text.clone(),
-                    PyMessageContent::Complex { parts } => {
+                    MessageContent::Simple { text } => text.clone(),
+                    MessageContent::Complex { parts } => {
                         // For system messages, concatenate all text parts
                         parts.iter()
                             .filter_map(|p| match p {
-                                PyContentPart::Text { text } => Some(text.clone()),
+                                ContentPart::Text { text } => Some(text.clone()),
                                 _ => None,
                             })
                             .collect::<Vec<_>>()
                             .join("\n")
                     }
                 };
-                prompt.messages.push(ai_sdk_openai_compatible::Message::system(&content));
+                prompt.messages.push(::ai_sdk_openai_compatible::Message::system(&content));
             }
             "user" => {
                 match &msg.content {
-                    PyMessageContent::Simple { text } => {
-                        prompt.messages.push(ai_sdk_openai_compatible::Message::user(text));
+                    MessageContent::Simple { text } => {
+                        prompt.messages.push(::ai_sdk_openai_compatible::Message::user(text));
                     }
-                    PyMessageContent::Complex { parts } => {
+                    MessageContent::Complex { parts } => {
                         let mut content_parts = Vec::new();
                         
                         for part in parts {
                             match part {
-                                PyContentPart::Text { text } => {
+                                ContentPart::Text { text } => {
                                     content_parts.push(
-                                        ai_sdk_openai_compatible::types::prompt::ContentPart::Text(
-                                            ai_sdk_openai_compatible::types::prompt::TextContent {
+                                        ::ai_sdk_openai_compatible::types::prompt::ContentPart::Text(
+                                            ::ai_sdk_openai_compatible::types::prompt::TextContent {
                                                 text: text.clone(),
                                                 provider_options: None,
                                             }
                                         )
                                     );
                                 }
-                                PyContentPart::Image { image } => {
+                                ContentPart::Image { image } => {
                                     content_parts.push(
-                                        ai_sdk_openai_compatible::types::prompt::ContentPart::Image(
-                                            ai_sdk_openai_compatible::types::prompt::ImageContent {
+                                        ::ai_sdk_openai_compatible::types::prompt::ContentPart::Image(
+                                            ::ai_sdk_openai_compatible::types::prompt::ImageContent {
                                                 data: image.data.clone(),
                                                 media_type: image.media_type.clone(),
                                                 provider_options: None,
@@ -613,22 +839,22 @@ fn convert_messages_to_prompt(messages: Vec<PyMessage>) -> Prompt {
                                         )
                                     );
                                 }
-                                PyContentPart::Reasoning { reasoning } => {
+                                ContentPart::Reasoning { reasoning } => {
                                     content_parts.push(
-                                        ai_sdk_openai_compatible::types::prompt::ContentPart::Reasoning(
-                                            ai_sdk_openai_compatible::types::prompt::ReasoningContent {
+                                        ::ai_sdk_openai_compatible::types::prompt::ContentPart::Reasoning(
+                                            ::ai_sdk_openai_compatible::types::prompt::ReasoningContent {
                                                 text: reasoning.text.clone(),
                                                 provider_options: None,
                                             }
                                         )
                                     );
                                 }
-                                PyContentPart::ToolCall { tool_call } => {
+                                ContentPart::ToolCall { tool_call } => {
                                     let input: serde_json::Value = serde_json::from_str(&tool_call.input)
                                         .unwrap_or_else(|_| serde_json::json!({}));
                                     content_parts.push(
-                                        ai_sdk_openai_compatible::types::prompt::ContentPart::ToolCall(
-                                            ai_sdk_openai_compatible::types::prompt::ToolCallContent {
+                                        ::ai_sdk_openai_compatible::types::prompt::ContentPart::ToolCall(
+                                            ::ai_sdk_openai_compatible::types::prompt::ToolCallContent {
                                                 tool_call_id: tool_call.tool_call_id.clone(),
                                                 tool_name: tool_call.tool_name.clone(),
                                                 input,
@@ -637,49 +863,68 @@ fn convert_messages_to_prompt(messages: Vec<PyMessage>) -> Prompt {
                                         )
                                     );
                                 }
+                                ContentPart::ToolResult { tool_result } => {
+                                    let output = if tool_result.output.starts_with('{') || tool_result.output.starts_with('[') {
+                                        ::ai_sdk_openai_compatible::types::ToolOutput::Json {
+                                            value: serde_json::from_str(&tool_result.output).unwrap_or_else(|_| serde_json::json!({})),
+                                        }
+                                    } else {
+                                        ::ai_sdk_openai_compatible::types::ToolOutput::Text {
+                                            value: tool_result.output.clone(),
+                                        }
+                                    };
+                                    content_parts.push(
+                                        ::ai_sdk_openai_compatible::types::prompt::ContentPart::ToolResult(
+                                            ::ai_sdk_openai_compatible::types::prompt::ToolContent {
+                                                tool_call_id: tool_result.tool_call_id.clone(),
+                                                output,
+                                            }
+                                        )
+                                    );
+                                }
                             }
                         }
                         
-                        prompt.messages.push(ai_sdk_openai_compatible::Message::user_with_parts(content_parts));
+                        prompt.messages.push(::ai_sdk_openai_compatible::Message::user_with_parts(content_parts));
                     }
                 }
             }
             "assistant" => {
                 match &msg.content {
-                    PyMessageContent::Simple { text } => {
-                        prompt.messages.push(ai_sdk_openai_compatible::Message::assistant(text));
+                    MessageContent::Simple { text } => {
+                        prompt.messages.push(::ai_sdk_openai_compatible::Message::assistant(text));
                     }
-                    PyMessageContent::Complex { parts } => {
+                    MessageContent::Complex { parts } => {
                         let mut content_parts = Vec::new();
                         
                         for part in parts {
                             match part {
-                                PyContentPart::Text { text } => {
+                                ContentPart::Text { text } => {
                                     content_parts.push(
-                                        ai_sdk_openai_compatible::types::prompt::ContentPart::Text(
-                                            ai_sdk_openai_compatible::types::prompt::TextContent {
+                                        ::ai_sdk_openai_compatible::types::prompt::ContentPart::Text(
+                                            ::ai_sdk_openai_compatible::types::prompt::TextContent {
                                                 text: text.clone(),
                                                 provider_options: None,
                                             }
                                         )
                                     );
                                 }
-                                PyContentPart::Reasoning { reasoning } => {
+                                ContentPart::Reasoning { reasoning } => {
                                     content_parts.push(
-                                        ai_sdk_openai_compatible::types::prompt::ContentPart::Reasoning(
-                                            ai_sdk_openai_compatible::types::prompt::ReasoningContent {
+                                        ::ai_sdk_openai_compatible::types::prompt::ContentPart::Reasoning(
+                                            ::ai_sdk_openai_compatible::types::prompt::ReasoningContent {
                                                 text: reasoning.text.clone(),
                                                 provider_options: None,
                                             }
                                         )
                                     );
                                 }
-                                PyContentPart::ToolCall { tool_call } => {
+                                ContentPart::ToolCall { tool_call } => {
                                     let input: serde_json::Value = serde_json::from_str(&tool_call.input)
                                         .unwrap_or_else(|_| serde_json::json!({}));
                                     content_parts.push(
-                                        ai_sdk_openai_compatible::types::prompt::ContentPart::ToolCall(
-                                            ai_sdk_openai_compatible::types::prompt::ToolCallContent {
+                                        ::ai_sdk_openai_compatible::types::prompt::ContentPart::ToolCall(
+                                            ::ai_sdk_openai_compatible::types::prompt::ToolCallContent {
                                                 tool_call_id: tool_call.tool_call_id.clone(),
                                                 tool_name: tool_call.tool_name.clone(),
                                                 input,
@@ -688,14 +933,33 @@ fn convert_messages_to_prompt(messages: Vec<PyMessage>) -> Prompt {
                                         )
                                     );
                                 }
-                                PyContentPart::Image { .. } => {
+                                ContentPart::ToolResult { tool_result } => {
+                                    let output = if tool_result.output.starts_with('{') || tool_result.output.starts_with('[') {
+                                        ::ai_sdk_openai_compatible::types::ToolOutput::Json {
+                                            value: serde_json::from_str(&tool_result.output).unwrap_or_else(|_| serde_json::json!({})),
+                                        }
+                                    } else {
+                                        ::ai_sdk_openai_compatible::types::ToolOutput::Text {
+                                            value: tool_result.output.clone(),
+                                        }
+                                    };
+                                    content_parts.push(
+                                        ::ai_sdk_openai_compatible::types::prompt::ContentPart::ToolResult(
+                                            ::ai_sdk_openai_compatible::types::prompt::ToolContent {
+                                                tool_call_id: tool_result.tool_call_id.clone(),
+                                                output,
+                                            }
+                                        )
+                                    );
+                                }
+                                ContentPart::Image { .. } => {
                                     // Ignore images in assistant messages
                                 }
                             }
                         }
                         
                         if !content_parts.is_empty() {
-                            prompt.messages.push(ai_sdk_openai_compatible::Message::assistant_with_parts(content_parts));
+                            prompt.messages.push(::ai_sdk_openai_compatible::Message::assistant_with_parts(content_parts));
                         }
                     }
                 }
@@ -713,13 +977,13 @@ fn convert_messages_to_prompt(messages: Vec<PyMessage>) -> Prompt {
 
 #[pyclass]
 struct AsyncGenerator {
-    stream: Option<std::sync::Arc<tokio::sync::Mutex<ai_sdk_openai_compatible::LanguageModelStream>>>,
+    stream: Option<std::sync::Arc<async_lock::Mutex<::ai_sdk_openai_compatible::LanguageModelStream>>>,
 }
 
 impl AsyncGenerator {
-    fn new(stream: ai_sdk_openai_compatible::LanguageModelStream) -> Self {
+    fn new(stream: ::ai_sdk_openai_compatible::LanguageModelStream) -> Self {
         Self {
-            stream: Some(std::sync::Arc::new(tokio::sync::Mutex::new(stream))),
+            stream: Some(std::sync::Arc::new(async_lock::Mutex::new(stream))),
         }
     }
 }
@@ -739,40 +1003,41 @@ impl AsyncGenerator {
             loop {
                 let mut stream_guard = stream.lock().await;
                 match stream_guard.next().await {
-                    Some(Ok(ai_sdk_openai_compatible::StreamPart::TextDelta { delta })) => {
-                        return Ok(serde_json::json!({"type": "text", "delta": delta}).to_string());
+                    Some(Ok(::ai_sdk_openai_compatible::StreamPart::TextDelta { delta })) => {
+                        return Ok(StreamPart::TextDelta { delta });
                     }
-                    Some(Ok(ai_sdk_openai_compatible::StreamPart::ReasoningDelta { delta })) => {
-                        return Ok(serde_json::json!({"type": "reasoning", "delta": delta}).to_string());
+                    Some(Ok(::ai_sdk_openai_compatible::StreamPart::ReasoningDelta { delta })) => {
+                        return Ok(StreamPart::ReasoningDelta { delta });
                     }
-                    Some(Ok(ai_sdk_openai_compatible::StreamPart::ToolCallStart { id })) => {
-                        return Ok(serde_json::json!({"type": "tool_call_start", "tool_id": id}).to_string());
+                    Some(Ok(::ai_sdk_openai_compatible::StreamPart::ToolCallStart { id, tool_name })) => {
+                        return Ok(StreamPart::ToolCallStart {
+                            id,
+                            tool_name,
+                        });
                     }
-                    Some(Ok(ai_sdk_openai_compatible::StreamPart::ToolCallDelta { id, name, arguments })) => {
-                        return Ok(serde_json::json!({
-                            "type": "tool_call_delta",
-                            "tool_id": id,
-                            "name": name,
-                            "arguments": arguments
-                        }).to_string());
+                    Some(Ok(::ai_sdk_openai_compatible::StreamPart::ToolCallDelta { id, delta })) => {
+                        return Ok(StreamPart::ToolCallDelta {
+                            id,
+                            delta,
+                        });
                     }
-                    Some(Ok(ai_sdk_openai_compatible::StreamPart::ToolCallEnd { id })) => {
-                        return Ok(serde_json::json!({"type": "tool_call_end", "tool_id": id}).to_string());
+                    Some(Ok(::ai_sdk_openai_compatible::StreamPart::ToolCallEnd { id })) => {
+                        return Ok(StreamPart::ToolCallEnd { id });
                     }
-                    Some(Ok(ai_sdk_openai_compatible::StreamPart::Finish { reason: _, usage })) => {
-                        let mut response = serde_json::json!({"type": "finish"});
-                        if let Some(usage) = usage {
-                            response["usage"] = serde_json::json!({
-                                "input_tokens": usage.input_tokens,
-                                "output_tokens": usage.output_tokens,
-                                "total_tokens": usage.total_tokens,
-                            });
-                        }
-                        return Ok(response.to_string());
+                    Some(Ok(::ai_sdk_openai_compatible::StreamPart::ToolCall { id, tool_name, arguments })) => {
+                        return Ok(StreamPart::ToolCall {
+                            id,
+                            tool_name,
+                            arguments,
+                        });
                     }
-                    Some(Ok(_)) => continue, // Skip metadata, get next event
+                    Some(Ok(::ai_sdk_openai_compatible::StreamPart::Finish { reason: _, usage })) => {
+                        return Ok(StreamPart::Finish {
+                            usage: usage.map(Into::into),
+                        });
+                    }
                     Some(Err(e)) => return Err(AIError { message: e.to_string() }.into()),
-                    None => return Ok("[DONE]".to_string()), // End of stream marker
+                    None => return Ok(StreamPart::Done()),
                 }
             }
         });
@@ -790,13 +1055,21 @@ fn ai_sdk_openai_compatible_py(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_class::<ChatModel>()?;
     m.add_class::<CompletionModel>()?;
     m.add_class::<EmbeddingModel>()?;
-    m.add_class::<PyMessage>()?;
-    m.add_class::<PyMessageContent>()?;
-    m.add_class::<PyContentPart>()?;
-    m.add_class::<PyImageContent>()?;
-    m.add_class::<PyToolCallContent>()?;
-    m.add_class::<PyReasoningContent>()?;
-    m.add_class::<PyToolDefinition>()?;
+    m.add_class::<Message>()?;
+    m.add_class::<MessageContent>()?;
+    m.add_class::<ContentPart>()?;
+    m.add_class::<ImageContent>()?;
+    m.add_class::<ToolCallContent>()?;
+    m.add_class::<ToolResultContent>()?;
+    m.add_class::<ReasoningContent>()?;
+    m.add_class::<ToolDefinition>()?;
+    m.add_class::<Usage>()?;
+    m.add_class::<ToolCall>()?;
+    m.add_class::<JsonValue>()?;
+    m.add_class::<GenerateResult>()?;
+    m.add_class::<CompletionResult>()?;
+    m.add_class::<EmbeddingResult>()?;
+    m.add_class::<StreamPart>()?;
     m.add_function(wrap_pyfunction!(create_chat_model_py, m)?)?;
     m.add_function(wrap_pyfunction!(create_completion_model_py, m)?)?;
     m.add_function(wrap_pyfunction!(create_embedding_model_py, m)?)?;
