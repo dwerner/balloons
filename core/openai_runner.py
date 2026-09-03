@@ -15,7 +15,7 @@ from models import (
     TextBlock, ImageBlock, ToolUseBlock, ToolResultBlock, InterruptionBlock, ErrorBlock, ArchiveBlock, ContextMode,
     ToolUseStartEvent, ToolInputDeltaEvent, ToolUseEvent, ToolResultDeltaEvent, ToolResultEvent, SteeringInjectedEvent,
 )
-from .base_runner import BaseRunner, RunnerEvent, SteeringCapability, PLACEHOLDER_API_KEY
+from .base_runner import BaseRunner, RunnerEvent, SteeringCapability, PLACEHOLDER_API_KEY, StreamOutcome
 from .debug_log import debug_log, dump_failed_json, perf_marker, Category
 from .exceptions import InputRequiredError
 from .tools import get_tools_for_request
@@ -775,26 +775,23 @@ class OpenAICompatibleRunner(BaseRunner):
                 if self._cancelled:
                     break
 
-                # Stream one response
-                tool_calls_data, input_tokens, output_tokens = await self._stream_one_response(
-                    openai_messages, tools
-                )
-
-                total_input_tokens += input_tokens
-                total_output_tokens += output_tokens
-
-                # Yield all events from the stream
-                for event in tool_calls_data.get("events", []):
+                # Stream one response, forwarding each event live as the upstream
+                # stream produces it (rather than replaying a buffered list).
+                outcome = StreamOutcome()
+                async for event in self._stream_one_response(openai_messages, tools, outcome):
                     yield event
 
+                total_input_tokens += outcome.input_tokens
+                total_output_tokens += outcome.output_tokens
+
                 # Check if we have tool calls to execute
-                tool_calls = tool_calls_data.get("tool_calls", [])
+                tool_calls = outcome.tool_calls
                 if not tool_calls:
                     # No tool calls, we're done
                     break
 
                 # Execute tools and continue the loop
-                assistant_content = tool_calls_data.get("content", "")
+                assistant_content = outcome.content
 
                 # Add assistant message with tool calls
                 assistant_msg = {
@@ -1020,19 +1017,20 @@ class OpenAICompatibleRunner(BaseRunner):
         self,
         openai_messages: list[dict],
         tools: list[dict] | None,
-    ) -> tuple[dict, int, int]:
-        """Stream a single response from the API.
+        outcome: StreamOutcome,
+    ) -> AsyncIterator[RunnerEvent]:
+        """Stream a single response, yielding each event as it arrives.
 
-        Returns:
-            Tuple of (data_dict, input_tokens, output_tokens)
-            data_dict contains:
-                - events: list of events to yield
-                - tool_calls: list of tool calls (if any)
-                - content: text content (if any)
+        Yields events live so the caller can forward deltas to the UI while the
+        upstream HTTP stream is still in progress. Non-event results (tool calls,
+        accumulated content, token counts) are written into `outcome` before the
+        generator finishes; the caller reads them after draining the event stream.
+
+        Args:
+            outcome: Caller-owned StreamOutcome filled in before this generator ends.
         """
         import time
 
-        events = []
         tool_calls = {}  # id -> {id, name, arguments_json}
         content_buffer = ""
         input_tokens = 0
@@ -1146,12 +1144,12 @@ class OpenAICompatibleRunner(BaseRunner):
             # Handle text content
             if delta.content:
                 content_buffer += delta.content
-                events.append(TextDelta(text=delta.content))
+                yield TextDelta(text=delta.content)
                 await asyncio.sleep(0)  # Yield to event loop
             elif getattr(delta, "refusal", None):
                 refusal_text = delta.refusal
                 content_buffer += refusal_text
-                events.append(TextDelta(text=refusal_text))
+                yield TextDelta(text=refusal_text)
                 await asyncio.sleep(0)
             elif getattr(delta, "reasoning_content", None) or getattr(delta, "reasoning", None):
                 # Reasoning/thinking channel: emitted as ThinkingDelta so the UI can
@@ -1162,7 +1160,7 @@ class OpenAICompatibleRunner(BaseRunner):
                     getattr(delta, "reasoning_content", None) or getattr(delta, "reasoning", None)
                 )
                 content_buffer += reasoning_text
-                events.append(ThinkingDelta(text=reasoning_text))
+                yield ThinkingDelta(text=reasoning_text)
                 await asyncio.sleep(0)
 
             # Handle tool calls
@@ -1210,19 +1208,19 @@ class OpenAICompatibleRunner(BaseRunner):
                         if tc_delta.function.name:
                             tc["name"] = tc_delta.function.name
                             # Emit tool use start event
-                            events.append(ToolUseStartEvent(
+                            yield ToolUseStartEvent(
                                 tool_use_id=tc["id"],
                                 tool_name=tc["name"],
-                            ))
+                            )
 
                         # Accumulate arguments JSON
                         if tc_delta.function.arguments:
                             tc["arguments_json"] += tc_delta.function.arguments
                             # Emit input delta event
-                            events.append(ToolInputDeltaEvent(
+                            yield ToolInputDeltaEvent(
                                 tool_use_id=tc["id"],
                                 partial_json=tc_delta.function.arguments,
-                            ))
+                            )
 
         # Finalize tool calls - parse arguments JSON
         finalized_tool_calls = []
@@ -1291,11 +1289,11 @@ class OpenAICompatibleRunner(BaseRunner):
             )
 
             # Emit tool use complete event
-            events.append(ToolUseEvent(
+            yield ToolUseEvent(
                 tool_use_id=tc["id"],
                 tool_name=tc["name"],
                 tool_input=arguments,
-            ))
+            )
 
         # Log API call completion timing
         api_elapsed_ms = (time.perf_counter() - api_start) * 1000
@@ -1357,15 +1355,15 @@ class OpenAICompatibleRunner(BaseRunner):
                 for tc in parsed_embedded:
                     # Normalize arguments
                     tc["arguments"] = _normalize_tool_arguments(tc["name"], tc["arguments"])
-                    events.append(ToolUseStartEvent(
+                    yield ToolUseStartEvent(
                         tool_use_id=tc["id"],
                         tool_name=tc["name"],
-                    ))
-                    events.append(ToolUseEvent(
+                    )
+                    yield ToolUseEvent(
                         tool_use_id=tc["id"],
                         tool_name=tc["name"],
                         tool_input=tc["arguments"],
-                    ))
+                    )
                 # Add parsed calls to finalized list
                 finalized_tool_calls.extend(parsed_embedded)
             else:
@@ -1379,11 +1377,10 @@ class OpenAICompatibleRunner(BaseRunner):
                     error=f"Detected embedded tool call but failed to parse",
                 )
 
-        return {
-            "events": events,
-            "tool_calls": finalized_tool_calls,
-            "content": content_buffer,
-        }, input_tokens, output_tokens
+        outcome.tool_calls = finalized_tool_calls
+        outcome.content = content_buffer
+        outcome.input_tokens = input_tokens
+        outcome.output_tokens = output_tokens
 
     def terminate(self) -> None:
         """Terminate the running request."""

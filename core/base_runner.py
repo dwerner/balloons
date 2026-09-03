@@ -19,6 +19,24 @@ ToolEventCallback = Callable[[ToolResultDeltaEvent], Awaitable[None]]
 PLACEHOLDER_API_KEY = "not-needed"
 
 
+class StreamOutcome:
+    """Non-event results produced while streaming a single response.
+
+    Carried out via an explicit caller-owned object rather than the generator's
+    yield channel, so the event stream stays a pure stream of RunnerEvents.
+    The generator fills this in before it finishes; the caller reads it after
+    the event stream is exhausted.
+    """
+
+    __slots__ = ("tool_calls", "content", "input_tokens", "output_tokens")
+
+    def __init__(self) -> None:
+        self.tool_calls: list[dict] = []
+        self.content: str = ""
+        self.input_tokens: int = 0
+        self.output_tokens: int = 0
+
+
 # Type alias for all possible events yielded by runners
 RunnerEvent = Union[
     TextDelta, ResultEvent, InitEvent, RawEvent,
