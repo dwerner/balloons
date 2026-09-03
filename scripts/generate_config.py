@@ -70,7 +70,6 @@ def build_config(
     anthropic_key: str | None,
     openai_key: str | None,
     openrouter_key: str | None,
-    google_key: str | None,
     jwt_secret: str,
     tls_enabled: bool,
     no_prompt: bool = False,
@@ -118,16 +117,6 @@ def build_config(
         }
         if existing_openrouter.get("system_prompt"):
             backends["openrouter"]["system_prompt"] = existing_openrouter["system_prompt"]
-
-    # Google Gemini backend
-    if google_key:
-        existing_gemini = existing.get("backends", {}).get("gemini", {})
-        backends["gemini"] = {
-            "type": "gemini",
-            "api_key": "${GOOGLE_AI_API_KEY}",
-            "model": existing_gemini.get("model", "gemini-2.5-flash"),
-            "context_window": existing_gemini.get("context_window", 200000),
-        }
 
     # Preserve any other backends from existing config
     for name, backend in existing.get("backends", {}).items():
@@ -228,11 +217,6 @@ def main():
         "OpenRouter API key",
         no_prompt
     )
-    google_key = get_env_or_prompt(
-        "GOOGLE_AI_API_KEY",
-        "Google AI API key",
-        no_prompt
-    )
 
     # Check TLS certs
     print("\nChecking TLS certificates...")
@@ -260,7 +244,6 @@ def main():
         anthropic_key=anthropic_key,
         openai_key=openai_key,
         openrouter_key=openrouter_key,
-        google_key=google_key,
         jwt_secret=jwt_secret,
         tls_enabled=tls_enabled,
         no_prompt=no_prompt,

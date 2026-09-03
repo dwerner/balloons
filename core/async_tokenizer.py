@@ -21,7 +21,13 @@ import json
 from concurrent.futures import ThreadPoolExecutor, Future
 from typing import Callable, Optional, Any
 
-from models import TextBlock, ToolUseBlock, ToolResultBlock, ArchiveBlock
+from models import (
+    TextBlock, MarkdownBlock, ToolUseBlock, ToolResultBlock,
+    ArchiveBlock, InterruptionBlock, ErrorBlock, LinkBlock,
+)
+from .context import (
+    render_archive, render_interruption, render_error, render_link,
+)
 
 
 # Dedicated thread pool for token counting (CPU-bound work)
@@ -46,8 +52,10 @@ def _count_tokens_sync(text: str) -> int:
 def _format_turn_content(role: str, content_blocks: list) -> str:
     """Format turn content for token counting.
 
-    Uses the same formatting as ContextBuilder.count_turn_tokens()
-    for consistency.
+    Reuses the canonical ``core.context`` renderers for the marker blocks
+    (archive / interruption / error / link) so the counted text tracks what is
+    actually sent to the model, rather than a hand-rolled copy that can drift
+    from the single source of truth in ``core.context``.
     """
     if not content_blocks:
         return ""
@@ -61,6 +69,10 @@ def _format_turn_content(role: str, content_blocks: list) -> str:
         if block_type == 'text' or isinstance(block, TextBlock):
             if block.text:
                 block_parts.append(block.text)
+        elif block_type == 'markdown' or isinstance(block, MarkdownBlock):
+            # Markdown is model-facing text; the distinction is a UI concern.
+            if block.text:
+                block_parts.append(block.text)
         elif block_type == 'tool_use' or isinstance(block, ToolUseBlock):
             input_str = json.dumps(block.input, indent=2)
             block_parts.append(f"[Tool Use: {block.name}]\n{input_str}")
@@ -68,10 +80,13 @@ def _format_turn_content(role: str, content_blocks: list) -> str:
             error_prefix = "[Error] " if getattr(block, 'is_error', False) else ""
             block_parts.append(f"[Tool Result]{error_prefix}\n{block.content}")
         elif block_type == 'archive' or isinstance(block, ArchiveBlock):
-            block_parts.append(
-                f"[Archived {block.message_count} turns: {block.summary}]\n"
-                f"(Archive ID: {block.archive_id}, JSON path: {block.file_path})"
-            )
+            block_parts.append(render_archive(block))
+        elif block_type == 'interruption' or isinstance(block, InterruptionBlock):
+            block_parts.append(render_interruption(block))
+        elif block_type == 'error' or isinstance(block, ErrorBlock):
+            block_parts.append(render_error(block))
+        elif block_type == 'link' or isinstance(block, LinkBlock):
+            block_parts.append(render_link(block))
 
     if not block_parts:
         return ""

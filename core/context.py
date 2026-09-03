@@ -22,6 +22,122 @@ from models import (
 from tokenizer import count_tokens
 
 
+# =============================================================================
+# Shared, wire-format-agnostic context policy
+#
+# These are the single source of truth for two decisions that every backend
+# runner must make identically, but that say nothing about the wire format:
+#
+#   1. WHICH turns go into a request, and whether a turn is represented by its
+#      full content or by its cached summary (``select_turns``).
+#   2. The canonical model-facing TEXT for the "text-y" marker blocks
+#      (interruption / error / archive / link / summary). Each ``render_*``
+#      returns the ONE string every backend should emit for that concept.
+#
+# Per-runner serialization (OpenAI ``tool_calls``/``role="tool"``, Claude
+# content blocks, and the strict-alternation repair passes) stays
+# in each runner -- it is inherently wire-format specific and must NOT live here.
+# =============================================================================
+
+
+class SelectionMode(Enum):
+    """How a surviving turn should be represented in the request."""
+    FULL = "full"        # include the turn's content blocks verbatim
+    SUMMARY = "summary"  # represent the turn by its cached summary only
+
+
+@dataclass
+class SelectedTurn:
+    """A turn that survived selection, with its representation resolved."""
+    message: Message
+    mode: SelectionMode
+
+
+def select_turns(messages: list[Message]) -> list[SelectedTurn]:
+    """Apply the shared turn-selection policy to a message history.
+
+    This is the single place that decides *what goes in* (as opposed to how it
+    is serialized). It is deliberately wire-format agnostic: every runner
+    (OpenAI, Claude) and the fork path must agree on it.
+
+    Policy:
+      - ``ContextMode.DROP`` turns are excluded entirely.
+      - ``COMPRESS`` and ``SUMMARIZE`` are treated identically (SUMMARIZE is the
+        legacy alias for COMPRESS): when a cached ``msg.summary`` is present the
+        turn is represented by ``SelectionMode.SUMMARY``, otherwise ``FULL``.
+        (Historically only SUMMARIZE substituted the summary, so turns left in
+        the modern default COMPRESS mode ignored their summary -- a live bug.)
+      - ``system`` and ``tool`` turns are always ``FULL``: their special handling
+        (system metadata, tool results) is the runner's concern, and neither is
+        ever replaced by a summary.
+
+    Args:
+        messages: The message history to select from.
+
+    Returns:
+        The surviving turns, each tagged with its resolved representation.
+    """
+    selected: list[SelectedTurn] = []
+    for msg in messages:
+        if msg.context_mode == ContextMode.DROP:
+            continue
+
+        # System metadata and tool results are never summary-substituted; the
+        # runner decides how (or whether) to emit them.
+        if msg.role in ("system", "tool"):
+            selected.append(SelectedTurn(message=msg, mode=SelectionMode.FULL))
+            continue
+
+        if (
+            msg.context_mode in (ContextMode.COMPRESS, ContextMode.SUMMARIZE)
+            and msg.summary
+        ):
+            selected.append(SelectedTurn(message=msg, mode=SelectionMode.SUMMARY))
+        else:
+            selected.append(SelectedTurn(message=msg, mode=SelectionMode.FULL))
+
+    return selected
+
+
+def render_summary(msg: Message) -> str:
+    """Canonical model-facing text for a summary-substituted turn."""
+    return f"[Summary] {msg.summary}"
+
+
+def render_interruption(block: InterruptionBlock) -> str:
+    """Canonical model-facing text for an interruption marker."""
+    return f"[Interrupted: {block.reason}]"
+
+
+def render_error(block: ErrorBlock) -> str:
+    """Canonical model-facing text for an error/truncation marker."""
+    error_info = f"[Error: {block.reason}]"
+    if block.partial_tool_name:
+        error_info += f" (incomplete tool: {block.partial_tool_name})"
+    return error_info
+
+
+def render_archive(block: ArchiveBlock) -> str:
+    """Canonical model-facing text for an archive marker.
+
+    Points the model at the ``read_archive`` tool (the actionable hint) rather
+    than a raw JSON path it cannot open.
+    """
+    summary = block.get_display_summary() or f"Archived {block.message_count} turns"
+    return (
+        f"[Archived {block.message_count} turns: {summary}]\n"
+        f"(Use read_archive tool with archive_id={block.archive_id} to retrieve full content)"
+    )
+
+
+def render_link(block: LinkBlock) -> str:
+    """Canonical model-facing text for a link marker."""
+    link_info = f"[Link: {block.linked_session_id[:8]}]"
+    if block.summary:
+        link_info += f" - {block.summary}"
+    return link_info
+
+
 class OutputFormat(Enum):
     """Output format for context building."""
     # Structured content blocks for API calls (list[dict])
@@ -168,17 +284,16 @@ class ContextBuilder:
         history_parts: list[str] = []
         history_images: list[ImageBlock] = []
 
-        for msg in self._messages:
-            if msg.context_mode == ContextMode.DROP:
-                continue
+        for sel in select_turns(self._messages):
+            msg = sel.message
 
             # Handle system messages
             if msg.role == "system":
                 self._process_system_message(msg, history_parts)
                 continue
 
-            # Use summary if in SUMMARIZE mode, but preserve image references
-            if msg.context_mode == ContextMode.SUMMARIZE and msg.summary:
+            # Use summary if selected, but preserve image references
+            if sel.mode == SelectionMode.SUMMARY:
                 role_name = "user" if msg.role == "user" else "assistant"
                 # Extract any image references from this message
                 image_refs = []
@@ -187,7 +302,7 @@ class ContextBuilder:
                         if isinstance(block, ImageBlock) and block.file_path:
                             image_refs.append(f"Image file: {block.file_path}")
                 # Include summary and image refs
-                summary_text = f"[Summary] {msg.summary}"
+                summary_text = render_summary(msg)
                 if image_refs:
                     summary_text += "\n" + "\n".join(image_refs)
                 history_parts.append(f"<{role_name}>\n{summary_text}\n</{role_name}>")
@@ -222,14 +337,9 @@ class ContextBuilder:
         if msg.content_blocks:
             for block in msg.content_blocks:
                 if isinstance(block, LinkBlock):
-                    link_info = f"[Link: {block.linked_session_id[:8]}]"
-                    if block.summary:
-                        link_info += f" - {block.summary}"
-                    history_parts.append(link_info)
+                    history_parts.append(render_link(block))
                 elif isinstance(block, ArchiveBlock):
-                    archive_info = f"[Archived {block.message_count} turns: {block.summary}]"
-                    archive_info += f"\n(Archive ID: {block.archive_id}, JSON path: {block.file_path})"
-                    history_parts.append(archive_info)
+                    history_parts.append(render_archive(block))
                 elif isinstance(block, TextBlock) and block.text:
                     history_parts.append(block.text)
         elif msg.content:
@@ -266,24 +376,16 @@ class ContextBuilder:
             return f"<tool_result id=\"{block.tool_use_id}\"{error_attr}>\n{block.content}\n</tool_result>"
 
         elif block_type == 'interruption' or isinstance(block, InterruptionBlock):
-            return f"[Response interrupted: {block.reason}]"
+            return render_interruption(block)
 
         elif block_type == 'error' or isinstance(block, ErrorBlock):
-            error_info = f"[Response truncated: {block.reason}]"
-            if block.partial_tool_name:
-                error_info += f" (incomplete tool: {block.partial_tool_name})"
-            return error_info
+            return render_error(block)
 
         elif block_type == 'link' or isinstance(block, LinkBlock):
-            link_info = f"[Link: {block.linked_session_id[:8]}]"
-            if block.summary:
-                link_info += f" - {block.summary}"
-            return link_info
+            return render_link(block)
 
         elif block_type == 'archive' or isinstance(block, ArchiveBlock):
-            archive_info = f"[Archived {block.message_count} turns: {block.summary}]"
-            archive_info += f"\n(Archive ID: {block.archive_id}, JSON path: {block.file_path})"
-            return archive_info
+            return render_archive(block)
 
         return None
 

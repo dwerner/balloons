@@ -2,7 +2,6 @@ rich>=13.0.0
 tiktoken>=0.5.0
 pyyaml>=6.0
 openai>=1.0.0
-google-genai>=1.0.0
 aiofiles>=24.1.0
 PyJWT>=2.8.0
 argon2-cffi>=23.1.0

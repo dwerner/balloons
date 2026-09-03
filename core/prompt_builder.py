@@ -136,9 +136,9 @@ def _load_balloons_tools_prompt(
     """Load the balloons tools prompt using per-tool prompts.
 
     Args:
-        backend_type: "claude", "openai", or "gemini" - determines whether to include
+        backend_type: "claude" or "openai" - determines whether to include
                       balloons-tool XML format instructions (Claude uses XML format,
-                      OpenAI and Gemini use native function calling).
+                      OpenAI uses native function calling).
         enabled_tools: Ordered list of tool names. Order determines prompt order.
                        None means use default enabled tools.
 
@@ -149,9 +149,7 @@ def _load_balloons_tools_prompt(
 
     # Use provided list or defaults (order matters!)
     tools_to_include = enabled_tools if enabled_tools is not None else DEFAULT_ENABLED_TOOLS
-    # Gemini uses native function calling like OpenAI, so treat it the same
-    effective_backend = "openai" if backend_type == "gemini" else backend_type
-    return build_tool_prompts(tools_to_include, backend_type=effective_backend)
+    return build_tool_prompts(tools_to_include, backend_type=backend_type)
 
 
 def _get_domain_prompt() -> str:

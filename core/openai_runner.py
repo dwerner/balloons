@@ -12,10 +12,15 @@ from openai import AsyncOpenAI
 
 from models import (
     Message, TextDelta, ThinkingDelta, ResultEvent, InitEvent,
-    TextBlock, ImageBlock, ToolUseBlock, ToolResultBlock, InterruptionBlock, ErrorBlock, ArchiveBlock, ContextMode,
+    TextBlock, MarkdownBlock, ThinkingBlock, ImageBlock, ToolUseBlock, ToolResultBlock,
+    InterruptionBlock, ErrorBlock, ArchiveBlock, LinkBlock,
     ToolUseStartEvent, ToolInputDeltaEvent, ToolUseEvent, ToolResultDeltaEvent, ToolResultEvent, SteeringInjectedEvent,
 )
 from .base_runner import BaseRunner, RunnerEvent, SteeringCapability, PLACEHOLDER_API_KEY, StreamOutcome
+from .context import (
+    select_turns, SelectionMode,
+    render_summary, render_interruption, render_error, render_archive, render_link,
+)
 from .debug_log import debug_log, dump_failed_json, perf_marker, Category
 from .exceptions import InputRequiredError
 from .tools import get_tools_for_request
@@ -24,6 +29,13 @@ from .tool_result import ToolExecutionResult
 
 if TYPE_CHECKING:
     from session import Session
+
+
+# Tools handled entirely by the UI (no backend execution, no stored ToolResultBlock).
+# The OpenAI protocol still requires every tool_call to have a matching tool result,
+# so build_messages injects synthetic ones for these. Single definition on purpose --
+# it used to be duplicated in build_messages and stream_response.
+CLIENT_ONLY_TOOLS = {"play_midi", "propose_fork", "propose_merge"}
 
 
 # Tool argument fields that MUST be strings (for UI rendering safety)
@@ -323,10 +335,12 @@ class OpenAICompatibleRunner(BaseRunner):
                 "content": system_prompt,
             })
 
-        for msg in messages:
-            # Respect context mode
-            if msg.context_mode == ContextMode.DROP:
-                continue
+        # Shared selection policy (DROP filtering + summary substitution, incl.
+        # the COMPRESS/SUMMARIZE equivalence fix) lives in ContextBuilder so all
+        # backends agree on *what* goes in. Everything below is OpenAI-shaped
+        # serialization of the turns that survived.
+        for sel in select_turns(messages):
+            msg = sel.message
 
             # Handle internal system messages (links, archives, metadata)
             # Do not convert them into user turns: strict Jinja templates like
@@ -350,11 +364,13 @@ class OpenAICompatibleRunner(BaseRunner):
 
             role = "user" if msg.role == "user" else "assistant"
 
-            # Use summary if in SUMMARIZE mode and summary exists
-            if msg.context_mode == ContextMode.SUMMARIZE and msg.summary:
+            # Summary-substituted turn (COMPRESS/SUMMARIZE with a cached summary).
+            # The decision of *whether* this turn is summarized is made by
+            # select_turns(); here we only serialize it OpenAI-style.
+            if sel.mode == SelectionMode.SUMMARY:
                 openai_messages.append({
                     "role": role,
-                    "content": f"[Summary] {msg.summary}",
+                    "content": render_summary(msg),
                 })
                 continue
 
@@ -378,25 +394,29 @@ class OpenAICompatibleRunner(BaseRunner):
                     elif isinstance(block, ToolResultBlock):
                         # Collect tool results for proper OpenAI format
                         tool_result_blocks.append(block)
+                    elif isinstance(block, MarkdownBlock):
+                        # Markdown is model-facing text like any other; the
+                        # distinction is a UI rendering concern only.
+                        if block.text:
+                            content_parts.append(block.text)
+                    elif isinstance(block, ThinkingBlock):
+                        # Deliberately NOT re-sent: prior chain-of-thought must
+                        # not be replayed to the model as assistant text.
+                        continue
+                    elif isinstance(block, LinkBlock):
+                        content_parts.append(render_link(block))
                     elif isinstance(block, InterruptionBlock):
                         # Mark that the response was interrupted
-                        content_parts.append(f"[Interrupted: {block.reason}]")
+                        content_parts.append(render_interruption(block))
                     elif isinstance(block, ErrorBlock):
                         # Mark that the response was truncated due to error
-                        content_parts.append(f"[Error: {block.reason}]")
+                        content_parts.append(render_error(block))
                     elif isinstance(block, ArchiveBlock):
                         # Format archive reference with summary
-                        summary = block.summary or f"Archived {block.message_count} turns"
-                        archive_info = f"[Archived {block.message_count} turns: {summary}]"
-                        archive_info += f"\n(Use read_archive tool with archive_id={block.archive_id} to retrieve full content)"
-                        content_parts.append(archive_info)
+                        content_parts.append(render_archive(block))
 
                 # Handle assistant messages with tool calls (proper OpenAI format)
                 if role == "assistant" and tool_use_blocks:
-                    # Client-only tools that don't have stored tool results
-                    # These are handled by the UI and don't execute on the backend
-                    CLIENT_ONLY_TOOLS = {"play_midi", "propose_fork", "propose_merge"}
-
                     # Build tool_calls array
                     tool_calls = []
                     client_only_tool_ids = []  # Track which need synthetic results
@@ -811,9 +831,8 @@ class OpenAICompatibleRunner(BaseRunner):
                 }
                 openai_messages.append(assistant_msg)
 
-                # Client-only tools - handled entirely by UI, no backend execution
-                # These tools are intercepted at the app/UI layer from the tool_use event
-                CLIENT_ONLY_TOOLS = {"play_midi", "propose_fork", "propose_merge"}
+                # Client-only tools (CLIENT_ONLY_TOOLS) are handled entirely by the UI and
+                # intercepted at the app/UI layer from the tool_use event.
 
                 # Execute each tool and add results
                 # Check queue after EACH tool for boundary-aware steering
@@ -1265,6 +1284,14 @@ class OpenAICompatibleRunner(BaseRunner):
                     error=f"JSON decode error for tool {tc['name']}: {e}",
                 )
 
+                # Intentional fallback: when the model's streamed tool arguments are
+                # not valid JSON we can neither repair nor guess them, so we keep the
+                # exact bytes it emitted rather than fabricating inputs. `raw` carries
+                # the unparseable arguments verbatim so the UI can show precisely what
+                # was received (it also round-trips into history for the model to see);
+                # the tool then fails with a missing-required-arg error instead of
+                # executing with made-up arguments. `_dump_file` points at the full
+                # interaction dump written above, for offline debugging.
                 arguments = {"raw": raw_args, "_dump_file": str(dump_path) if dump_path else None}
 
             # Normalize arguments to ensure expected types (e.g., strings for Write.content)

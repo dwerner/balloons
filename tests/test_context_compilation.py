@@ -59,8 +59,8 @@ import json
 import pytest
 
 from models import (
-    Message, TextBlock, ToolUseBlock, ToolResultBlock,
-    InterruptionBlock, ErrorBlock, ArchiveBlock, ContextMode,
+    Message, TextBlock, MarkdownBlock, ToolUseBlock, ToolResultBlock,
+    InterruptionBlock, ErrorBlock, ArchiveBlock, LinkBlock, ContextMode,
 )
 
 # Import builders
@@ -324,16 +324,24 @@ class TestContextBuilderFormat:
         assert glob_pos < glob_result_pos < read_pos < read_result_pos
 
     def test_interruption_block_format(self, builder, conversation_with_interruption):
-        """Interruption blocks are formatted with reason."""
+        """Interruption blocks are formatted with reason.
+
+        Canonical wording is owned by core.context.render_interruption and is
+        identical across backends (OpenAI/Claude).
+        """
         result = builder.build_context(conversation_with_interruption, "continue")
 
-        assert "[Response interrupted: user_cancelled]" in result
+        assert "[Interrupted: user_cancelled]" in result
 
     def test_error_block_format(self, builder, conversation_with_error_block):
-        """Error blocks show truncation info."""
+        """Error blocks show truncation info.
+
+        Canonical wording is owned by core.context.render_error and is identical
+        across backends.
+        """
         result = builder.build_context(conversation_with_error_block, "retry")
 
-        assert "[Response truncated: truncated]" in result
+        assert "[Error: truncated]" in result
 
     def test_drop_mode_excludes_messages(self, builder, conversation_with_context_modes):
         """DROP mode messages are not included in output."""
@@ -1261,3 +1269,171 @@ class TestArchiveBlockFormat:
         assert "Implementation details" in result
         assert "archive-1" in result
         assert "archive-2" in result
+
+
+# =============================================================================
+# Shared Context Policy (core.context) - selection + canonical block text
+# =============================================================================
+
+class TestSharedContextPolicy:
+    """Tests for the shared selection policy and canonical block text.
+
+    These lock in behavior that was previously duplicated (and had drifted)
+    between ContextBuilder and the OpenAI runner: turn selection (DROP +
+    summary substitution, including the COMPRESS/SUMMARIZE equivalence) and
+    the canonical model-facing text for marker blocks. Both backends must
+    agree because both now consume the same core.context primitives.
+    """
+
+    @pytest.fixture
+    def builder(self):
+        return ContextBuilder()
+
+    @pytest.fixture
+    def openai_runner(self):
+        return OpenAICompatibleRunner(
+            base_url="http://test",
+            api_key="test",
+            model="test-model",
+        )
+
+    # --- COMPRESS/SUMMARIZE equivalence (bug fix) -------------------------
+
+    def test_compress_mode_uses_summary_context_builder(self, builder):
+        """COMPRESS (the default mode) substitutes the cached summary.
+
+        Regression: summary substitution used to fire only for SUMMARIZE, so a
+        turn left in the modern COMPRESS default ignored its summary and sent
+        full content.
+        """
+        messages = [
+            Message(
+                role="assistant",
+                content="Long detailed answer that goes on and on...",
+                context_mode=ContextMode.COMPRESS,
+                summary="Brief: answered first question",
+            ),
+        ]
+        result = builder.build_context(messages, "new")
+
+        assert "[Summary] Brief: answered first question" in result
+        assert "Long detailed answer" not in result
+
+    def test_compress_mode_uses_summary_openai(self, openai_runner):
+        """COMPRESS mode uses the summary field in OpenAI format too."""
+        messages = [
+            Message(
+                role="assistant",
+                content="Long detailed answer that goes on and on...",
+                context_mode=ContextMode.COMPRESS,
+                summary="Brief: answered first question",
+            ),
+        ]
+        result = openai_runner.build_messages(messages, "new")
+        content = _openai_content_str(result)
+
+        assert "[Summary] Brief: answered first question" in content
+        assert "Long detailed answer" not in content
+
+    def test_compress_without_summary_falls_back(self, builder, openai_runner):
+        """COMPRESS without a cached summary falls back to full content."""
+        messages = [
+            Message(
+                role="user",
+                content="Original content",
+                context_mode=ContextMode.COMPRESS,
+                summary="",
+            ),
+        ]
+        assert "Original content" in builder.build_context(messages, "new")
+        assert "Original content" in _openai_content_str(
+            openai_runner.build_messages(messages, "new")
+        )
+
+    # --- Previously-dropped block types now reach the OpenAI runner -------
+
+    def test_link_block_included_in_openai(self, openai_runner):
+        """LinkBlock is rendered (it used to be silently dropped)."""
+        messages = [
+            Message(
+                role="system",
+                content="",
+                content_blocks=[
+                    LinkBlock(
+                        link_id="l1",
+                        linked_session_id="abcdef123456789",
+                        summary="linked chat",
+                    ),
+                ],
+            ),
+        ]
+        result = openai_runner.build_messages(messages, "next")
+        content = _openai_content_str(result)
+
+        # render_link uses the first 8 chars of the linked session id
+        assert "[Link: abcdef12]" in content
+        assert "linked chat" in content
+
+    def test_markdown_block_included_in_openai(self, openai_runner):
+        """MarkdownBlock is treated as model-facing text (not dropped)."""
+        messages = [
+            Message(
+                role="user",
+                content="",
+                content_blocks=[MarkdownBlock(text="# Heading\nsome **md**")],
+            ),
+        ]
+        result = openai_runner.build_messages(messages, "next")
+        content = _openai_content_str(result)
+
+        assert "# Heading" in content
+        assert "**md**" in content
+
+    # --- Canonical wording is identical across backends -------------------
+
+    def test_archive_uses_read_archive_hint_both(self, builder, openai_runner):
+        """Both backends emit the actionable read_archive hint + archive_id."""
+        messages = [
+            Message(
+                role="assistant",
+                content="",
+                content_blocks=[
+                    ArchiveBlock(
+                        archive_id="arch-777",
+                        file_path="/x.json",
+                        summary="Design chat",
+                        message_count=3,
+                    ),
+                ],
+            ),
+        ]
+        ctx = builder.build_context(messages, "go")
+        oai = _openai_content_str(openai_runner.build_messages(messages, "go"))
+
+        for text in (ctx, oai):
+            assert "read_archive" in text
+            assert "arch-777" in text
+            # The dead JSON path must NOT be advertised to the model.
+            assert "JSON path:" not in text
+
+    def test_interruption_wording_identical_both(
+        self, builder, openai_runner, conversation_with_interruption
+    ):
+        """Interruption marker text is the same in both backends."""
+        ctx = builder.build_context(conversation_with_interruption, "go")
+        oai = _openai_content_str(
+            openai_runner.build_messages(conversation_with_interruption, "go")
+        )
+        assert "[Interrupted: user_cancelled]" in ctx
+        assert "[Interrupted: user_cancelled]" in oai
+
+    def test_error_wording_identical_both(
+        self, builder, openai_runner, conversation_with_error_block
+    ):
+        """Error marker text is the same in both backends."""
+        ctx = builder.build_context(conversation_with_error_block, "go")
+        oai = _openai_content_str(
+            openai_runner.build_messages(conversation_with_error_block, "go")
+        )
+        assert "[Error: truncated]" in ctx
+        assert "[Error: truncated]" in oai

@@ -46,40 +46,17 @@ class TestValidateBackendConfig:
         # Model is optional - local servers like llama.cpp ignore it
         assert result is None
 
-    def test_gemini_type_requires_api_key(self):
-        """Gemini type requires api_key."""
+    def test_gemini_type_is_no_longer_supported(self):
+        """Gemini backend type has been removed and is now rejected."""
         backend = MagicMock(
             type="gemini",
             name="test-gemini",
-            api_key=None,
+            api_key="test-key",
             model="gemini-2.5-flash",
         )
         result = validate_backend_config(backend)
         assert result is not None
-        assert "requires api_key" in result
-        assert "test-gemini" in result
-
-    def test_gemini_type_valid_with_api_key(self):
-        """Gemini type is valid when api_key present."""
-        backend = MagicMock(
-            type="gemini",
-            name="test-gemini",
-            api_key="test-key",
-            model="gemini-2.5-flash",
-        )
-        result = validate_backend_config(backend)
-        assert result is None
-
-    def test_gemini_type_model_optional(self):
-        """Gemini type doesn't require model (defaults to gemini-2.5-flash)."""
-        backend = MagicMock(
-            type="gemini",
-            name="test-gemini",
-            api_key="test-key",
-            model=None,
-        )
-        result = validate_backend_config(backend)
-        assert result is None
+        assert "Unknown backend type" in result
 
     def test_unknown_type_returns_error(self):
         """Unknown backend type returns error."""
@@ -89,7 +66,7 @@ class TestValidateBackendConfig:
         assert "Unknown backend type" in result
         assert "unknown" in result
         assert "claude" in result  # Lists valid types
-        assert "gemini" in result  # Lists valid types
+        assert "openai" in result  # Lists valid types
 
     def test_empty_string_base_url_fails(self):
         """Empty string base_url is treated as missing."""

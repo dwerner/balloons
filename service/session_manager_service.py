@@ -7543,7 +7543,6 @@ Summary:""")
         from config import get_config
         from core.prompt_builder import build_system_prompt
         from core.openai_runner import OpenAICompatibleRunner
-        from core.gemini_runner import GeminiRunner
         from claude_runner import ClaudeRunner
 
         session = self._manager.get_session(session_id)
@@ -7587,17 +7586,6 @@ Summary:""")
             )
             runner.set_session(preview_session)
             packaged = runner.build_messages(messages, "")
-            packaged_messages_json = json.dumps(packaged, indent=2, default=str)
-        elif backend_type == "gemini":
-            packaged_format = "gemini_contents"
-            runner = GeminiRunner(
-                api_key=backend_config.api_key or "debug-preview",
-                model=backend_config.model,
-                user_prompt=backend_config.user_prompt,
-                context_window=backend_config.context_window or 200000,
-            )
-            runner.set_session(preview_session)
-            packaged = runner.build_contents(messages, "")
             packaged_messages_json = json.dumps(packaged, indent=2, default=str)
 
         tree = self._build_runner_context_tree(session.turns, messages, system_prompt)
