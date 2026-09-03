@@ -504,9 +504,9 @@ class OpenAICompatibleRunner(BaseRunner):
                 "content": new_prompt,
             })
 
-        # Legacy post-processing kept for the default OpenAI-compatible runner.
-        # Strict Jinja backends should use StrictOpenAICompatibleRunner, which
-        # applies an isolated conservative packaging model.
+        # Legacy post-processing kept for the default OpenAI-compatible runner:
+        # reorder tool messages and normalize history into strict user/assistant
+        # alternation for backends with validating chat templates.
         openai_messages = self._reorder_tool_messages(openai_messages)
         openai_messages = self._normalize_strict_alternation(openai_messages)
 

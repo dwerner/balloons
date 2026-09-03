@@ -6,13 +6,6 @@ from unittest.mock import MagicMock
 from core.runner_factory import validate_backend_config, create_runner
 
 
-class DummyAsyncOpenAI:
-    def __init__(self, *args, **kwargs):
-        self.args = args
-        self.kwargs = kwargs
-
-
-
 class TestValidateBackendConfig:
     """Tests for validate_backend_config function."""
 
@@ -51,17 +44,6 @@ class TestValidateBackendConfig:
         )
         result = validate_backend_config(backend)
         # Model is optional - local servers like llama.cpp ignore it
-        assert result is None
-
-    def test_openai_strict_type_valid_with_all_fields(self):
-        """OpenAI strict type is valid when all fields present."""
-        backend = MagicMock(
-            type="openai_strict",
-            name="test-openai-strict",
-            base_url="http://localhost:8080",
-            model="llama-3",
-        )
-        result = validate_backend_config(backend)
         assert result is None
 
     def test_gemini_type_requires_api_key(self):
@@ -108,7 +90,6 @@ class TestValidateBackendConfig:
         assert "unknown" in result
         assert "claude" in result  # Lists valid types
         assert "gemini" in result  # Lists valid types
-        assert "openai_strict" in result  # Lists valid types
 
     def test_empty_string_base_url_fails(self):
         """Empty string base_url is treated as missing."""
@@ -172,23 +153,6 @@ class TestValidateBackendConfig:
 
 
 class TestCreateRunner:
-    def test_openai_strict_type_uses_experimental_runner(self, monkeypatch):
-        monkeypatch.setattr("core.strict_openai_runner.AsyncOpenAI", DummyAsyncOpenAI)
-        backend = MagicMock(
-            type="openai_strict",
-            name="strict-openai",
-            base_url="http://localhost:8000/v1",
-            api_key="test-key",
-            model="mistral",
-            context_window=12345,
-        )
-        backend.load_system_prompt.return_value = None
-
-        runner = create_runner(backend)
-
-        from core.strict_openai_runner import StrictOpenAICompatibleRunner
-        assert type(runner) is StrictOpenAICompatibleRunner
-
     def test_ai_sdk_type_creates_aisdk_runner(self, monkeypatch):
         """AI SDK type creates AISDKRunner instance."""
         # Mock the AISDKRunner to avoid actual imports
