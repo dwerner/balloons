@@ -5,7 +5,7 @@ import re
 from pathlib import Path
 
 from config import BackendConfig
-from .base_runner import BaseRunner
+from .base_runner import BaseRunner, PLACEHOLDER_API_KEY
 
 # Prompt directories - user dir takes precedence over source dir
 _USER_PROMPTS_DIR = Path.home() / ".balloons" / "prompts"
@@ -127,6 +127,11 @@ def create_runner(backend: BackendConfig) -> BaseRunner:
 
         # Model defaults to "default" for local servers like llama.cpp that ignore this field
         model = backend.model or "default"
+
+        # The OpenAI SDK rejects an empty/missing key with "Missing credentials",
+        # but local servers (llama.cpp, vLLM) don't check the Authorization header.
+        # Send a placeholder so keyless backends still construct a client.
+        api_key = api_key or PLACEHOLDER_API_KEY
 
         if backend_type == "openai_strict":
             from .strict_openai_runner import StrictOpenAICompatibleRunner

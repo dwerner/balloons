@@ -103,6 +103,8 @@ export const TextCard = React.memo(function TextCard({ turn }: TextCardProps) {
     ? { icon: '📢', label: 'Steering', className: 'user steering' }
     : respondsToSteering
     ? { icon: '💬', label: 'Response', className: 'assistant responds-to-steering' }
+    : isThinkingBlock
+    ? { icon: '🧠', label: 'Reasoning', className: 'assistant thinking' }
     : {
         user: { icon: '👤', label: 'User', className: 'user' },
         assistant: { icon: '🤖', label: 'Assistant', className: 'assistant' },

@@ -59,7 +59,7 @@ from core.stream_state import (
 )
 # TreeState removed in Phase 8 - events go directly to SessionDataService
 from core.queue_state import QueueState, QueueEvent, QueueSnapshot
-from models import TextBlock, MarkdownBlock, ImageBlock, ToolUseBlock, ToolResultBlock, InterruptionBlock, ErrorBlock, Turn, SessionSummaryBlock, Message
+from models import TextBlock, MarkdownBlock, ThinkingBlock, ImageBlock, ToolUseBlock, ToolResultBlock, InterruptionBlock, ErrorBlock, Turn, SessionSummaryBlock, Message
 from service.session_events import (
     SessionEventObserver,
     TurnCreatedEvent,
@@ -557,6 +557,8 @@ class _StreamingContext:
     assistant_turn_id: str = ""  # Stable UUID for the assistant turn
     # Content accumulation
     content: str = ""  # Accumulated text content for current assistant turn
+    # Block kind of the current assistant turn ("text" or "thinking")
+    content_block_type: str = "text"
     # Tool tracking
     tool_count: int = 0
     tool_turn_indices: dict = field(default_factory=dict)  # (tool_use_id, turn_type) -> turn_idx
@@ -1885,6 +1887,10 @@ class SessionManagerService:
             text = data if isinstance(data, str) else str(data)
             ctx.content += text
 
+            # Track the block kind of the current assistant turn so turn-finish
+            # emits the right block type (ThinkingBlock vs TextBlock).
+            ctx.content_block_type = "thinking" if event_type == "thinking" else "text"
+
             # Update stream state with approximate token count
             approx_tokens = len(ctx.content) // 4
             self._stream_state.update_stream(ctx.exchange_id, tokens_streamed=approx_tokens)
@@ -1936,10 +1942,11 @@ class SessionManagerService:
                     )
 
         elif event_type == "text_flush":
-            # Text segment complete before tool use
+            # Text segment complete before tool use (or at a thinking/text boundary)
             text = data.get("text", "") if isinstance(data, dict) else ""
             turn_idx = data.get("turn_index", ctx.assistant_turn_idx) if isinstance(data, dict) else ctx.assistant_turn_idx
             turn_id = data.get("turn_id", ctx.assistant_turn_id) if isinstance(data, dict) else ctx.assistant_turn_id
+            block_kind = data.get("block_kind", "text") if isinstance(data, dict) else "text"
             import sys
             print(f"[TURN_ORDER] text_flush: order={turn_idx}, id={turn_id[:8] if turn_id else 'none'}, len={len(text)}", file=sys.stderr, flush=True)
 
@@ -1984,7 +1991,7 @@ class SessionManagerService:
                     role="assistant",
                     content=text,
                     tokens=text_tokens,
-                    content_block=TextBlock(type="text", text=text),
+                    content_block=ThinkingBlock(type="thinking", text=text) if block_kind == "thinking" else TextBlock(type="text", text=text),
                     context_tokens=context_tokens,
                     output_tokens_total=output_tokens_total,
                 ),
@@ -2005,9 +2012,11 @@ class SessionManagerService:
             # Text turn started - update context and emit turn_started
             turn_idx = data.get("turn_index", ctx.assistant_turn_idx) if isinstance(data, dict) else ctx.assistant_turn_idx
             turn_id = data.get("turn_id", "") if isinstance(data, dict) else ""
+            turn_type = data.get("turn_type", "text") if isinstance(data, dict) else "text"
             ctx.assistant_turn_idx = turn_idx  # Update for subsequent content deltas
             ctx.assistant_turn_id = turn_id  # Update turn_id for subsequent events
             ctx.content = ""  # Reset accumulated content for new turn
+            ctx.content_block_type = turn_type if turn_type in {"text", "thinking"} else "text"
             import sys
             print(f"[TURN_ORDER] text_turn_started: order={turn_idx}, id={turn_id[:8] if turn_id else 'none'}", file=sys.stderr, flush=True)
 
@@ -2020,7 +2029,7 @@ class SessionManagerService:
                     turn_index=turn_idx,
                     role="assistant",
                     exchange_id=ctx.exchange_id,
-                    content_block_type="text",
+                    content_block_type=ctx.content_block_type,
                 ),
             )
 
@@ -2646,7 +2655,7 @@ class SessionManagerService:
                         role="assistant",
                         content=ctx.content,
                         tokens=content_tokens,
-                        content_block=TextBlock(type="text", text=ctx.content),
+                        content_block=ThinkingBlock(type="thinking", text=ctx.content) if ctx.content_block_type == "thinking" else TextBlock(type="text", text=ctx.content),
                         context_tokens=input_tokens,
                         output_tokens_total=output_tokens,
                     ),

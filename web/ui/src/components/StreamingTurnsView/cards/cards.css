@@ -217,6 +217,40 @@
   font-style: italic;
 }
 
+/* Reasoning/thinking content block - visually distinct from answer text */
+.turn-card.thinking {
+  border-left: 3px solid rgba(167, 139, 250, 0.45);
+  background: rgba(167, 139, 250, 0.04);
+}
+
+.turn-card.thinking .turn-icon {
+  filter: grayscale(0.2);
+}
+
+.turn-card.thinking .turn-label {
+  color: rgba(167, 139, 250, 0.85);
+}
+
+.turn-card-body .thinking-block {
+  color: var(--text-secondary, #9a9a9a);
+  font-size: 0.94em;
+  line-height: 1.55;
+  white-space: normal;
+}
+
+.turn-card-body .thinking-block p {
+  margin: 0 0 8px 0;
+}
+
+.turn-card-body .thinking-block p:last-child {
+  margin-bottom: 0;
+}
+
+.turn-card-body .thinking-block code {
+  font-size: 0.9em;
+  opacity: 0.9;
+}
+
 /* Thinking indicator with animated spinner */
 .thinking-indicator {
   display: flex;

@@ -11,11 +11,11 @@ from typing import AsyncIterator, TYPE_CHECKING
 from openai import AsyncOpenAI
 
 from models import (
-    Message, TextDelta, ResultEvent, InitEvent,
+    Message, TextDelta, ThinkingDelta, ResultEvent, InitEvent,
     TextBlock, ImageBlock, ToolUseBlock, ToolResultBlock, InterruptionBlock, ErrorBlock, ArchiveBlock, ContextMode,
     ToolUseStartEvent, ToolInputDeltaEvent, ToolUseEvent, ToolResultDeltaEvent, ToolResultEvent, SteeringInjectedEvent,
 )
-from .base_runner import BaseRunner, RunnerEvent, SteeringCapability
+from .base_runner import BaseRunner, RunnerEvent, SteeringCapability, PLACEHOLDER_API_KEY
 from .debug_log import debug_log, dump_failed_json, perf_marker, Category
 from .exceptions import InputRequiredError
 from .tools import get_tools_for_request
@@ -234,7 +234,7 @@ class OpenAICompatibleRunner(BaseRunner):
     def __init__(
         self,
         base_url: str,
-        api_key: str,
+        api_key: str | None,
         model: str,
         user_prompt: str | None = None,
         context_window: int = 128000,
@@ -251,7 +251,9 @@ class OpenAICompatibleRunner(BaseRunner):
         """
         # llama.cpp and other local servers can spend a long time generating
         # before the first streamed token arrives, so disable SDK timeouts here.
-        self.client = AsyncOpenAI(base_url=base_url, api_key=api_key, timeout=None)
+        # A keyless backend gets a placeholder: the SDK rejects empty credentials,
+        # while local servers ignore the Authorization header entirely.
+        self.client = AsyncOpenAI(base_url=base_url, api_key=api_key or PLACEHOLDER_API_KEY, timeout=None)
         self.model = model
         self._user_prompt = user_prompt  # Base prompt from backend config
         self.context_window = context_window
@@ -1151,10 +1153,16 @@ class OpenAICompatibleRunner(BaseRunner):
                 content_buffer += refusal_text
                 events.append(TextDelta(text=refusal_text))
                 await asyncio.sleep(0)
-            elif getattr(delta, "reasoning_content", None):
-                reasoning_text = delta.reasoning_content
+            elif getattr(delta, "reasoning_content", None) or getattr(delta, "reasoning", None):
+                # Reasoning/thinking channel: emitted as ThinkingDelta so the UI can
+                # render it as a separate thinking block instead of mixing it into
+                # the answer text. Field name varies by server: llama.cpp/Ollama use
+                # reasoning_content, OpenRouter-style servers use reasoning.
+                reasoning_text = (
+                    getattr(delta, "reasoning_content", None) or getattr(delta, "reasoning", None)
+                )
                 content_buffer += reasoning_text
-                events.append(TextDelta(text=reasoning_text))
+                events.append(ThinkingDelta(text=reasoning_text))
                 await asyncio.sleep(0)
 
             # Handle tool calls

@@ -195,6 +195,10 @@ class SessionRunner:
         self._raw_events: list[dict] = []
         self._content_blocks: list = []  # Legacy flat list
         self._text_buffer: str = ""
+        # Kind of content kind currently accumulating in _text_buffer: "text" or "thinking".
+        # Reasoning and answer text must land in separate turns so the UI can render
+        # reasoning as its own card; a kind change triggers a mid-stream flush.
+        self._buffer_kind: str | None = None
         self._current_tool_use_id: str = ""
         self._tool_index: int = 0  # Track tool order within turn
         self._turn_index: int = 0  # Track current turn in session
@@ -824,12 +828,15 @@ class SessionRunner:
                     pass
             await self._async_save_session()
 
-    def _flush_text_as_turn(self, emit_event: bool = False, save_now: bool = False) -> list[StreamEvent]:
-        """Flush accumulated text buffer as a text turn if non-empty.
+    def _flush_text_as_turn(self, emit_event: bool = False, save_now: bool = False, block_kind: str = "text") -> list[StreamEvent]:
+        """Flush accumulated text buffer as a turn if non-empty.
 
         Args:
             emit_event: If True, return events for UI notification
             save_now: If True, save session to disk after adding the turn
+            block_kind: "text" or "thinking" — determines the persisted block type.
+                Reasoning deltas flush as their own turn with a ThinkingBlock so the
+                UI can render reasoning separately from the answer.
 
         Returns:
             List of StreamEvents if emit_event=True and there was text to flush, else empty list
@@ -837,7 +844,10 @@ class SessionRunner:
         events = []
         if self._text_buffer.strip():
             flushed_text = self._text_buffer
-            text_block = TextBlock(text=flushed_text)
+            if block_kind == "thinking":
+                text_block = ThinkingBlock(text=flushed_text)
+            else:
+                text_block = TextBlock(text=flushed_text)
             self._content_blocks.append(text_block)  # Legacy
 
             # Get turn index for this text turn
@@ -870,6 +880,7 @@ class SessionRunner:
             self._turns.append(turn)
             self._save_turn_to_session(turn, save_now=save_now)
             self._text_buffer = ""
+            self._buffer_kind = None  # Buffer emptied; next segment starts a fresh kind
             self._text_turn_started_at = None  # Reset for next text turn
 
             # Clear steering pending flag after first assistant turn uses it
@@ -892,13 +903,14 @@ class SessionRunner:
                         "turn_id": turn.id,
                         "exchange_id": self._exchange_id,
                         "role": "assistant",
-                        "turn_type": "text",
+                        "turn_type": block_kind,
                         "text_preview": flushed_text[:50] + "..." if len(flushed_text) > 50 else flushed_text,
                     }))
                 events.append(self._make_event("text_flush", {
                     "text": flushed_text,
                     "turn_index": text_turn_idx,
                     "turn_id": turn.id,
+                    "block_kind": block_kind,
                 }))
         return events
 
@@ -927,10 +939,19 @@ class SessionRunner:
             elif isinstance(event, TextDelta):
                 events = []
 
+                # Reasoning→answer boundary: if the buffer holds thinking content,
+                # flush it as its own turn before accumulating answer text.
+                flushed_boundary = False
+                if self._buffer_kind == "thinking" and self._text_buffer.strip():
+                    events.extend(self._flush_text_as_turn(emit_event=True, block_kind="thinking"))
+                    self._buffer_kind = None
+                    flushed_boundary = True
+
                 # Check if this is the start of a NEW text segment after tool execution
-                # If tool_index has increased since our last text, we need to signal a new turn
+                # (or immediately after flushing a reasoning turn). Either way the answer
+                # needs its own turn id so its deltas don't land in the previous card.
                 is_post_tool_text = (
-                    self._tool_index > self._last_tool_index_for_text
+                    (self._tool_index > self._last_tool_index_for_text or flushed_boundary)
                     and self._text_buffer == ""  # Starting fresh text buffer
                 )
 
@@ -971,15 +992,45 @@ class SessionRunner:
                 if not self._text_turn_started_at and self._text_buffer == "":
                     self._text_turn_started_at = datetime.now().isoformat()
 
+                self._buffer_kind = "text"
                 self._text_buffer += event.text
                 events.append(self._make_event("text", event.text))
                 return events
 
             elif isinstance(event, ThinkingDelta):
-                # Thinking/reasoning delta should stream immediately to the UI.
+                events = []
+
+                # Answer→reasoning boundary: flush accumulated answer text as its own
+                # turn before accumulating reasoning.
+                flushed_boundary = False
+                if self._buffer_kind == "text" and self._text_buffer.strip():
+                    events.extend(self._flush_text_as_turn(emit_event=True, block_kind="text"))
+                    flushed_boundary = True
+
+                # Reasoning needs its own turn id when it begins a fresh segment (after a
+                # tool call, or right after flushing answer text); otherwise its deltas
+                # accumulate into the previous turn's card. When reasoning is the first
+                # segment of the exchange it reuses the pre-generated initial turn id.
+                if (
+                    (self._tool_index > self._last_tool_index_for_text or flushed_boundary)
+                    and self._text_buffer == ""
+                ):
+                    thinking_turn_id = str(uuid.uuid4())
+                    self._pending_text_turn_id = thinking_turn_id
+                    events.append(self._make_event("text_turn_started", {
+                        "turn_index": len(self.session.turns),
+                        "turn_id": thinking_turn_id,
+                        "exchange_id": self._exchange_id,
+                        "role": "assistant",
+                        "turn_type": "thinking",
+                        "text_preview": "",
+                    }))
+
+                # Track when this segment started (first delta with an empty buffer)
                 if not self._text_turn_started_at and self._text_buffer == "":
                     self._text_turn_started_at = datetime.now().isoformat()
 
+                self._buffer_kind = "thinking"
                 thinking_text = event.text
                 self._text_buffer += thinking_text
                 events.append(self._make_event("thinking", thinking_text))
@@ -989,7 +1040,7 @@ class SessionRunner:
                 # Tool use started - input is still streaming
                 # Flush text buffer before tool (emit events so UI can show it)
                 events = []
-                flush_events = self._flush_text_as_turn(emit_event=True)
+                flush_events = self._flush_text_as_turn(emit_event=True, block_kind=self._buffer_kind or "text")
                 events.extend(flush_events)
 
                 self._current_tool_use_id = event.tool_use_id
@@ -1231,7 +1282,9 @@ class SessionRunner:
         # This is critical: without emit_event=True, the final text turn would have
         # the wrong order (the initial turn's index) causing tool_use/tool_result
         # turns to appear AFTER the final assistant text (Bug #10).
-        final_turn_events = self._flush_text_as_turn(emit_event=True, save_now=True)
+        final_turn_events = self._flush_text_as_turn(
+            emit_event=True, save_now=True, block_kind=self._buffer_kind or "text"
+        )
 
         # Check for stream errors (truncated response, JSON decode errors)
         error_block = self._check_stream_errors()

@@ -6,7 +6,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 from core.runner import SessionRunner, RunnerStatus, StreamEvent, StreamResult
 from session import Session
-from models import Message, TextDelta, InitEvent, ResultEvent, ToolUseStartEvent, ToolUseEvent, ToolResultEvent, RawEvent
+from models import Message, TextDelta, ThinkingDelta, InitEvent, ResultEvent, ToolUseStartEvent, ToolUseEvent, ToolResultEvent, RawEvent
 
 
 @pytest.fixture
@@ -150,6 +150,63 @@ class TestStreamProcessing:
         # No text to flush, so only tool_use_start
         assert len(results) == 1
         assert results[0].event_type == "tool_use_start"
+
+
+class TestReasoningTurns:
+    """Reasoning deltas must stream as their own turn, separate from answer text."""
+
+    def test_thinking_delta_does_not_raise(self, runner):
+        """Regression: the ThinkingDelta branch used an uninitialized `events` list,
+        which raised NameError on the first reasoning delta once runners emitted
+        ThinkingDelta instead of folding reasoning into TextDelta."""
+        results = runner._process_event(ThinkingDelta(text="hmm"))
+        assert any(r.event_type == "thinking" for r in results)
+
+    def test_reasoning_then_answer_splits_into_two_turns(self, runner):
+        """Reasoning is flushed as its own turn before answer text accumulates."""
+        runner._process_event(ThinkingDelta(text="let me think"))
+        runner._process_event(ThinkingDelta(text=" about it"))
+        results = runner._process_event(TextDelta(text="the answer"))
+
+        # Reasoning persisted as its own ThinkingBlock turn
+        assert len(runner._content_blocks) == 1
+        assert runner._content_blocks[0].type == "thinking"
+        assert runner._content_blocks[0].text == "let me think about it"
+
+        # Reasoning turn finalized with its block kind...
+        assert any(
+            r.event_type == "text_flush" and r.data.get("block_kind") == "thinking"
+            for r in results
+        )
+        # ...and the answer announced as a separate turn.
+        assert any(
+            r.event_type == "text_turn_started" and r.data.get("turn_type") == "text"
+            for r in results
+        )
+
+    def test_answer_then_reasoning_splits_into_two_turns(self, runner):
+        """Answer text is flushed as its own turn before reasoning accumulates."""
+        runner._process_event(TextDelta(text="answer first"))
+        results = runner._process_event(ThinkingDelta(text="now reasoning"))
+
+        assert len(runner._content_blocks) == 1
+        assert runner._content_blocks[0].type == "text"
+        assert any(
+            r.event_type == "text_flush" and r.data.get("block_kind") == "text"
+            for r in results
+        )
+        assert any(
+            r.event_type == "text_turn_started" and r.data.get("turn_type") == "thinking"
+            for r in results
+        )
+
+    async def test_trailing_reasoning_persists_as_thinking_block(self, runner):
+        """Final flush honors the buffer kind instead of hardcoding TextBlock."""
+        runner._process_event(ThinkingDelta(text="reasoning at end"))
+        await runner._finalize_stream()
+
+        assert len(runner._content_blocks) == 1
+        assert runner._content_blocks[0].type == "thinking"
 
 
 class TestFinalization:

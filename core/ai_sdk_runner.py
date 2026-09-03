@@ -87,7 +87,7 @@ from ai_sdk_openai_compatible_py import (
 )
 
 from models import (
-    Message, TextDelta, ResultEvent, InitEvent, ContextTokensEvent,
+    Message, TextDelta, ThinkingDelta, ResultEvent, InitEvent, ContextTokensEvent,
     TextBlock, ImageBlock, ToolUseBlock, ToolResultBlock, InterruptionBlock, ErrorBlock, ArchiveBlock, ContextMode,
     ToolUseStartEvent, ToolInputDeltaEvent, ToolUseEvent, ToolResultDeltaEvent, ToolResultEvent, SteeringInjectedEvent,
     RawEvent,
@@ -98,7 +98,7 @@ from .tool_executor import execute_tool
 from .tool_result import ToolExecutionResult
 from .debug_log import debug_log, Category
 from .context import ContextBuilder, OutputFormat
-from .tokenizer import count_tokens
+from tokenizer import count_tokens
 
 if TYPE_CHECKING:
     from session import Session
@@ -507,7 +507,8 @@ class AISDKRunner(BaseRunner):
                     elif isinstance(chunk, StreamPart.ReasoningDelta):
                         delta = chunk.delta
                         result["reasoning"] += delta
-                        events.append(TextDelta(delta))
+                        # ThinkingDelta so the UI renders a separate thinking block.
+                        events.append(ThinkingDelta(delta))
                         events.append(RawEvent(data={"type": "reasoning_delta", "delta": delta}))
                     elif isinstance(chunk, StreamPart.ToolCallStart):
                         tool_id = chunk.id

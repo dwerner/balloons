@@ -7,6 +7,7 @@
 import type {
   TextBlock,
   MarkdownBlock,
+  ThinkingBlock,
   ImageBlock,
   ToolUseBlock,
   ToolResultBlock,
@@ -27,6 +28,7 @@ import type {
 export type {
   TextBlock,
   MarkdownBlock,
+  ThinkingBlock,
   ImageBlock,
   ToolUseBlock,
   ToolResultBlock,
@@ -49,6 +51,7 @@ export type {
 export type ContentBlock =
   | TextBlock
   | MarkdownBlock
+  | ThinkingBlock
   | ImageBlock
   | ToolUseBlock
   | ToolResultBlock

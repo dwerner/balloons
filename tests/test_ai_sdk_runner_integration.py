@@ -7,11 +7,16 @@ from core.ai_sdk_runner import AISDKRunner
 from models import ToolUseEvent, ToolResultEvent, ErrorBlock, ToolUseStartEvent
 
 
-# Skip all tests if explicitly disabled via environment variable
-pytestmark = pytest.mark.skipif(
-    os.environ.get('AI_SDK_TEST_SKIP') == '1',
-    reason="AI_SDK_TEST_SKIP=1 - skipping integration tests"
-)
+# These tests drive a real OpenAI-compatible endpoint (AI_SDK_TEST_BASE_URL, default
+# 192.168.0.196:8000), so they must not run in the default `-m "not integration"` pass.
+# The justfile runs them explicitly via `test-ai-sdk-runner-integration`.
+pytestmark = [
+    pytest.mark.integration,
+    pytest.mark.skipif(
+        os.environ.get('AI_SDK_TEST_SKIP') == '1',
+        reason="AI_SDK_TEST_SKIP=1 - skipping integration tests",
+    ),
+]
 
 
 @pytest.fixture

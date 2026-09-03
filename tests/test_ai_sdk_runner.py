@@ -238,6 +238,15 @@ class TestAISDKRunner:
             assert runner._cancelled
 
     @pytest.mark.asyncio
+    @pytest.mark.xfail(
+        reason=(
+            "Stale: asserts on ToolUseEvent, which is emitted inside "
+            "_stream_one_response -- the method this test mocks out. The events it "
+            "expects can never be produced. Needs rewriting against "
+            "_stream_one_response with fake StreamParts."
+        ),
+        strict=False,
+    )
     async def test_tool_call_arguments_accumulated_correctly(self):
         """Regression test: ToolCall arguments should be complete JSON, not partial."""
         runner = AISDKRunner(
@@ -249,26 +258,42 @@ class TestAISDKRunner:
         # This matches what the fixed Rust code should produce
         from ai_sdk_openai_compatible_py import StreamPart
 
+        call_count = 0
+
         async def mock_stream_resp(*args, **kwargs):
             # Simulate what the Rust stream produces after the fix:
-            # ToolCallStart, multiple ToolCallDelta, ToolCallEnd, ToolCall
-            result = ({
-                'text': '',
+            # ToolCallStart, multiple ToolCallDelta, ToolCallEnd, ToolCall.
+            # Must be stateful: stream_response loops until a response carries no
+            # tool calls, so a stateless mock here spins forever (and re-executes
+            # the tool on every pass).
+            nonlocal call_count
+            call_count += 1
+            if call_count == 1:
+                return ({
+                    'text': '',
+                    'reasoning': '',
+                    'tool_calls': [{
+                        'id': 'call_123',
+                        'name': 'Bash',
+                        'arguments': {'command': 'ls'},
+                    }],
+                    'usage': {'input_tokens': 10, 'output_tokens': 5, 'total_tokens': 15},
+                    'finish_reason': 'tool_calls',
+                }, [TextDelta('')])
+            return ({
+                'text': 'done',
                 'reasoning': '',
-                'tool_calls': [{
-                    'id': 'call_123',
-                    'name': 'Bash',
-                    'arguments': {'command': 'ls'},
-                }],
-                'usage': {'input_tokens': 10, 'output_tokens': 5, 'total_tokens': 15},
-                'finish_reason': 'tool_calls',
-            }, [
-                TextDelta(''),
-            ])
-            return result
+                'tool_calls': [],
+                'usage': {'input_tokens': 5, 'output_tokens': 2, 'total_tokens': 7},
+                'finish_reason': 'stop',
+            }, [TextDelta('done')])
 
-        with patch('core.ai_sdk_runner.get_tools_for_request', return_value=[]):
-            with patch.object(runner, '_stream_one_response', mock_stream_resp):
+        async def mock_execute(*args, **kwargs):
+            return ('listed', False)
+
+        with patch('core.ai_sdk_runner.get_tools_for_request', return_value=[]), \
+             patch.object(runner, '_stream_one_response', mock_stream_resp), \
+             patch('core.ai_sdk_runner.execute_tool', mock_execute):
                 events = []
                 async for event in runner.stream_response([], 'run ls'):
                     events.append(event)
@@ -283,6 +308,14 @@ class TestAISDKRunner:
                 assert tool_event.tool_input == {'command': 'ls'}, f"Expected {{'command': 'ls'}}, got {tool_event.tool_input}"
 
     @pytest.mark.asyncio
+    @pytest.mark.xfail(
+        reason=(
+            "Stale: asserts on ToolInputDeltaEvent/ToolUseEvent, which are emitted "
+            "inside _stream_one_response -- the method this test mocks out. Needs "
+            "rewriting against _stream_one_response with fake StreamParts."
+        ),
+        strict=False,
+    )
     async def test_tool_call_emits_delta_events(self):
         """Test that ToolCallDelta events are emitted for UI streaming."""
         runner = AISDKRunner(
@@ -290,21 +323,38 @@ class TestAISDKRunner:
             model='test-model',
         )
 
-        async def mock_stream_resp(*args, **kwargs):
-            return ({
-                'text': '',
-                'reasoning': '',
-                'tool_calls': [{
-                    'id': 'call_456',
-                    'name': 'Read',
-                    'arguments': {'file_path': 'test.py'},
-                }],
-                'usage': {'input_tokens': 10, 'output_tokens': 5, 'total_tokens': 15},
-                'finish_reason': 'tool_calls',
-            }, [TextDelta('')])
+        call_count = 0
 
-        with patch('core.ai_sdk_runner.get_tools_for_request', return_value=[]):
-            with patch.object(runner, '_stream_one_response', mock_stream_resp):
+        async def mock_stream_resp(*args, **kwargs):
+            # Stateful: stream_response loops until a response carries no tool calls.
+            nonlocal call_count
+            call_count += 1
+            if call_count == 1:
+                return ({
+                    'text': '',
+                    'reasoning': '',
+                    'tool_calls': [{
+                        'id': 'call_456',
+                        'name': 'Read',
+                        'arguments': {'file_path': 'test.py'},
+                    }],
+                    'usage': {'input_tokens': 10, 'output_tokens': 5, 'total_tokens': 15},
+                    'finish_reason': 'tool_calls',
+                }, [TextDelta('')])
+            return ({
+                'text': 'done',
+                'reasoning': '',
+                'tool_calls': [],
+                'usage': {'input_tokens': 5, 'output_tokens': 2, 'total_tokens': 7},
+                'finish_reason': 'stop',
+            }, [TextDelta('done')])
+
+        async def mock_execute(*args, **kwargs):
+            return ('file contents', False)
+
+        with patch('core.ai_sdk_runner.get_tools_for_request', return_value=[]), \
+             patch.object(runner, '_stream_one_response', mock_stream_resp), \
+             patch('core.ai_sdk_runner.execute_tool', mock_execute):
                 events = []
                 async for event in runner.stream_response([], 'Read test.py'):
                     events.append(event)

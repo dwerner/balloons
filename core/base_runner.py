@@ -13,6 +13,11 @@ from models import (
 
 ToolEventCallback = Callable[[ToolResultDeltaEvent], Awaitable[None]]
 
+# Placeholder credential for OpenAI-compatible servers that don't authenticate
+# (llama.cpp, vLLM, LM Studio). The OpenAI SDK refuses to construct a client
+# without a key, so keyless backends satisfy it with this dummy value.
+PLACEHOLDER_API_KEY = "not-needed"
+
 
 # Type alias for all possible events yielded by runners
 RunnerEvent = Union[

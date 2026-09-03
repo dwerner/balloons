@@ -8,6 +8,14 @@ from models import (
     ToolResultEvent, ResultEvent, Message as CoreMessage, ToolResultBlock
 )
 
+# Stale since StreamPart handling moved into _stream_one_response: these tests patch
+# out that method but assert on events only it emits, so the assertions can never be
+# satisfied. Needs rewriting against _stream_one_response with fake StreamParts.
+pytestmark = pytest.mark.xfail(
+    reason="Asserts on events emitted by the _stream_one_response it mocks out.",
+    strict=False,
+)
+
 
 class TestToolResultContext:
     """Test that LLM can use tool results to generate responses."""

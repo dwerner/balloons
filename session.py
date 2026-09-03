@@ -10,7 +10,7 @@ from typing import Optional, AsyncIterator
 
 import aiofiles
 
-from models import Message, TextBlock, MarkdownBlock, ImageBlock, ToolUseBlock, ToolResultBlock, InterruptionBlock, ErrorBlock, LinkBlock, ForkBlock, MergeBlock, MergedToBlock, ArchiveBlock, ArchiveSummary, SlideBlock, ReviewBlock, ContentBlock, ContextMode, QueuedMessage, MessageQueue, Turn, ForkProposalBlock, MergeProposalBlock, ContextAssignmentData, ForkBindingData, ExchangeInfo, WatchStartBlock, WatchStopBlock, WatchSummaryBlock
+from models import Message, TextBlock, MarkdownBlock, ThinkingBlock, ImageBlock, ToolUseBlock, ToolResultBlock, InterruptionBlock, ErrorBlock, LinkBlock, ForkBlock, MergeBlock, MergedToBlock, ArchiveBlock, ArchiveSummary, SlideBlock, ReviewBlock, ContentBlock, ContextMode, QueuedMessage, MessageQueue, Turn, ForkProposalBlock, MergeProposalBlock, ContextAssignmentData, ForkBindingData, ExchangeInfo, WatchStartBlock, WatchStopBlock, WatchSummaryBlock
 
 # Rust storage availability (checked lazily to avoid circular imports)
 _rust_storage_checked = False
@@ -1190,6 +1190,8 @@ class Session:
             return {"type": "text", "text": block.text}
         elif isinstance(block, MarkdownBlock):
             return {"type": "markdown", "text": block.text}
+        elif isinstance(block, ThinkingBlock):
+            return {"type": "thinking", "text": block.text}
         elif isinstance(block, ImageBlock):
             # Store only file_path reference - actual image data stays on disk
             return {
@@ -1451,6 +1453,8 @@ class Session:
             return TextBlock(text=data.get("text", ""))
         elif block_type == "markdown":
             return MarkdownBlock(text=data.get("text", ""))
+        elif block_type == "thinking":
+            return ThinkingBlock(text=data.get("text", ""))
         elif block_type == "image":
             # Image data stays on disk - we only store the file_path reference
             return ImageBlock(

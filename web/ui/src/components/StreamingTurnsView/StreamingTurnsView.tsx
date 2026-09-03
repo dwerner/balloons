@@ -419,7 +419,11 @@ export function StreamingTurnsView({ sessionId, client, onSelectSession, onScrol
         exchangeId,
         items: currentGroup,
         colorIndex: exchangeId ? (exchangeColorMap.get(exchangeId) ?? 0) : 0,
-        key: `exchange-${exchangeId || firstItemKey}`,
+        // Suffix with the group index: turns belonging to one exchange can end up
+        // non-contiguous in the sorted list (e.g. a reasoning turn split from its
+        // answer turn), which would give two groups an identical key. React drops
+        // children on duplicate keys, so the key must stay unique.
+        key: `exchange-${exchangeId || firstItemKey}-${groups.length}`,
       });
       currentGroup = [];
       currentExchangeId = undefined;
