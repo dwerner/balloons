@@ -45,16 +45,6 @@ export interface ToolResultBlock {
   isError?: boolean;
 }
 
-export interface RepairedToolBlock {
-  type?: string;
-  toolUseId?: string;
-  toolName?: string;
-  originalInput?: string;
-  repairedInput?: string;
-  repairDescription?: string;
-  repairSuccessful?: boolean;
-}
-
 export interface InterruptionBlock {
   type?: string;
   reason?: string;
