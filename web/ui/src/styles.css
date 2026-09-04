@@ -84,6 +84,18 @@
   --accent-merge: #7ab8b8;  /* Sage teal */
   --accent-link: #7ab8b8;
   --accent-blue: #7a9bb8;
+  /* Turn-type accents (Bug #6): defined per-theme so these turn types
+     observe the theme instead of always using cards.css fallbacks. */
+  --accent-summary: #ffd43b;
+  --accent-watch: #74c0fc;
+  --accent-watch-summary: #a9e34b;
+  --accent-steering: #fbbf24;
+  --accent-debug: #ff79c6;
+  --accent-focus: #60a5fa;
+  --accent-primary: #4dabf7;
+  --accent-primary-hover: #339af0;
+  --error-color: #e06c75;
+  --bg-active: rgba(255, 255, 255, 0.15);
   --error: #c07070;
 
   /* Status colors */
@@ -170,6 +182,18 @@
   --accent-merge: #20a0b8;
   --accent-link: #20a898;
   --accent-blue: #4080d0;
+  /* Turn-type accents (Bug #6): light-appropriate values so these turn
+     types observe the light theme instead of dark fallbacks. */
+  --accent-summary: #d4a020;
+  --accent-watch: #4080d0;
+  --accent-watch-summary: #22a55a;
+  --accent-steering: #d4a020;
+  --accent-debug: #c050a0;
+  --accent-focus: #4080d0;
+  --accent-primary: #4080d0;
+  --accent-primary-hover: #3070c0;
+  --error-color: #dc2626;
+  --bg-active: rgba(0, 0, 0, 0.08);
   --error: #e05555;
 
   /* Status colors */
@@ -251,6 +275,17 @@
   --accent-merge: #708888;  /* Slate teal */
   --accent-link: #708888;
   --accent-blue: #708898;
+  /* Turn-type accents (Bug #6): muted to match the flat palette. */
+  --accent-summary: #c9b458;
+  --accent-watch: #708898;
+  --accent-watch-summary: #8fae7a;
+  --accent-steering: #c9a858;
+  --accent-debug: #c088a8;
+  --accent-focus: #708898;
+  --accent-primary: #7a9bb8;
+  --accent-primary-hover: #6a8ba8;
+  --error-color: #a87070;
+  --bg-active: rgba(255, 255, 255, 0.12);
   --error: #a87070;
 
   /* Status colors */
