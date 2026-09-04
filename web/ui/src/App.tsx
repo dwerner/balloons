@@ -75,120 +75,6 @@ interface ImageAttachment {
 }
 
 
-// ============================================================================
-// Fast Input Component - uses uncontrolled input to avoid re-renders
-// ============================================================================
-
-interface MessageInputHandle {
-  getValue: () => string;
-  setValue: (value: string) => void;
-  focus: () => void;
-}
-
-interface MessageInputProps {
-  placeholder: string;
-  disabled: boolean;
-  onSubmit: (message: string) => void;
-  onPaste: (e: React.ClipboardEvent) => void;
-  /** Partial voice transcription text to show in italic */
-  partialText?: string;
-  /** Called when user manually types/edits the input */
-  onChange?: (value: string) => void;
-}
-
-/**
- * MessageInput - An uncontrolled textarea that doesn't trigger re-renders on typing.
- *
- * This fixes input lag by:
- * 1. Using defaultValue instead of value (uncontrolled)
- * 2. Storing the current value in a ref, not state
- * 3. Only reading the value when needed (submit, clear)
- * 4. Using memo to prevent re-renders from parent state changes
- */
-/**
- * MessageInput - An uncontrolled textarea that doesn't trigger re-renders on typing.
- *
- * Performance optimizations:
- * 1. Uses defaultValue instead of value (uncontrolled) - React doesn't manage the DOM value
- * 2. Stores current value in a ref, not state - no re-renders on typing
- * 3. Stores callbacks in refs - allows stable internal handlers even when parent callbacks change
- * 4. Custom memo comparison - only re-renders for placeholder/disabled changes, not callback changes
- */
-const MessageInputInner = forwardRef<MessageInputHandle, MessageInputProps>(
-  function MessageInput({ placeholder, disabled, onSubmit, onPaste, partialText, onChange }, ref) {
-    const textareaRef = useRef<HTMLTextAreaElement>(null);
-    const valueRef = useRef('');
-    // Store callbacks in refs to avoid re-creating handlers when they change
-    const onSubmitRef = useRef(onSubmit);
-    const onPasteRef = useRef(onPaste);
-    const onChangeRef = useRef(onChange);
-    onSubmitRef.current = onSubmit;
-    onPasteRef.current = onPaste;
-    onChangeRef.current = onChange;
-
-    // Expose imperative handle for parent to get/set value
-    useImperativeHandle(ref, () => ({
-      getValue: () => valueRef.current,
-      setValue: (value: string) => {
-        valueRef.current = value;
-        if (textareaRef.current) {
-          textareaRef.current.value = value;
-        }
-      },
-      focus: () => textareaRef.current?.focus(),
-    }), []);
-
-    const handleChange = useCallback((e: React.ChangeEvent<HTMLTextAreaElement>) => {
-      // Just update the ref, no state change = no re-render
-      valueRef.current = e.target.value;
-      // Notify parent of changes (for voice input sync)
-      onChangeRef.current?.(e.target.value);
-    }, []);
-
-    const handleKeyDown = useCallback((e: React.KeyboardEvent<HTMLTextAreaElement>) => {
-      if (e.key === 'Enter' && !e.shiftKey) {
-        e.preventDefault();
-        const value = valueRef.current.trim();
-        if (value) {
-          onSubmitRef.current(value);
-        }
-      }
-    }, []); // No dependencies - uses ref
-
-    const handlePaste = useCallback((e: React.ClipboardEvent<HTMLTextAreaElement>) => {
-      onPasteRef.current(e);
-    }, []); // No dependencies - uses ref
-
-    return (
-      <div className="input-field-wrapper">
-        <textarea
-          ref={textareaRef}
-          className="input-field"
-          placeholder={placeholder}
-          defaultValue=""
-          onChange={handleChange}
-          onKeyDown={handleKeyDown}
-          onPaste={handlePaste}
-          disabled={disabled}
-          rows={1}
-        />
-        {partialText && (
-          <div className="input-field-partial">
-            <span className="partial-text">{partialText}</span>
-          </div>
-        )}
-      </div>
-    );
-  }
-);
-
-// Custom memo comparison - re-render for placeholder/disabled/partialText changes
-// Callbacks are stored in refs inside the component, so we can safely ignore them
-const MessageInput = memo(MessageInputInner, (prevProps, nextProps) => {
-  return prevProps.placeholder === nextProps.placeholder &&
-         prevProps.disabled === nextProps.disabled &&
-         prevProps.partialText === nextProps.partialText;
-});
 
 /**
  * Main App component - wraps AppContent with DialogProvider
@@ -1523,8 +1409,8 @@ function AppContent() {
     // Note: Don't focus the input here - on mobile it would trigger the keyboard
   }, []);
 
-  // Send a message - called from MessageInput component or form submit
-  // Note: messageContent is passed directly when called from MessageInput's onSubmit
+  // Send a message - called from MessageInputWithIcons or form submit
+  // Note: messageContent is passed directly when called from the input's onSubmit
   const handleSubmit = useCallback(async (eOrMessage: React.FormEvent | string) => {
     // Handle both form event and direct message string
     const isFormEvent = typeof eOrMessage !== 'string';
