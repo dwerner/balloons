@@ -10,10 +10,15 @@
 - mermaid/plantuml rendering?
 - queued/steering messages seem to disappear - should linger in the UI as it gets applied
 - stt feature was better before we last modified it 
+- buggy minimap rendering
+	- minimap doesnt show some areas of a chat
+	- memory use of the chat seems high
+- long-slow pause when forking, TONS of ws messages
 
 ## bigger features
 - scheduling/watching
 	- cron-job stuff
+- projects
 
 ## ui stuff
 - static panes limit flexibility
@@ -35,3 +40,11 @@ Subscriptions (from the subscription-layers refactor; phases 1/2/4/5 shipped):
 
 Session review / model evaluation (superseded drafts deleted; the shipped review modal covers the core):
 - A "judge" role / rubric-based longitudinal scoring was specced but never built; revisit only if the review modal proves insufficient for model comparison.
+
+Images / attachments (policy established during docs review):
+- Turn history stores only `ImageBlock(file_path, media_type)` references; blobs live in `~/.balloons/uploads/` and are retained indefinitely. The age-based `cleanup_old_images` was dead surface (zero callers) and has been removed — deleting files would break display/re-view of old sessions.
+- Policy: images embed as base64 in model context **only for the turn they're attached to** (claude path already does this via `ContextBuilder._build_structured`); later turns get a text reference.
+- [done] openai backend now honors the policy: history image turns render as text refs (never re-encoded); the current submission's images are embedded as `data:` URLs by `OpenAICompatibleRunner._attach_pending_images` (called once per run, so they survive the tool loop and are cleared at run end). `submit_message_with_images` excludes the current submission's turns from history so the just-attached image isn't double-rendered. Shared `load_image_as_base64` helper in `core/context.py` is the single encoder for both backends.
+- Parity gap (not done): `ai_sdk_runner` declares `_pending_images` but has no `set_pending_images` method, so the `hasattr(runner, 'set_pending_images')` gate in `submit_message_with_images` silently drops attachments for that backend too. Same fix shape as openai when someone cares about the experimental path.
+- Follow-up: **caption-at-attach** — one cheap vision call at upload time to persist a text description alongside the ImageBlock, giving durable semantic memory (~50 tokens) after the analysis turn instead of re-sending pixels. Effectively COMPRESS for images.
+- Follow-up: tool-result images (e.g. browser screenshots) on OpenAI-compatible servers are untested territory.

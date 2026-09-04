@@ -6,8 +6,6 @@ import signal
 import uuid
 from typing import AsyncIterator, TYPE_CHECKING
 
-import base64
-
 from models import (
     Message, TextDelta, ResultEvent, InitEvent, RawEvent, ContextTokensEvent,
     ToolUseStartEvent, ToolUseEvent, ToolResultDeltaEvent, ToolResultEvent, SteeringInjectedEvent,
@@ -349,56 +347,6 @@ class ClaudeRunner(BaseRunner):
             }
         }
         await self._send_message(continuation_msg)
-
-    def _load_image_as_base64(self, file_path: str) -> tuple[str, str] | None:
-        """Load an image file and return base64-encoded data with media type.
-
-        Args:
-            file_path: Path to the image file
-
-        Returns:
-            Tuple of (base64_data, media_type) or None if file not found/invalid
-        """
-        from pathlib import Path
-
-        path = Path(file_path)
-        if not path.exists():
-            debug_log.warning(
-                f"Image file not found: {file_path}",
-                category=Category.RUNNER,
-                run_id=self._run_id,
-            )
-            return None
-
-        # Determine media type from extension
-        ext_to_mime = {
-            ".png": "image/png",
-            ".jpg": "image/jpeg",
-            ".jpeg": "image/jpeg",
-            ".gif": "image/gif",
-            ".webp": "image/webp",
-        }
-        ext = path.suffix.lower()
-        media_type = ext_to_mime.get(ext)
-        if not media_type:
-            debug_log.warning(
-                f"Unsupported image format: {ext}",
-                category=Category.RUNNER,
-                run_id=self._run_id,
-            )
-            return None
-
-        try:
-            data = path.read_bytes()
-            b64_data = base64.standard_b64encode(data).decode("ascii")
-            return (b64_data, media_type)
-        except Exception as e:
-            debug_log.error(
-                f"Failed to read image: {e}",
-                category=Category.RUNNER,
-                run_id=self._run_id,
-            )
-            return None
 
     def _get_system_prompt(self) -> str | None:
         """Build the system prompt for this turn.

@@ -2772,21 +2772,10 @@ export class SessionDataServiceClient implements SessionDataService {
 /**
  * WebSocket-exposed service for image management.
  * 
- * Handles image upload, storage, retrieval, and cleanup.
+ * Handles image upload, storage, and retrieval.
  * Images are stored on disk with unique filenames based on content hash.
  */
 export interface ImageService {
-  /**
-   * Clean up images older than the retention period.
-   * 
-   * Args:
-   * max_age_hours: Max age in hours (defaults to service retention setting)
-   * 
-   * Returns:
-   * Number of images deleted
-   */
-  cleanupOldImages(maxAgeHours?: number | null): Promise<number>;
-
   /**
    * Delete an uploaded image.
    * 
@@ -2849,11 +2838,6 @@ export interface ImageService {
 
 export interface ImageEvents {
   /**
-   * Emitted when cleanup completes.
-   */
-  onCleanupCompleted(callback: (data: Types.ImageEventData) => void): Unsubscribe;
-
-  /**
    * Emitted when an image is deleted.
    */
   onImageDeleted(callback: (data: Types.ImageEventData) => void): Unsubscribe;
@@ -2911,10 +2895,6 @@ export class ImageServiceClient implements ImageService {
     };
   }
 
-  async cleanupOldImages(maxAgeHours?: number | null): Promise<number> {
-    return this.call('cleanupOldImages', { maxAgeHours: maxAgeHours });
-  }
-
   async deleteImage(filePath: string): Promise<boolean> {
     return this.call('deleteImage', { filePath: filePath });
   }
@@ -2933,10 +2913,6 @@ export class ImageServiceClient implements ImageService {
 
   async uploadImage(dataBase64: string, mediaType: string, sessionId?: string | null, originalFilename?: string | null): Promise<Types.ImageUploadResult> {
     return this.call('uploadImage', { dataBase64: dataBase64, mediaType: mediaType, sessionId: sessionId, originalFilename: originalFilename });
-  }
-
-  onCleanupCompleted(callback: (data: Types.ImageEventData) => void): Unsubscribe {
-    return this.subscribe('cleanupCompleted', callback);
   }
 
   onImageDeleted(callback: (data: Types.ImageEventData) => void): Unsubscribe {

@@ -6725,9 +6725,13 @@ Summary:""")
             },
         )
 
-        # Start background streaming with images
-        # Note: The runner's underlying ClaudeRunner needs to handle images
-        # We pass images via an extended interface
+        # Start background streaming with images.
+        # The current submission's turns (text + image blocks, added above at
+        # turn_index) are EXCLUDED from the history passed to the runner: the
+        # text is re-supplied as `prompt` and the images as pending attachments,
+        # so passing them in history too would duplicate the prompt and render
+        # the just-attached image as a history text reference instead of
+        # embedding it. Older image turns stay in history as text refs.
         if hasattr(runner._runner, 'set_pending_images'):
             runner._runner.set_pending_images(image_blocks)
 
@@ -6743,7 +6747,7 @@ Summary:""")
 
         runner.start_background(
             prompt=content,
-            messages=session.turns,
+            messages=session.turns[:turn_index],
             allowed_tools=allowed_tools,
         )
 

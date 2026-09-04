@@ -324,3 +324,56 @@ class TestTokenCounting:
         # Both should produce reasonable counts
         assert token_count > 0
         assert result.token_count > 0
+
+
+class TestLoadImageAsBase64:
+    """Shared image loader used by every backend to embed current-turn images."""
+
+    def _tiny_png(self, path):
+        import struct, zlib
+        sig = b"\x89PNG\r\n\x1a\n"
+        def chunk(tag, data):
+            body = tag + data
+            return struct.pack(">I", len(data)) + body + struct.pack(">I", zlib.crc32(body) & 0xFFFFFFFF)
+        path.write_bytes(
+            sig
+            + chunk(b"IHDR", struct.pack(">IIBBBBB", 1, 1, 8, 2, 0, 0, 0))
+            + chunk(b"IDAT", zlib.compress(b"\x00\xff\x00\x00"))
+            + chunk(b"IEND", b"")
+        )
+
+    def test_roundtrip(self, tmp_path):
+        import base64
+        from core.context import load_image_as_base64
+        p = tmp_path / "x.png"
+        self._tiny_png(p)
+        b64, media_type = load_image_as_base64(str(p))
+        assert media_type == "image/png"
+        assert base64.b64decode(b64) == p.read_bytes()
+
+    def test_rejects_unsupported_extension(self, tmp_path):
+        from core.context import load_image_as_base64
+        p = tmp_path / "x.txt"
+        p.write_text("not an image")
+        assert load_image_as_base64(str(p)) is None
+
+    def test_rejects_missing_file(self, tmp_path):
+        from core.context import load_image_as_base64
+        assert load_image_as_base64(str(tmp_path / "missing.png")) is None
+
+    def test_structured_embeds_current_image_as_base64(self, tmp_path):
+        # ContextBuilder (claude path) embeds current-turn images as base64 and
+        # leaves history images as text refs -- the policy the openai path ports.
+        from core.context import ContextBuilder, OutputFormat
+        from models import ImageBlock
+        p = tmp_path / "cur.png"
+        self._tiny_png(p)
+        b = ContextBuilder()
+        b.set_prompt("describe")
+        b.add_images([ImageBlock(file_path=str(p), media_type="image/png")])
+        result = b.build(OutputFormat.STRUCTURED)
+        blocks = result.content
+        img_blocks = [x for x in blocks if x.get("type") == "image"]
+        assert len(img_blocks) == 1
+        assert img_blocks[0]["source"]["type"] == "base64"
+        assert img_blocks[0]["source"]["media_type"] == "image/png"

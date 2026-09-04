@@ -23,6 +23,51 @@ from tokenizer import count_tokens
 
 
 # =============================================================================
+# Shared image loading
+#
+# Turn history stores only ImageBlock(file_path, media_type) references; the
+# bytes live on disk under the uploads dir. Whenever a runner needs to embed an
+# image for the CURRENT submission it loads the bytes here. This is the single
+# place that knows how to read+base64 an image file, so every backend encodes
+# identically. The wire format (Claude ``source`` block vs OpenAI ``data:`` URL)
+# is each runner's concern -- this returns the raw (base64, media_type) pair.
+# =============================================================================
+
+# Extensions we accept as images. Anything else is refused so a stray file
+# path in history can never be base64-encoded into a request.
+_IMAGE_EXT_TO_MIME = {
+    ".png": "image/png",
+    ".jpg": "image/jpeg",
+    ".jpeg": "image/jpeg",
+    ".gif": "image/gif",
+    ".webp": "image/webp",
+}
+
+
+def load_image_as_base64(file_path: str) -> tuple[str, str] | None:
+    """Read an image file and return ``(base64_data, media_type)``.
+
+    ``media_type`` is derived from the file extension. Returns ``None`` when the
+    file is missing, has an unsupported extension, or cannot be read -- callers
+    skip those images rather than failing the whole request.
+    """
+    import base64
+    from pathlib import Path
+
+    path = Path(file_path)
+    if not path.exists():
+        return None
+    media_type = _IMAGE_EXT_TO_MIME.get(path.suffix.lower())
+    if not media_type:
+        return None
+    try:
+        data = path.read_bytes()
+    except Exception:
+        return None
+    return (base64.standard_b64encode(data).decode("ascii"), media_type)
+
+
+# =============================================================================
 # Shared, wire-format-agnostic context policy
 #
 # These are the single source of truth for two decisions that every backend
@@ -393,9 +438,6 @@ class ContextBuilder:
         self, history_parts: list[str], history_images: list[ImageBlock]
     ) -> ContextResult:
         """Build structured content blocks for API calls."""
-        import base64
-        from pathlib import Path
-
         content: list[dict] = []
 
         # Add history as a single text block if we have any
@@ -406,23 +448,21 @@ class ContextBuilder:
         # History images are now included as text references in history_parts
         # (handled by _format_block returning "[Image file: path]")
 
-        # Add images for the current message as base64 (for initial upload)
+        # Add images for the current message as base64 (for initial upload).
+        # Only self._images (the current submission) is ever encoded here;
+        # older image turns are text references, never re-encoded.
         for img_block in self._images:
-            try:
-                path = Path(img_block.file_path)
-                if path.exists():
-                    data = path.read_bytes()
-                    data_base64 = base64.b64encode(data).decode("ascii")
-                    content.append({
-                        "type": "image",
-                        "source": {
-                            "type": "base64",
-                            "media_type": img_block.media_type,
-                            "data": data_base64,
-                        }
-                    })
-            except Exception:
-                pass  # Skip images that can't be read
+            encoded = load_image_as_base64(img_block.file_path)
+            if encoded:
+                data_base64, ext_media_type = encoded
+                content.append({
+                    "type": "image",
+                    "source": {
+                        "type": "base64",
+                        "media_type": img_block.media_type or ext_media_type,
+                        "data": data_base64,
+                    }
+                })
 
         # Add the new prompt
         if self._prompt:

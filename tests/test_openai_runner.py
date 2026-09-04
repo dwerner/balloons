@@ -16,6 +16,10 @@ Note: literal angle-bracket tool-call tags are assembled from LT/GT strings
 throughout, to keep this source free of raw markup-looking tag sequences.
 """
 
+import base64
+import struct
+import zlib
+
 import pytest
 
 from models import (
@@ -24,6 +28,7 @@ from models import (
     ThinkingBlock,
     ToolUseBlock,
     ToolResultBlock,
+    ImageBlock,
 )
 from core.openai_runner import OpenAICompatibleRunner, _parse_embedded_tool_calls
 
@@ -254,3 +259,121 @@ class TestParseEmbeddedToolCalls:
         assert len(parsed) == 1
         assert parsed[0]["name"] == "Read"
         assert parsed[0]["arguments"] == {"file_path": "/etc/hosts"}
+
+# ---------------------------------------------------------------------------
+# 3. Image attachments: current submission embedded, history reduced to refs
+#
+# Policy (shared with the claude path via ContextBuilder): image bytes are
+# embedded as base64 ONLY for the turn they are attached to; every older image
+# turn is a text reference so its bytes are never re-sent. The openai backend
+# previously emitted dead ``file://`` URLs (no HTTP server can fetch them) and
+# had no pending-image plumbing at all, so attachments never reached the model.
+# ---------------------------------------------------------------------------
+
+
+def _tiny_png_bytes() -> bytes:
+    """A minimal valid 1x1 PNG, so load_image_as_base64 accepts the file."""
+    sig = b"\x89PNG\r\n\x1a\n"
+
+    def chunk(tag: bytes, data: bytes) -> bytes:
+        body = tag + data
+        return (
+            struct.pack(">I", len(data))
+            + body
+            + struct.pack(">I", zlib.crc32(body) & 0xFFFFFFFF)
+        )
+
+    ihdr = chunk(b"IHDR", struct.pack(">IIBBBBB", 1, 1, 8, 2, 0, 0, 0))
+    idat = chunk(b"IDAT", zlib.compress(b"\x00\xff\x00\x00"))
+    iend = chunk(b"IEND", b"")
+    return sig + ihdr + idat + iend
+
+
+@pytest.fixture
+def png_path(tmp_path):
+    p = tmp_path / "shot.png"
+    p.write_bytes(_tiny_png_bytes())
+    return str(p)
+
+
+def image_urls(messages):
+    """Collect every image_url data URL across all messages' content arrays."""
+    urls = []
+    for m in messages:
+        content = m.get("content")
+        if isinstance(content, list):
+            for part in content:
+                if isinstance(part, dict) and part.get("type") == "image_url":
+                    urls.append(part["image_url"]["url"])
+    return urls
+
+
+class TestImageAttachments:
+    def test_set_pending_images_method_exists(self, runner):
+        # session_manager_service gates on hasattr(runner, 'set_pending_images');
+        # without this method image attachments are silently dropped before the
+        # runner ever sees them.
+        assert hasattr(runner, "set_pending_images")
+
+    def test_current_submission_embedded_as_data_url(self, runner, png_path):
+        runner.set_pending_images([ImageBlock(file_path=png_path, media_type="image/png")])
+        history = [Message(role="assistant", content="ok", content_blocks=[TextBlock(text="ok")])]
+        out = non_system(runner.build_messages(history, "what is this?"))
+
+        urls = image_urls(out)
+        assert len(urls) == 1
+        assert urls[0].startswith("data:image/png;base64,")
+        # the dead file:// form must be gone entirely
+        assert "file://" not in str(out)
+
+    def test_multiple_images_all_embedded(self, runner, png_path):
+        img = ImageBlock(file_path=png_path, media_type="image/png")
+        runner.set_pending_images([img, img])
+        history = [Message(role="assistant", content="ok", content_blocks=[TextBlock(text="ok")])]
+        out = non_system(runner.build_messages(history, "two pics"))
+        assert len(image_urls(out)) == 2
+
+    def test_build_does_not_clear_pending(self, runner, png_path):
+        # build_messages embeds but must NOT clear _pending_images: the tool
+        # loop reuses the same message list across HTTP calls, and clearing
+        # happens at run end (stream_response finally), not per build.
+        img = ImageBlock(file_path=png_path, media_type="image/png")
+        runner.set_pending_images([img])
+        out = non_system(runner.build_messages([], "look"))
+        assert runner._pending_images == [img]
+        assert any(u.startswith("data:image/png;base64,") for u in image_urls(out))
+
+    def test_history_image_is_text_ref_not_base64(self, runner, png_path):
+        # No pending images: an image turn in history must NOT be re-encoded.
+        # This is the regression guard against quadratic token blowup.
+        history = [
+            Message(role="user", content="look", content_blocks=[TextBlock(text="look")]),
+            Message(role="user", content="", content_blocks=[ImageBlock(file_path=png_path, media_type="image/png")]),
+            Message(role="assistant", content="a picture", content_blocks=[TextBlock(text="a picture")]),
+        ]
+        out = non_system(runner.build_messages(history, "and now?"))
+        assert "base64" not in str(out)
+        assert "file://" not in str(out)
+        assert "Image file:" in str(out)
+
+    def test_image_and_tool_result_in_one_turn_keeps_both(self, runner, png_path, monkeypatch):
+        # Bug #3: the old if/elif chain dropped images when a SINGLE turn also
+        # carried a tool result (the image branch was a later elif, so the
+        # tool-result branch won and the image was never emitted). The fix
+        # emits tool results first, then text/images, within one turn.
+        #
+        # The block loop is isolated from _reorder_tool_messages /
+        # _normalize_strict_alternation here because those passes have their own
+        # orthogonal, already-documented bug (they drop a trailing user message
+        # after a tool phase -- see the xfail test above). This test asserts
+        # only what per-turn serialization does, which is the bug #3 surface.
+        monkeypatch.setattr(runner, "_reorder_tool_messages", lambda m: m)
+        monkeypatch.setattr(runner, "_normalize_strict_alternation", lambda m: m)
+        turn = Message(role="user", content="", content_blocks=[
+            ToolResultBlock(tool_use_id="t1", content="data"),
+            ImageBlock(file_path=png_path, media_type="image/png"),
+        ])
+        out = non_system(runner.build_messages([turn], "summarize"))
+        assert any(m.get("role") == "tool" for m in out)
+        assert "Image file:" in str(out)
+        assert "file://" not in str(out)

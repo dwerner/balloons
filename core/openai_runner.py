@@ -18,7 +18,7 @@ from models import (
 )
 from .base_runner import BaseRunner, RunnerEvent, SteeringCapability, PLACEHOLDER_API_KEY, StreamOutcome
 from .context import (
-    select_turns, SelectionMode,
+    select_turns, SelectionMode, load_image_as_base64,
     render_summary, render_interruption, render_error, render_archive, render_link,
 )
 from .debug_log import debug_log, dump_failed_json, perf_marker, Category
@@ -274,6 +274,10 @@ class OpenAICompatibleRunner(BaseRunner):
         self._run_id = ""
         self._session: "Session | None" = None
         self._collected_chunks: list[dict] = []  # Raw chunks for dump on error
+        # Images attached to the current submission. Embedded as base64 data
+        # URLs for the duration of one run (surviving the tool loop), then
+        # cleared at run end so later turns reduce them to text references.
+        self._pending_images: list[ImageBlock] = []
 
     @property
     def steering_capability(self) -> SteeringCapability:
@@ -287,6 +291,26 @@ class OpenAICompatibleRunner(BaseRunner):
             session: The session to use for link navigation tools
         """
         self._session = session
+
+    def set_pending_images(self, images: list[ImageBlock]) -> None:
+        """Set images to embed with the next submission.
+
+        These are the images attached to the message currently being submitted.
+        build_messages embeds them as base64 data URLs (matching the claude
+        path's current-turn-only policy); every older image turn is reduced to
+        a text reference. Cleared at the end of the run so the next submission
+        no longer re-sends these bytes.
+
+        Args:
+            images: ImageBlock objects for the current submission
+        """
+        self._pending_images = list(images)
+        if images:
+            debug_log.info(
+                f"Set {len(images)} pending images for next message",
+                category=Category.RUNNER,
+                run_id=self._run_id,
+            )
 
     def _get_system_prompt(self) -> str | None:
         """Build the system prompt for this turn.
@@ -455,48 +479,37 @@ class OpenAICompatibleRunner(BaseRunner):
                             "content": f"[{tool_name}] Handled by UI",
                         })
 
-                # Handle tool results from user messages (legacy format)
-                elif role == "user" and tool_result_blocks:
-                    # Each tool result becomes a separate message
-                    for block in tool_result_blocks:
+                else:
+                    # Tool results first: each becomes its own role="tool"
+                    # message. Handled before text/images so a turn carrying
+                    # BOTH a tool result and an image emits both (the old
+                    # if/elif chain dropped the image in that case).
+                    if role == "user" and tool_result_blocks:
+                        for block in tool_result_blocks:
+                            openai_messages.append({
+                                "role": "tool",
+                                "tool_call_id": block.tool_use_id,
+                                "content": block.content or "",
+                            })
+
+                    # Then any text and/or images carried by this turn.
+                    #
+                    # Image policy (shared with the claude path via
+                    # ContextBuilder._format_block): an image turn in HISTORY is
+                    # reduced to a text reference; its bytes are NEVER
+                    # re-encoded here. Images attached to the CURRENT submission
+                    # are not part of this history (submit_message_with_images
+                    # excludes the current turns) and are embedded as base64
+                    # data URLs by _attach_pending_images after the loop.
+                    # Keeping base64 out of the history loop is precisely what
+                    # stops old image bytes being re-sent on every turn.
+                    if content_parts or image_blocks:
+                        for img in image_blocks:
+                            content_parts.append(f"Image file: {img.file_path}")
                         openai_messages.append({
-                            "role": "tool",
-                            "tool_call_id": block.tool_use_id,
-                            "content": block.content or "",
-                        })
-                    # Also include any text content from user
-                    if content_parts:
-                        openai_messages.append({
-                            "role": "user",
+                            "role": role,
                             "content": "\n\n".join(content_parts),
                         })
-
-                # Handle images
-                elif image_blocks:
-                    content_array = []
-                    if content_parts:
-                        content_array.append({
-                            "type": "text",
-                            "text": "\n\n".join(content_parts),
-                        })
-                    for img in image_blocks:
-                        content_array.append({
-                            "type": "image_url",
-                            "image_url": {
-                                "url": f"file://{img.file_path}",
-                            }
-                        })
-                    openai_messages.append({
-                        "role": role,
-                        "content": content_array,
-                    })
-
-                # Regular text content
-                elif content_parts:
-                    openai_messages.append({
-                        "role": role,
-                        "content": "\n\n".join(content_parts),
-                    })
             else:
                 # Fallback to plain content
                 openai_messages.append({
@@ -530,7 +543,66 @@ class OpenAICompatibleRunner(BaseRunner):
         openai_messages = self._reorder_tool_messages(openai_messages)
         openai_messages = self._normalize_strict_alternation(openai_messages)
 
+        # Embed the current submission's images as base64 data URLs on the
+        # trailing user message. Done last so normalization never has to reason
+        # about multimodal array content, and so this is the single place the
+        # openai path emits image bytes (once per run, surviving the tool loop).
+        self._attach_pending_images(openai_messages)
+
         return openai_messages
+
+    def _attach_pending_images(self, messages: list[dict]) -> None:
+        """Embed the current submission's images as base64 data URLs.
+
+        Appends an ``image_url`` part for each pending image to the trailing
+        user message (the current submission), converting its content to the
+        array form OpenAI multimodal requests require. This is the ONLY place
+        the openai path emits base64 image bytes, and build_messages runs once
+        per run, so the bytes ride along through the tool loop but are never
+        re-encoded from history. _pending_images is cleared at run end by
+        stream_response, so the next submission reduces these images to the
+        text references the history loop produces.
+
+        Mutates ``messages`` in place.
+        """
+        if not self._pending_images:
+            return
+
+        image_parts: list[dict] = []
+        for img in self._pending_images:
+            encoded = load_image_as_base64(img.file_path)
+            if not encoded:
+                debug_log.warning(
+                    f"Pending image not embedded (missing/unsupported): {img.file_path}",
+                    category=Category.RUNNER,
+                    run_id=self._run_id,
+                )
+                continue
+            b64, ext_media_type = encoded
+            image_parts.append({
+                "type": "image_url",
+                "image_url": {
+                    "url": f"data:{img.media_type or ext_media_type};base64,{b64}",
+                },
+            })
+
+        if not image_parts:
+            return
+
+        # The tail logic in build_messages guarantees a trailing user message
+        # for the current submission; attach to it, preserving any text.
+        last = messages[-1] if messages else None
+        if last is not None and last.get("role") == "user":
+            content = last.get("content")
+            if isinstance(content, str) and content:
+                last["content"] = [{"type": "text", "text": content}, *image_parts]
+            elif isinstance(content, list):
+                last["content"] = [*content, *image_parts]
+            else:
+                # None or empty string: image-only message.
+                last["content"] = image_parts
+        else:
+            messages.append({"role": "user", "content": image_parts})
 
     def _is_placeholder_assistant_error(self, msg: dict) -> bool:
         if msg.get("role") != "assistant" or msg.get("tool_calls") or not isinstance(msg.get("content"), str):
@@ -1031,6 +1103,10 @@ class OpenAICompatibleRunner(BaseRunner):
         finally:
             self._running = False
             self._run_id = ""
+            # Images were embedded (once) into this run's messages by
+            # build_messages; drop the pending reference so the next submission
+            # treats them as history (text refs) instead of re-embedding.
+            self._pending_images = []
 
     async def _stream_one_response(
         self,

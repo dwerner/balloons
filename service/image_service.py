@@ -1,6 +1,6 @@
 """WebSocket-exposed service for image management.
 
-This service handles image upload, storage, and cleanup for the chat interface.
+This service handles image upload, storage, and retrieval for the chat interface.
 Images are stored on disk and referenced by file path.
 
 Storage location defaults to ~/.balloons/uploads/ but can be configured.
@@ -12,7 +12,7 @@ import hashlib
 import os
 import uuid
 from dataclasses import dataclass, field
-from datetime import datetime, timedelta
+from datetime import datetime
 from pathlib import Path
 from typing import Callable
 
@@ -82,23 +82,24 @@ class ImageEventData:
 class ImageService:
     """WebSocket-exposed service for image management.
 
-    Handles image upload, storage, retrieval, and cleanup.
+    Handles image upload, storage, and retrieval.
     Images are stored on disk with unique filenames based on content hash.
     """
 
     def __init__(
         self,
         upload_dir: Path | str | None = None,
-        retention_hours: int = 24 * 7,  # Keep images for 7 days by default
     ):
         """Initialize image service.
 
         Args:
-            upload_dir: Directory for storing uploads. Defaults to ~/.config/balloons/uploads/
-            retention_hours: Hours to keep uploaded images before cleanup (default 7 days)
+            upload_dir: Directory for storing uploads. Defaults to ~/.balloons/uploads/
+
+        Uploaded images are retained indefinitely: turn history stores only
+        file references, so deleting files would break display and re-viewing
+        of old sessions. Deletion happens only via explicit delete_image().
         """
         self._upload_dir = Path(upload_dir) if upload_dir else get_default_upload_dir()
-        self._retention_hours = retention_hours
         self._event_handlers: list[Callable[[str, dict], None]] = []
 
         # Track uploaded images by session
@@ -329,42 +330,6 @@ class ImageService:
         return True
 
     @ws_expose
-    async def cleanup_old_images(self, max_age_hours: int | None = None) -> int:
-        """Clean up images older than the retention period.
-
-        Args:
-            max_age_hours: Max age in hours (defaults to service retention setting)
-
-        Returns:
-            Number of images deleted
-        """
-        hours = max_age_hours if max_age_hours is not None else self._retention_hours
-        cutoff = datetime.now() - timedelta(hours=hours)
-        deleted = 0
-
-        for file_path in self._upload_dir.iterdir():
-            if not file_path.is_file():
-                continue
-
-            stat = file_path.stat()
-            created = datetime.fromtimestamp(stat.st_ctime)
-
-            if created < cutoff:
-                await asyncio.to_thread(file_path.unlink)
-                deleted += 1
-
-                # Remove from session tracking
-                path_str = str(file_path)
-                for paths in self._session_images.values():
-                    if path_str in paths:
-                        paths.remove(path_str)
-
-        if deleted > 0:
-            self._emit_event("cleanupCompleted", {"deleted_count": deleted})
-
-        return deleted
-
-    @ws_expose
     async def get_session_images(self, session_id: str) -> list[str]:
         """Get all image paths uploaded by a session.
 
@@ -395,9 +360,4 @@ class ImageService:
     @ws_event
     async def on_image_deleted(self) -> ImageEventData:
         """Emitted when an image is deleted."""
-        ...
-
-    @ws_event
-    async def on_cleanup_completed(self) -> ImageEventData:
-        """Emitted when cleanup completes."""
         ...
