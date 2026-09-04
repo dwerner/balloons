@@ -13,12 +13,19 @@ Completed and verified (typecheck + build + tests green at each commit):
 - **WS5 — contract fixes**: real `is_pinned` in session events via a server-side pinned cache (Bug #23); generated client now calls qualified RPC names (Bug #11), collision warnings downgraded.
 - **WS6 — theme tokens (targeted)**: defined the turn-type accent tokens (`--accent-summary/watch/steering/debug/focus/primary`, `--error-color`, `--bg-active`) that cards.css referenced but no theme defined, so those turn types now observe the theme (Bug #6). The broader 400-color migration in cards.css remains future work.
 
+### Stacked branch `feat/frontend-remediation-ws4`
+
+- **WS4 prep — safety net**: 10 characterization tests for `useSessionData`'s streaming state machine (pending-assistant turns, thinking vs batched text deltas, late-delta discard, turnFinished finalize, cross-session filtering, clear()). Suite now 74 tests. This is the prerequisite that makes the WS4 store refactor safe to attempt later.
+- **WS8 — Bug #21**: tool results wrapped in `<tool_use_error>…</tool_use_error>` now render as a compact single-line error (new `utils/toolError.ts` + ToolResultCard handling + 12 tests).
+- **WS3 (cont.)**: removed vestigial `toolUses` mirror state + two dead task-event subscriptions; removed dead `CollapsibleContent` component + orphaned CSS; extracted `useInputAreaResize` hook. **App.tsx 3025 → 2885 lines.**
+
 Remaining (larger / need live-app verification — left at a clean checkpoint rather than risk regressions):
 
-- **WS4 — single source of truth**: introduce a store to retire the child→parent→sibling turn round-trip and the parallel `TurnInfo`/`SessionDataTurn` state (Bugs #13, #18, #22, #9). Highest bug leverage; needs the `useSessionData` characterization test written first, and live streaming QA.
-- **WS6 — theme tokens**: migrate hardcoded hex in `cards.css`/`styles.css` to CSS custom properties (Bug #6). Best done with visual QA.
+- **WS4 — single source of truth**: introduce a store to retire the child→parent→sibling turn round-trip and the parallel `TurnInfo`/`SessionDataTurn` state (Bugs #13, #18, #22, #9). Highest bug leverage; the `useSessionData` characterization tests are now in place, but the refactor still needs live streaming QA. Note: App's `turns` state is still dual-written by the two live `onToolUseStarted`/`onToolUse` handlers plus `handleTurnsChange` — that dual-ownership is the crux of WS4.
+- **WS3 (rest)**: the remaining AppContent clusters (review modal, image attachments, voice/composer) are coupled to `handleSubmit` or the shared connection event-subscription effect; extracting them needs care + live verification.
+- **WS6 — theme tokens (broad)**: migrate the remaining hardcoded hex in `cards.css`/`styles.css` to tokens. Best done with visual QA.
 - **WS7 — caching + routing**: IndexedDB cache (Bug #5), lazy tree turn-loading (Bug #4), implement the URL-routing spec.
-- **WS8 — polish**: tool-error single-line rendering (Bug #21), rename-while-streaming (Bug #16 — not gated in code; needs live repro).
+- **WS8 — polish**: rename-while-streaming (Bug #16 — not gated in code; needs live repro), double pulsing dots (Bug #22 — visual, needs live repro).
 
 ## Review Snapshot
 
