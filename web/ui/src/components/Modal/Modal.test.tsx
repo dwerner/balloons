@@ -10,10 +10,15 @@
  */
 
 import React from 'react';
-import { describe, it, expect, beforeEach, mock } from 'bun:test';
-import { render, screen, fireEvent, waitFor } from '@testing-library/react';
+import { describe, it, expect, beforeEach, afterEach, mock } from 'bun:test';
+import { render, screen, fireEvent, waitFor, cleanup } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { Modal, ModalFooter } from './Modal';
+
+// Explicit cleanup: RTL's auto-cleanup only registers in the scope of the
+// first file to import it, so files rendering portals must clean up their own
+// DOM to stay isolated when the suite runs across multiple files.
+afterEach(cleanup);
 
 describe('Modal', () => {
   const defaultProps = {
