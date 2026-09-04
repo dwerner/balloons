@@ -14,6 +14,11 @@ Incremental decomposition of the remaining oversized modules.
 
 See: [PLAN-architecture-remediation.md](PLAN-architecture-remediation.md)
 
+### Frontend Remediation (planned)
+Review-driven plan for `web/ui/`: restore the typecheck gate, decompose `App.tsx`, single source of truth for session data, codegen contract fixes, theme tokens, caching/routing. Maps open bugs to workstreams.
+
+See: [PLAN-frontend-remediation.md](PLAN-frontend-remediation.md)
+
 ### URL Routing (designed, not implemented)
 Hash-based deep links for sessions, turns, goals, and tabs. Design complete, implementation not started.
 
