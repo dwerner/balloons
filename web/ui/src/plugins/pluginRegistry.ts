@@ -8,6 +8,9 @@
 import React from 'react';
 import ReactDOM from 'react-dom';
 import * as jsxDevRuntime from 'react/jsx-dev-runtime';
+import { createLogger } from '../utils/debugLog';
+
+const debugLog = createLogger('PluginRegistry');
 
 // Confirm dialog options (matches app-level DialogContext)
 export interface ConfirmOptions {
@@ -97,7 +100,7 @@ class PluginRegistryImpl {
     // Create plugin registration point
     (window as any).__BALLOONS_PLUGINS__ = {
       register: (id: string, manifest: PluginManifest) => {
-        console.log(`[PluginRegistry] Plugin registered: ${id}`, manifest);
+        debugLog(`Plugin registered: ${id}`, manifest);
         // Store in a temporary location for the loader to pick up
         (window as any).__BALLOONS_PLUGINS__[`__pending_${id}`] = manifest;
       },
@@ -150,7 +153,7 @@ class PluginRegistryImpl {
   }
 
   private async _loadPlugin(pluginId: string): Promise<PluginManifest> {
-    console.log(`[PluginRegistry] Loading plugin: ${pluginId}`);
+    debugLog(`Loading plugin: ${pluginId}`);
 
     // Fetch plugin info
     const infoResponse = await fetch(`/api/plugins/${pluginId}/manifest.json`);
@@ -201,7 +204,7 @@ class PluginRegistryImpl {
     });
 
     this._notifyListeners();
-    console.log(`[PluginRegistry] Plugin loaded: ${pluginId}`);
+    debugLog(`Plugin loaded: ${pluginId}`);
 
     return manifest;
   }
@@ -215,7 +218,7 @@ class PluginRegistryImpl {
       return;
     }
 
-    console.log(`[PluginRegistry] Unloading plugin: ${pluginId}`);
+    debugLog(`Unloading plugin: ${pluginId}`);
 
     // Remove CSS
     if (plugin.cssElement) {

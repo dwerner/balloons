@@ -31,6 +31,9 @@ import { useDialog } from '../Dialog';
 import { ProcessLogViewer } from './ProcessLogViewer';
 import { LSPSection } from './LSPSection';
 import './SupervisorTab.css';
+import { createLogger } from '../../utils/debugLog';
+
+const debugLog = createLogger('SupervisorTab');
 
 // Form state for host editing
 interface HostFormState {
@@ -742,7 +745,7 @@ export function SupervisorTab({
       if (onStopProcess) {
         onStopProcess(processId);
       } else {
-        console.log('Stop process:', processId);
+        debugLog('Stop process:', processId);
       }
     },
     [onStopProcess]

@@ -275,7 +275,7 @@ export const SessionStatusBar = memo(function SessionStatusBar({
     if (client && isConnected) {
       client.sessions.listBackends()
         .then(backends => {
-          console.log('Loaded backends:', backends);
+          debugLog('Loaded backends:', backends);
           setBackends(backends);
         })
         .catch(err => debugLog('Failed to load backends', { sessionId: session.id, error: String(err) }));

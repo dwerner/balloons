@@ -2116,45 +2116,6 @@ html.keyboard-visible .turns-container {
   font-variant-numeric: tabular-nums;
 }
 
-/* ----- Collapsible Component ----- */
-.collapsible {
-  border-top: 1px solid var(--color-border-tertiary);
-}
-
-.collapsible-header {
-  display: flex;
-  align-items: center;
-  gap: 6px;
-  width: 100%;
-  padding: 6px 12px;
-  background: transparent;
-  border: none;
-  color: #94a3b8;
-  font-size: 12px;
-  font-weight: 500;
-  cursor: pointer;
-  text-align: left;
-  transition: background 0.15s;
-}
-
-.collapsible-header:hover {
-  background: rgba(255, 255, 255, 0.03);
-}
-
-.collapsible-icon {
-  font-size: 8px;
-  color: #64748b;
-}
-
-.collapsible-title {
-  text-transform: uppercase;
-  letter-spacing: 0.05em;
-}
-
-.collapsible-content {
-  padding: 0;
-}
-
 /* ----- Tool Input/Output JSON ----- */
 .tool-use-json,
 .tool-use-result {
@@ -2612,9 +2573,6 @@ html.keyboard-visible .turns-container {
   background: transparent;
 }
 
-[data-theme="dark-flat"] .collapsible {
-  border-top: none;
-}
 
 /* Code blocks - flat */
 [data-theme="dark-flat"] .turn.assistant .turn-content .code-block-wrapper,

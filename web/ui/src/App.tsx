@@ -1,7 +1,6 @@
 import React, { useState, useEffect, useCallback, useRef, memo, useMemo, forwardRef, useImperativeHandle } from 'react';
 import { BalloonsClient } from '../../generated/balloons-client';
 import type { ConnectionState, SessionInfo, TurnInfo, TaskInfo, Unsubscribe, ToolUseStartedEvent, ToolInputDeltaEvent, ToolResultEvent, TurnSnapshot, SessionHistoryChunkEvent, SessionHistoryCompleteEvent } from '../../generated/balloons-client';
-import { MarkdownContent } from './MarkdownContent';
 import { AppLayout, useLayout, useTheme, ThemeProvider, usePreferences, PreferencesProvider, MarkdownThemeApplicator } from './components/layout';
 import { SessionTreeView } from './components/SessionTreeView';
 import { HierarchyView } from './components/HierarchyView';
@@ -11,9 +10,6 @@ import { BrowserTab } from './components/BrowserTab';
 import { DomainsTab } from './components/DomainsTab';
 import { OptionsTab } from './components/OptionsTab';
 import { SettingsTab } from './components/SettingsTab';
-// DEPRECATED: KanbanTab and SessionKanbanTab removed - kanban now uses domain plugin system
-// import { KanbanTab } from './components/KanbanTab';
-// import { SessionKanbanTab } from './components/SessionKanbanTab';
 import { LogsTab } from './components/LogsTab';
 import { SurveysTab } from './components/SurveysTab';
 import { LLMTab } from './components/LLMTab';
@@ -29,7 +25,6 @@ import { DialogProvider, useDialog } from './components/Dialog';
 import { useWakeLock, useSoundNotifications, useLongPress, useVisualViewport, useUnreadSessions, useLinkStash, type LinkStashItem } from './hooks';
 import { LinkStashArea } from './components/LinkStashArea';
 import { RenameSessionModal } from './components/RenameSessionModal';
-// LinkSessionModal removed - link stash workflow replaces session picker
 import { VoiceInput } from './components/VoiceInput';
 import { MessageInputWithIcons, type MessageInputWithIconsHandle } from './components/MessageInputWithIcons';
 import { SendActionButton, type SendAction } from './components/SendActionButton';
@@ -75,641 +70,6 @@ interface ImageAttachment {
   height?: number;
   error?: string;
 }
-
-// Collapsible component for tool input/output
-const Collapsible = memo(function Collapsible({
-  title,
-  children,
-  defaultExpanded = true  // Default to expanded now
-}: {
-  title: string;
-  children: React.ReactNode;
-  defaultExpanded?: boolean;
-}) {
-  const [expanded, setExpanded] = useState(defaultExpanded);
-
-  return (
-    <div className="collapsible">
-      <button
-        className="collapsible-header"
-        onClick={() => setExpanded(!expanded)}
-        type="button"
-      >
-        <span className="collapsible-icon">{expanded ? '▼' : '▶'}</span>
-        <span className="collapsible-title">{title}</span>
-      </button>
-      {expanded && (
-        <div className="collapsible-content">
-          {children}
-        </div>
-      )}
-    </div>
-  );
-});
-
-// File extension to language mapping for syntax highlighting
-const EXT_TO_LANGUAGE: Record<string, string> = {
-  '.py': 'python',
-  '.js': 'javascript',
-  '.ts': 'typescript',
-  '.tsx': 'tsx',
-  '.jsx': 'jsx',
-  '.rs': 'rust',
-  '.go': 'go',
-  '.rb': 'ruby',
-  '.java': 'java',
-  '.c': 'c',
-  '.cpp': 'cpp',
-  '.h': 'c',
-  '.hpp': 'cpp',
-  '.css': 'css',
-  '.html': 'html',
-  '.json': 'json',
-  '.yaml': 'yaml',
-  '.yml': 'yaml',
-  '.md': 'markdown',
-  '.sh': 'bash',
-  '.bash': 'bash',
-  '.sql': 'sql',
-};
-
-// Guess language from file path
-const guessLanguage = (filePath: string): string => {
-  const ext = filePath.slice(filePath.lastIndexOf('.')).toLowerCase();
-  return EXT_TO_LANGUAGE[ext] || 'text';
-};
-
-// Format JSON for display (shared utility)
-const formatJson = (json: string | Record<string, unknown>) => {
-  try {
-    if (typeof json === 'string') {
-      const parsed = JSON.parse(json);
-      return JSON.stringify(parsed, null, 2);
-    }
-    return JSON.stringify(json, null, 2);
-  } catch {
-    // If not valid JSON yet (streaming), just return as-is
-    return typeof json === 'string' ? json : JSON.stringify(json);
-  }
-};
-
-// Generate unified diff between two strings
-const generateDiff = (oldStr: string, newStr: string, filePath: string): string[] => {
-  const oldLines = oldStr.split('\n');
-  const newLines = newStr.split('\n');
-  const fileName = filePath.split('/').pop() || filePath;
-
-  const result: string[] = [];
-  result.push(`--- a/${fileName}`);
-  result.push(`+++ b/${fileName}`);
-
-  // Simple diff algorithm - find changes
-  let oldIdx = 0;
-  let newIdx = 0;
-
-  while (oldIdx < oldLines.length || newIdx < newLines.length) {
-    if (oldIdx >= oldLines.length) {
-      // Rest are additions
-      result.push(`+${newLines[newIdx]}`);
-      newIdx++;
-    } else if (newIdx >= newLines.length) {
-      // Rest are deletions
-      result.push(`-${oldLines[oldIdx]}`);
-      oldIdx++;
-    } else if (oldLines[oldIdx] === newLines[newIdx]) {
-      // Context line
-      result.push(` ${oldLines[oldIdx]}`);
-      oldIdx++;
-      newIdx++;
-    } else {
-      // Changed - show deletion then addition
-      result.push(`-${oldLines[oldIdx]}`);
-      oldIdx++;
-      // Look ahead to see if this is a replacement or just deletion
-      if (newIdx < newLines.length && (oldIdx >= oldLines.length || newLines[newIdx] !== oldLines[oldIdx])) {
-        result.push(`+${newLines[newIdx]}`);
-        newIdx++;
-      }
-    }
-  }
-
-  return result;
-};
-
-// Component for displaying formatted tool input
-const FormattedToolInput = memo(function FormattedToolInput({
-  toolName,
-  toolInput
-}: {
-  toolName: string;
-  toolInput: Record<string, unknown> | string;
-}) {
-  const input = typeof toolInput === 'string' ? JSON.parse(toolInput || '{}') : toolInput;
-
-  if (toolName === 'Edit') {
-    const filePath = (input.file_path || '') as string;
-    const oldString = (input.old_string || '') as string;
-    const newString = (input.new_string || '') as string;
-    const diffLines = generateDiff(oldString, newString, filePath);
-
-    return (
-      <div className="tool-input-formatted">
-        <div className="tool-input-header">
-          <span className="tool-input-label">Edit</span>
-          <code className="tool-input-path">{filePath}</code>
-        </div>
-        <div className="diff-view">
-          {diffLines.map((line, idx) => {
-            let className = 'diff-line diff-context';
-            if (line.startsWith('+++') || line.startsWith('---')) {
-              className = 'diff-line diff-header';
-            } else if (line.startsWith('+')) {
-              className = 'diff-line diff-add';
-            } else if (line.startsWith('-')) {
-              className = 'diff-line diff-remove';
-            }
-            return <div key={idx} className={className}>{line}</div>;
-          })}
-        </div>
-      </div>
-    );
-  }
-
-  if (toolName === 'Write') {
-    const filePath = (input.file_path || '') as string;
-    const content = (input.content || '') as string;
-    const language = guessLanguage(filePath);
-    const truncated = content.length > 1000;
-    const displayContent = truncated ? content.slice(0, 1000) + '\n... [truncated]' : content;
-
-    return (
-      <div className="tool-input-formatted">
-        <div className="tool-input-header">
-          <span className="tool-input-label">Write</span>
-          <code className="tool-input-path">{filePath}</code>
-        </div>
-        <pre className="tool-code-block" data-language={language}>
-          <code>{displayContent}</code>
-        </pre>
-      </div>
-    );
-  }
-
-  if (toolName === 'Read') {
-    const filePath = (input.file_path || '') as string;
-    const offset = input.offset as number | undefined;
-    const limit = input.limit as number | undefined;
-    let rangeInfo = '';
-    if (offset || limit) {
-      const start = offset || 1;
-      if (limit) {
-        rangeInfo = ` (lines ${start}-${(offset || 0) + limit})`;
-      } else {
-        rangeInfo = ` (from line ${start})`;
-      }
-    }
-    return (
-      <div className="tool-input-formatted">
-        <div className="tool-input-header">
-          <span className="tool-input-label">Read</span>
-          <code className="tool-input-path">{filePath}{rangeInfo}</code>
-        </div>
-      </div>
-    );
-  }
-
-  if (toolName === 'Bash') {
-    const command = (input.command || '') as string;
-    const description = (input.description || '') as string;
-    return (
-      <div className="tool-input-formatted">
-        <div className="tool-input-header">
-          <span className="tool-input-label">Bash</span>
-          {description && <span className="tool-input-desc">{description}</span>}
-        </div>
-        <pre className="tool-code-block" data-language="bash">
-          <code>{command}</code>
-        </pre>
-      </div>
-    );
-  }
-
-  if (toolName === 'Glob') {
-    const pattern = (input.pattern || '') as string;
-    const path = (input.path || '.') as string;
-    return (
-      <div className="tool-input-formatted">
-        <div className="tool-input-header">
-          <span className="tool-input-label">Glob</span>
-          <code className="tool-input-path">{pattern}</code>
-          <span className="tool-input-in">in</span>
-          <code className="tool-input-path">{path}</code>
-        </div>
-      </div>
-    );
-  }
-
-  if (toolName === 'Grep') {
-    const pattern = (input.pattern || '') as string;
-    const path = (input.path || '.') as string;
-    return (
-      <div className="tool-input-formatted">
-        <div className="tool-input-header">
-          <span className="tool-input-label">Grep</span>
-          <code className="tool-input-path">{pattern}</code>
-          <span className="tool-input-in">in</span>
-          <code className="tool-input-path">{path}</code>
-        </div>
-      </div>
-    );
-  }
-
-  // Default: show formatted JSON
-  return (
-    <pre className="tool-use-json">
-      <code>{formatJson(input)}</code>
-    </pre>
-  );
-});
-
-// Component for displaying formatted tool result
-const FormattedToolResult = memo(function FormattedToolResult({
-  result,
-  isError
-}: {
-  result: string;
-  isError?: boolean;
-}) {
-  // Truncate very long results
-  const truncated = result.length > 5000;
-  const displayResult = truncated ? result.slice(0, 5000) + '\n... [truncated]' : result;
-
-  return (
-    <pre className={`tool-use-result ${isError ? 'error' : ''}`}>
-      <code>{displayResult}</code>
-    </pre>
-  );
-});
-
-// Tool use component for displaying individual tool calls (streaming)
-const StreamingToolUseDisplay = memo(function StreamingToolUseDisplay({ toolUse }: { toolUse: ToolUseState }) {
-  const duration = toolUse.endTime
-    ? ((toolUse.endTime - toolUse.startTime) / 1000).toFixed(1)
-    : null;
-
-  const statusIcon = {
-    streaming: '⏳',
-    executing: '⚙️',
-    completed: '✓',
-    error: '✗',
-  }[toolUse.status];
-
-  const statusClass = toolUse.status;
-
-  // Parse the input JSON for formatting
-  let parsedInput: Record<string, unknown> | null = null;
-  if (toolUse.inputJson) {
-    try {
-      parsedInput = JSON.parse(toolUse.inputJson);
-    } catch {
-      // Still streaming, JSON incomplete
-    }
-  }
-
-  return (
-    <div className={`tool-use ${statusClass}`}>
-      <div className="tool-use-header">
-        <span className={`tool-use-status ${statusClass}`}>
-          {toolUse.status === 'executing' ? (
-            <span className="tool-spinner">{statusIcon}</span>
-          ) : (
-            statusIcon
-          )}
-        </span>
-        <span className="tool-use-name">{toolUse.toolName}</span>
-        {duration && (
-          <span className="tool-use-duration">{duration}s</span>
-        )}
-      </div>
-
-      {toolUse.inputJson && (
-        <Collapsible title="Input" defaultExpanded={true}>
-          {parsedInput ? (
-            <FormattedToolInput toolName={toolUse.toolName} toolInput={parsedInput} />
-          ) : (
-            <pre className="tool-use-json">
-              <code>{toolUse.inputJson}</code>
-            </pre>
-          )}
-        </Collapsible>
-      )}
-
-      {toolUse.result !== undefined && (
-        <Collapsible title={toolUse.isError ? "Error" : "Result"} defaultExpanded={true}>
-          <FormattedToolResult result={toolUse.result} isError={toolUse.isError} />
-        </Collapsible>
-      )}
-    </div>
-  );
-});
-
-// ============================================================================
-// Content Block Type-Specific Turn Renderers
-// ============================================================================
-
-// TextTurn: Renders text content blocks
-const TextTurn = memo(function TextTurn({
-  turn,
-  streamingToolUses = []
-}: {
-  turn: TurnInfo;
-  streamingToolUses?: ToolUseState[];
-}) {
-  return (
-    <div className={`turn ${turn.role} ${turn.streaming ? 'streaming' : ''}`}>
-      <div className="turn-role">{turn.role}</div>
-      <div className="turn-content">
-        {turn.role === 'user' ? (
-          turn.content || '\u00A0'
-        ) : (
-          <MarkdownContent content={turn.content} />
-        )}
-      </div>
-      {/* Display streaming tool uses for assistant text turns */}
-      {turn.role === 'assistant' && streamingToolUses.length > 0 && (
-        <div className="turn-tool-uses">
-          {streamingToolUses.map(tu => (
-            <StreamingToolUseDisplay key={tu.toolUseId} toolUse={tu} />
-          ))}
-        </div>
-      )}
-    </div>
-  );
-});
-
-// ToolUseTurn: Renders tool_use content blocks (from loaded history)
-// Includes the matching tool_result if available, to match streaming display
-const ToolUseTurn = memo(function ToolUseTurn({
-  turn,
-  toolResult
-}: {
-  turn: TurnInfo;
-  toolResult?: TurnInfo | null;
-}) {
-  const toolUse = turn.toolUse;
-  if (!toolUse) {
-    // Fallback if toolUse info not available
-    return (
-      <div className={`turn assistant tool-use-turn ${turn.streaming ? 'streaming' : ''}`}>
-        <div className="turn-role">tool use</div>
-        <div className="turn-content">{turn.content}</div>
-      </div>
-    );
-  }
-
-  // Get result content - prefer structured toolResult, fall back to turn content
-  const structuredResult = toolResult?.toolResult;
-  const resultContent = structuredResult?.content || toolResult?.content || '';
-  const isError = structuredResult?.isError ?? false;
-  const hasResult = resultContent.length > 0;
-
-  return (
-    <div className={`turn assistant tool-use-turn ${turn.streaming ? 'streaming' : ''}`}>
-      <div className={`tool-use completed`}>
-        <div className="tool-use-header">
-          <span className={`tool-use-status ${isError ? 'error' : 'completed'}`}>
-            {isError ? '✗' : '✓'}
-          </span>
-          <span className="tool-use-name">{toolUse.name}</span>
-        </div>
-        {toolUse.inputJson && (
-          <Collapsible title="Input" defaultExpanded={true}>
-            <FormattedToolInput toolName={toolUse.name} toolInput={toolUse.inputJson} />
-          </Collapsible>
-        )}
-        {hasResult && (
-          <Collapsible title={isError ? "Error" : "Result"} defaultExpanded={true}>
-            <FormattedToolResult result={resultContent} isError={isError} />
-          </Collapsible>
-        )}
-      </div>
-    </div>
-  );
-});
-
-// SystemTurn: Renders system-level content blocks (fork, merge, link, etc.)
-const SystemTurn = memo(function SystemTurn({ turn, blockType }: { turn: TurnInfo; blockType: string }) {
-  // Map block types to display info
-  const displayInfo: Record<string, { label: string; className: string }> = {
-    'fork': { label: '⑂ fork', className: 'system-fork' },
-    'merge': { label: '⤴ merge', className: 'system-merge' },
-    'merged_to': { label: '⤴ merged', className: 'system-merged-to' },
-    'link': { label: '🔗 link', className: 'system-link' },
-    'interruption': { label: '⚠ interrupted', className: 'system-interruption' },
-    'error': { label: '✗ error', className: 'system-error' },
-    'image': { label: '🖼 image', className: 'system-image' },
-    'slide': { label: '📊 slide', className: 'system-slide' },
-    'review': { label: '📋 review', className: 'system-review' },
-    'fork_proposal': { label: '⑂ fork proposal', className: 'system-fork-proposal' },
-    'merge_proposal': { label: '⤴ merge proposal', className: 'system-merge-proposal' },
-    'archive': { label: '📦 archive', className: 'system-archive' },
-  };
-
-  const info = displayInfo[blockType] || { label: blockType, className: 'system-unknown' };
-
-  return (
-    <div className={`turn system ${info.className}`}>
-      <div className="turn-role">{info.label}</div>
-      <div className="turn-content">
-        <MarkdownContent content={turn.content} />
-      </div>
-    </div>
-  );
-});
-
-// Memoized Turn component - dispatches to appropriate renderer based on content_block_type
-const Turn = memo(function Turn({
-  turn,
-  toolUses,
-  allTurns,
-  exchangeId
-}: {
-  turn: TurnInfo;
-  toolUses?: ToolUseState[];
-  allTurns?: TurnInfo[];
-  exchangeId?: string;
-}) {
-  // Get content block type (default to 'text' for backwards compat)
-  const blockType = turn.contentBlockType ?? 'text';
-
-  // Filter streaming tool uses for this turn (only used for text assistant turns)
-  const turnToolUses = toolUses?.filter(tu => {
-    if (turn.exchangeId) {
-      return tu.exchangeId === turn.exchangeId;
-    }
-    return tu.turnIndex === turn.idx;
-  }) || [];
-
-  // Dispatch to appropriate renderer based on content block type
-  switch (blockType) {
-    case 'tool_use': {
-      // Find matching tool_result turn by toolUseId
-      // Check both contentBlockType and role='tool' for compatibility with older sessions
-      const toolUseId = turn.toolUse?.toolUseId;
-      const matchingResult = toolUseId
-        ? allTurns?.find(t =>
-            (t.contentBlockType === 'tool_result' || t.role === 'tool') &&
-            (t.toolResult?.toolUseId === toolUseId)
-          )
-        : null;
-      return <ToolUseTurn turn={turn} toolResult={matchingResult} />;
-    }
-
-    case 'tool_result':
-      // Skip tool_result turns - they're rendered as part of tool_use turns
-      return null;
-
-    // Fork proposal gets special interactive component
-    case 'fork_proposal':
-      return <ForkProposalTurn turn={turn} />;
-
-    // System-level block types (fork, merge, link, etc.)
-    case 'fork':
-    case 'merge':
-    case 'merged_to':
-    case 'link':
-    case 'interruption':
-    case 'error':
-    case 'image':
-    case 'slide':
-    case 'review':
-    case 'merge_proposal':
-    case 'archive':
-      return <SystemTurn turn={turn} blockType={blockType} />;
-
-    case 'text':
-    default:
-      // Handle tool result turns that might have role='tool' but blockType='text'
-      // (backwards compatibility with older sessions)
-      if (turn.role === 'tool') {
-        // Check if there's a matching tool_use turn that will render this
-        const hasMatchingToolUse = turn.toolResult?.toolUseId
-          ? allTurns?.some(t =>
-              (t.contentBlockType === 'tool_use' || t.toolUse) &&
-              t.toolUse?.toolUseId === turn.toolResult?.toolUseId
-            )
-          : false;
-
-        if (hasMatchingToolUse) {
-          // Will be rendered as part of tool_use turn
-          return null;
-        }
-
-        // Standalone tool result - render it with FormattedToolResult
-        return (
-          <div className="turn assistant tool-use-turn">
-            <div className="tool-use completed">
-              <div className="tool-use-header">
-                <span className="tool-use-status completed">✓</span>
-                <span className="tool-use-name">Tool Result</span>
-              </div>
-              <Collapsible title={turn.toolResult?.isError ? "Error" : "Result"} defaultExpanded={true}>
-                <FormattedToolResult result={turn.content || turn.toolResult?.content || ''} isError={turn.toolResult?.isError} />
-              </Collapsible>
-            </div>
-          </div>
-        );
-      }
-
-      // For text blocks (and unknown types), use text renderer
-      // Streaming tool uses are displayed inline with text assistant turns
-      return <TextTurn turn={turn} streamingToolUses={turnToolUses} />;
-  }
-});
-
-// Simple turn component for flat turn list view (no exchange grouping, no tool use/result merging)
-const SimpleTurn = memo(function SimpleTurn({ turn }: { turn: TurnInfo }) {
-  const blockType = turn.contentBlockType ?? 'text';
-  const role = turn.role;
-
-  // Render based on role and block type
-  if (role === 'user') {
-    return (
-      <div className={`turn user`}>
-        <div className="turn-role">user</div>
-        <div className="turn-content">{turn.content || '\u00A0'}</div>
-      </div>
-    );
-  }
-
-  if (role === 'assistant') {
-    // Tool use turn
-    if (blockType === 'tool_use' || turn.toolUse) {
-      const toolName = turn.toolUse?.name || 'Tool';
-      return (
-        <div className={`turn assistant tool-use-turn ${turn.streaming ? 'streaming' : ''}`}>
-          <div className={`tool-use ${turn.streaming ? 'executing' : 'completed'}`}>
-            <div className="tool-use-header">
-              <span className={`tool-use-status ${turn.streaming ? 'executing' : 'completed'}`}>
-                {turn.streaming ? '⚙️' : '✓'}
-              </span>
-              <span className="tool-use-name">{toolName}</span>
-            </div>
-            {turn.toolUse?.inputJson && (
-              <Collapsible title="Input" defaultExpanded={true}>
-                <FormattedToolInput toolName={toolName} toolInput={turn.toolUse.inputJson} />
-              </Collapsible>
-            )}
-          </div>
-        </div>
-      );
-    }
-
-    // Text turn
-    return (
-      <div className={`turn assistant ${turn.streaming ? 'streaming' : ''}`}>
-        <div className="turn-role">assistant</div>
-        <div className="turn-content">
-          <MarkdownContent content={turn.content} />
-        </div>
-      </div>
-    );
-  }
-
-  if (role === 'tool') {
-    // Tool result turn
-    const isError = turn.toolResult?.isError ?? false;
-    const content = turn.toolResult?.content || turn.content || '';
-    return (
-      <div className={`turn assistant tool-use-turn`}>
-        <div className={`tool-use ${isError ? 'error' : 'completed'}`}>
-          <div className="tool-use-header">
-            <span className={`tool-use-status ${isError ? 'error' : 'completed'}`}>
-              {isError ? '✗' : '✓'}
-            </span>
-            <span className="tool-use-name">Tool Result</span>
-          </div>
-          <Collapsible title={isError ? "Error" : "Result"} defaultExpanded={true}>
-            <FormattedToolResult result={content} isError={isError} />
-          </Collapsible>
-        </div>
-      </div>
-    );
-  }
-
-  // System turns (fork, merge, etc.)
-  if (['fork', 'merge', 'merged_to', 'link', 'interruption', 'error', 'image', 'slide', 'review', 'fork_proposal', 'merge_proposal', 'archive'].includes(blockType)) {
-    return <SystemTurn turn={turn} blockType={blockType} />;
-  }
-
-  // Fallback
-  return (
-    <div className={`turn ${role}`}>
-      <div className="turn-role">{role || blockType}</div>
-      <div className="turn-content">{turn.content || '\u00A0'}</div>
-    </div>
-  );
-});
 
 // Sort turns by index and deduplicate (keep latest version of each turn by idx)
 function sortTurnsByIdx(turns: TurnInfo[]): TurnInfo[] {
@@ -928,16 +288,6 @@ async function loadSessionWithLayers(
         reject(err);
       });
   });
-}
-
-// Format duration in seconds to a human-readable string
-function formatDuration(seconds: number): string {
-  if (seconds < 60) {
-    return `${Math.floor(seconds)}s`;
-  }
-  const mins = Math.floor(seconds / 60);
-  const secs = Math.floor(seconds % 60);
-  return `${mins}m ${secs}s`;
 }
 
 // Format token count with thousands separator
@@ -1505,7 +855,7 @@ function AppContent() {
 
       unsubscribers.push(
         client.sessionData.sessionDataSessionRemoved(async (data) => {
-          console.log('[App] sessionDataSessionRemoved - refetching');
+          debugLog('sessionDataSessionRemoved - refetching');
           const sessionList = await client.sessionData.getAllSessions();
           setSessions(sessionList);
 
@@ -1520,7 +870,7 @@ function AppContent() {
       // Pin state changes - refresh sessions to get updated isPinned and re-sort
       unsubscribers.push(
         client.sessionData.sessionDataSessionPinned(async () => {
-          console.log('[App] sessionDataSessionPinned - refetching');
+          debugLog('sessionDataSessionPinned - refetching');
           const sessionList = await client.sessionData.getAllSessions();
           setSessions(sessionList);
         })
@@ -1609,7 +959,7 @@ function AppContent() {
       // Instead, just update the isStreaming flag locally.
       unsubscribers.push(
         client.sessionData.sessionDataStreamStarted(async (data) => {
-          console.log('[App] sessionDataStreamStarted');
+          debugLog('sessionDataStreamStarted');
           // Update isStreaming flag for the session
           setSessions(prev => prev.map(s =>
             s.id === data.sessionId ? { ...s, isStreaming: true } : s
@@ -1624,11 +974,11 @@ function AppContent() {
 
       unsubscribers.push(
         client.sessionData.sessionDataStreamDone(async (data) => {
-          console.log('[App] sessionDataStreamDone');
+          debugLog('sessionDataStreamDone');
           // Update isStreaming flag for the session
           setSessions(prev => {
             const session = prev.find(s => s.id === data.sessionId);
-            console.log('[App] streamDone - current tokens:', session?.cachedContextTokens);
+            debugLog('streamDone - current tokens:', session?.cachedContextTokens);
             return prev.map(s =>
               s.id === data.sessionId ? { ...s, isStreaming: false } : s
             );
@@ -1907,7 +1257,7 @@ function AppContent() {
           setSessions(prev => {
             const session = prev.find(s => s.id === selectedSessionId);
             if (session && session.isStreaming !== actuallyStreaming) {
-              console.log('[App] Visibility sync - correcting stale streaming state:', {
+              debugLog('Visibility sync - correcting stale streaming state:', {
                 sessionId: selectedSessionId.slice(0, 8),
                 was: session.isStreaming,
                 now: actuallyStreaming,
@@ -3504,7 +2854,6 @@ function AppContent() {
                   }}
                 />
               )}
-              {/* DEPRECATED: session-kanban tab removed - kanban now uses domain plugin system */}
               {mainContentTab === 'slides' && (
                 <div className="empty-state">
                   <h2>Slides</h2>
@@ -3692,7 +3041,6 @@ function AppContent() {
                   error={soundNotifications.error}
                 />
               )}
-              {/* DEPRECATED: kanban tab removed - kanban now uses domain plugin system */}
               {mainContentTab === 'surveys' && (
                 <SurveysTab />
               )}
@@ -4099,7 +3447,7 @@ function MobileHeader({ connectionState, selectedSession }: MobileHeaderProps) {
     : 'Balloons';
 
   const handleOpenDetail = () => {
-    console.log('Detail button clicked, openDetail:', openDetail);
+    debugLog('Detail button clicked, openDetail:', openDetail);
     openDetail();
   };
 
@@ -4158,7 +3506,6 @@ function MobileHeader({ connectionState, selectedSession }: MobileHeaderProps) {
 // - docs/specs/url-routing.md (add route to URL scheme)
 // - routes.ts (add route constant when created)
 // - useRouter hook (add route handler when created)
-// DEPRECATED: 'session-kanban' and 'kanban' tabs removed - kanban now uses domain plugin system
 type MainContentTab = 'streaming' | 'context' | 'properties' | 'slides' | 'code' | 'logs' | 'llm' | 'settings' | 'surveys';
 type OuterTab = 'session' | 'global';
 
@@ -4307,7 +3654,6 @@ function MainContentHeader({
             >
               Context
             </button>
-            {/* DEPRECATED: session-kanban tab button removed - kanban now uses domain plugin system */}
             <button
               className={`view-toggle-btn ${activeTab === 'properties' ? 'active' : ''}`}
               onClick={() => onTabChange('properties')}
@@ -4351,7 +3697,6 @@ function MainContentHeader({
             >
               Settings
             </button>
-            {/* DEPRECATED: kanban tab button removed - kanban now uses domain plugin system */}
             <button
               className={`view-toggle-btn ${activeTab === 'surveys' ? 'active' : ''}`}
               onClick={() => onTabChange('surveys')}

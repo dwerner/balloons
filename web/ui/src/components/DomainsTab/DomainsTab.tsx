@@ -16,6 +16,9 @@ import { usePlugins, pluginRegistry, type PluginInfo, type PluginContext, type C
 import type { SessionDataServiceClient, DomainRpcServiceClient, SessionManagerServiceClient } from '../../../../generated/balloons-client';
 import { useDialog } from '../Dialog/DialogContext';
 import './DomainsTab.css';
+import { createLogger } from '../../utils/debugLog';
+
+const debugLog = createLogger('DomainsTab');
 
 interface DomainsTabProps {
   /** Send a message to the LLM */
@@ -114,7 +117,7 @@ export function DomainsTab({
         if (!domainId) return;
 
         if (event.eventType === 'domain_loaded') {
-          console.log(`[DomainsTab] Backend loaded domain: ${domainId}, auto-loading UI`);
+          debugLog(`Backend loaded domain: ${domainId}, auto-loading UI`);
           // Check if UI plugin exists and isn't already loaded
           if (!isLoaded(domainId)) {
             load(domainId).catch(err => {
@@ -124,7 +127,7 @@ export function DomainsTab({
           // Refresh available list
           refreshAvailable();
         } else if (event.eventType === 'domain_unloaded') {
-          console.log(`[DomainsTab] Backend unloaded domain: ${domainId}, auto-unloading UI`);
+          debugLog(`Backend unloaded domain: ${domainId}, auto-unloading UI`);
           // Unload UI plugin if loaded
           if (isLoaded(domainId)) {
             unload(domainId);
@@ -149,9 +152,9 @@ export function DomainsTab({
     try {
       // First, reload the server-side domain (picks up Python code changes)
       if (sessionDataClient) {
-        console.log(`[DomainsTab] Reloading server-side domain: ${pluginId}`);
+        debugLog(`Reloading server-side domain: ${pluginId}`);
         const result = await sessionDataClient.reloadDomain(pluginId);
-        console.log(`[DomainsTab] Server reload result:`, result);
+        debugLog(`Server reload result:`, result);
       }
 
       // Then reload the UI
@@ -245,7 +248,7 @@ export function DomainsTab({
       // Load backend domain first (if sessionsClient available)
       // This will emit domain_loaded event which triggers auto-load of UI
       if (sessionsClient) {
-        console.log(`[DomainsTab] Loading backend domain: ${pluginId}`);
+        debugLog(`Loading backend domain: ${pluginId}`);
         await sessionsClient.loadDomain(pluginId, sessionId || undefined);
       }
       // Load frontend UI
@@ -267,7 +270,7 @@ export function DomainsTab({
     // Unload backend domain first (if sessionsClient available)
     // This will emit domain_unloaded event
     if (sessionsClient) {
-      console.log(`[DomainsTab] Unloading backend domain: ${pluginId}`);
+      debugLog(`Unloading backend domain: ${pluginId}`);
       await sessionsClient.unloadDomain(pluginId, sessionId || undefined);
     }
     // Unload frontend UI

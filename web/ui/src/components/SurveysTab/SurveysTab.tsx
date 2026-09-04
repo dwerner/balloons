@@ -7,6 +7,9 @@
 
 import React, { useState, useEffect, useCallback, memo } from 'react';
 import './SurveysTab.css';
+import { createLogger } from '../../utils/debugLog';
+
+const debugLog = createLogger('SurveysTab');
 
 interface QuestionAnswer {
   questionId: string;
@@ -131,7 +134,7 @@ export const SurveysTab = memo(function SurveysTab() {
     const link = `http://${host}:3001/survey/${id}`;
     navigator.clipboard.writeText(link).then(() => {
       // Could show a toast, but for now just log
-      console.log('Link copied:', link);
+      debugLog('Link copied:', link);
     });
   }, []);
 

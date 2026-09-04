@@ -497,7 +497,7 @@ export const SystemPromptView = memo(function SystemPromptView({
   isDarkMode: isDarkModeProp,
 }: SystemPromptViewProps) {
   // DEBUG: Log every render
-  console.log('[SystemPromptView] RENDER', { sessionId, hasClient: !!client, isLoading });
+  debugLog('RENDER', { sessionId, hasClient: !!client, isLoading });
 
   // Detect dark mode from document attribute or prop
   const [detectedDarkMode, setDetectedDarkMode] = useState(true);
@@ -531,19 +531,19 @@ export const SystemPromptView = memo(function SystemPromptView({
 
   // Fetch system prompt info from server
   const fetchSystemPromptInfo = useCallback(async () => {
-    console.log('[SystemPromptView] fetchSystemPromptInfo START', { hasClient: !!client, sessionId });
+    debugLog('fetchSystemPromptInfo START', { hasClient: !!client, sessionId });
     debugLog('fetchSystemPromptInfo called', { hasClient: !!client, sessionId });
     if (!client) {
-      console.log('[SystemPromptView] no client, returning early');
+      debugLog('no client, returning early');
       debugLog('fetchSystemPromptInfo: no client, returning early');
       return;
     }
 
     try {
-      console.log('[SystemPromptView] calling getSystemPromptInfo...');
+      debugLog('calling getSystemPromptInfo...');
       debugLog('Fetching system prompt info', { sessionId });
       const info = await client.sessions.getSystemPromptInfo(sessionId);
-      console.log('[SystemPromptView] got result:', info);
+      debugLog('got result:', info);
       debugLog('Got system prompt info', {
         totalTokens: info.totalTokens,
         componentCount: info.components?.length,
@@ -610,7 +610,7 @@ export const SystemPromptView = memo(function SystemPromptView({
 
   // Initial fetch
   useEffect(() => {
-    console.log('[SystemPromptView] useEffect triggered - calling fetchSystemPromptInfo');
+    debugLog('useEffect triggered - calling fetchSystemPromptInfo');
     fetchSystemPromptInfo();
   }, [fetchSystemPromptInfo]);
 

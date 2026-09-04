@@ -10,6 +10,9 @@
 
 import React, { useState, useRef, useCallback, useEffect } from 'react';
 import './PushToTalkInput.css';
+import { createLogger } from '../../utils/debugLog';
+
+const debugLog = createLogger('PushToTalkInput');
 
 // Audio settings
 const CHANNELS = 1;
@@ -232,7 +235,7 @@ export function PushToTalkInput({
         ws.onmessage = (event) => {
           // Ignore messages from old sessions
           if (activeSessionIdRef.current !== currentSessionId) {
-            console.log('PushToTalkInput: Ignoring message from old session');
+            debugLog('Ignoring message from old session');
             return;
           }
 
@@ -241,7 +244,7 @@ export function PushToTalkInput({
 
           // Ignore early messages (likely stale buffer from server)
           if (Date.now() < ignoreUntil) {
-            console.log('PushToTalkInput: Ignoring early message', Date.now() - connectionOpenTime);
+            debugLog('Ignoring early message', Date.now() - connectionOpenTime);
             return;
           }
 

@@ -22,6 +22,9 @@ import React, { useState, useCallback, useEffect, memo, useRef } from 'react';
 import type { TaskInfo, TaskEventData, BackendSummary } from '../../../../generated/types';
 import type { TaskStateServiceClient } from '../../../../generated/client';
 import './LLMTab.css';
+import { createLogger } from '../../utils/debugLog';
+
+const debugLog = createLogger('LLMTab');
 
 // Status indicator component
 function StatusIndicator({ status }: { status: string }) {
@@ -299,7 +302,7 @@ export function LLMTab({ tasksClient, onJumpToSession }: LLMTabProps) {
   const loadState = useCallback(async () => {
     if (!tasksClient) return;
 
-    console.log('[LLMTab] Loading initial state...');
+    debugLog('Loading initial state...');
 
     try {
       const [allTasks, summary] = await Promise.all([
@@ -307,14 +310,17 @@ export function LLMTab({ tasksClient, onJumpToSession }: LLMTabProps) {
         tasksClient.getBackendSummary(),
       ]);
 
-      console.log('[LLMTab] getAllTasks result:', allTasks);
-      console.log('[LLMTab] getBackendSummary result:', summary);
+      debugLog('getAllTasks result:', allTasks);
+      debugLog('getBackendSummary result:', summary);
 
       // Split into active and recent
       const active = allTasks.filter((t) => t.isActive);
       const recent = allTasks.filter((t) => !t.isActive).slice(0, 10);
 
-      console.log('[LLMTab] Active tasks:', active.length, 'Recent tasks:', recent.length);
+      debugLog('Initial state loaded', {
+        activeTasks: active.length,
+        recentTasks: recent.length,
+      });
 
       setActiveTasks(active);
       setRecentTasks(recent);
@@ -335,17 +341,17 @@ export function LLMTab({ tasksClient, onJumpToSession }: LLMTabProps) {
   useEffect(() => {
     if (!tasksClient) return;
 
-    console.log('[LLMTab] Subscribing to task events');
+    debugLog('Subscribing to task events');
 
     const unsubs: Array<() => void> = [];
 
     // Task started - add to active
     unsubs.push(
       tasksClient.onTaskStarted((event: TaskEventData) => {
-        console.log('[LLMTab] taskStarted event:', event);
+        debugLog('taskStarted event:', event);
         // Fetch full task info
         tasksClient.getTask(event.taskId).then((task) => {
-          console.log('[LLMTab] getTask result:', task);
+          debugLog('getTask result:', task);
           if (task) {
             setActiveTasks((prev) => [task, ...prev]);
           }
@@ -358,7 +364,7 @@ export function LLMTab({ tasksClient, onJumpToSession }: LLMTabProps) {
     // Task updated - update in active list
     unsubs.push(
       tasksClient.onTaskUpdated((event: TaskEventData) => {
-        console.log('[LLMTab] taskUpdated event:', event);
+        debugLog('taskUpdated event:', event);
         tasksClient.getTask(event.taskId).then((task) => {
           if (task) {
             setActiveTasks((prev) =>
@@ -372,7 +378,7 @@ export function LLMTab({ tasksClient, onJumpToSession }: LLMTabProps) {
     // Task completed - move from active to recent
     unsubs.push(
       tasksClient.onTaskCompleted((event: TaskEventData) => {
-        console.log('[LLMTab] taskCompleted event:', event);
+        debugLog('taskCompleted event:', event);
         tasksClient.getTask(event.taskId).then((task) => {
           setActiveTasks((prev) => prev.filter((t) => t.taskId !== event.taskId));
           if (task) {
