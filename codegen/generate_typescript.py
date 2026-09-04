@@ -370,6 +370,7 @@ def main():
         ("service.image_service", "ImageService"),
         ("service.file_state_service", "FileStateService"),
         ("service.debug_log_service", "DebugLogService"),
+        ("service.traffic_capture_service", "TrafficCaptureService"),
         ("service.sound_service", "SoundService"),
         ("service.supervisor_state_service", "SupervisorStateService"),
         ("service.browser_state_service", "BrowserStateService"),

@@ -3957,6 +3957,7 @@ function AppContent() {
             <OptionsTab
               key={serverSlot}  // Remount when server slot changes
               debugLogClient={connectionState === 'connected' ? clientRef.current?.debugLog : undefined}
+              trafficCaptureClient={connectionState === 'connected' ? clientRef.current?.trafficCapture : undefined}
               isConnected={connectionState === 'connected'}
             />
           )}

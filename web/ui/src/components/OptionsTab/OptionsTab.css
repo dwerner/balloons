@@ -342,3 +342,27 @@
   opacity: 1;
   color: var(--color-error);
 }
+
+/* Traffic capture */
+.options-input {
+  width: 100%;
+  padding: 6px 8px;
+  background: var(--color-bg-secondary);
+  border: 1px solid var(--color-border);
+  border-radius: 4px;
+  color: var(--color-text-primary);
+  font-size: 13px;
+}
+
+.options-input:disabled {
+  opacity: 0.5;
+}
+
+.options-card__hint code,
+.server-identity__value code {
+  background: var(--color-bg-secondary);
+  padding: 1px 4px;
+  border-radius: 3px;
+  font-size: 12px;
+  word-break: break-all;
+}

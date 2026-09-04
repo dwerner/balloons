@@ -55,6 +55,7 @@ from websockets.asyncio.server import serve, ServerConnection
 from websockets.exceptions import ConnectionClosed
 
 from codegen.ws_expose import WsExposeRegistry, to_snake_case, MethodSpec
+from core.traffic_capture import traffic_capture
 
 if TYPE_CHECKING:
     from config import WebSocketConfig, JWTConfig
@@ -347,6 +348,8 @@ class WsServer:
                 # Wait for next message from queue
                 message_str = await client.event_queue.get()
                 try:
+                    if traffic_capture.active:
+                        traffic_capture.record_outbound(message_str)
                     await client.websocket.send(message_str)
                 except ConnectionClosed:
                     # Client disconnected, stop processing
@@ -379,6 +382,8 @@ class WsServer:
             if target_clients is not None and client_info.client_id not in target_clients:
                 continue
             try:
+                if traffic_capture.active:
+                    traffic_capture.record_outbound(message_str)
                 await websocket.send(message_str)
             except ConnectionClosed:
                 pass
@@ -395,6 +400,8 @@ class WsServer:
             message: Pre-encoded JSON message string
         """
         try:
+            if traffic_capture.active:
+                traffic_capture.record_outbound(message)
             await websocket.send(message)
         except ConnectionClosed:
             # Client disconnected, will be cleaned up
@@ -627,13 +634,21 @@ class WsServer:
                 "subject": subject,  # session ID from JWT, if any
             }
         }
-        await websocket.send(json.dumps(connected_event))
+        connected_event_str = json.dumps(connected_event)
+        if traffic_capture.active:
+            traffic_capture.record_outbound(connected_event_str)
+        await websocket.send(connected_event_str)
 
         try:
             async for message in websocket:
+                if traffic_capture.active:
+                    traffic_capture.record_inbound(message)
                 response = await self._handle_message(message, client)
                 if response:
-                    await websocket.send(json.dumps(response))
+                    response_str = json.dumps(response)
+                    if traffic_capture.active:
+                        traffic_capture.record_outbound(response_str)
+                    await websocket.send(response_str)
         except ConnectionClosed as e:
             logger.info(
                 f"Client {client.client_id} disconnected: "

@@ -83,6 +83,7 @@ if TYPE_CHECKING:
     from service.sound_service import SoundService
     from service.supervisor_state_service import SupervisorStateService
     from service.task_state_service import TaskStateService
+    from service.traffic_capture_service import TrafficCaptureService
     from service.user_auth import (
         InvalidCredentialsError,
         PasswordHasher,
@@ -101,6 +102,7 @@ __all__ = [
     "SessionManagerService",
     "GoalTreeStateService",
     "TaskStateService",
+    "TrafficCaptureService",
     "SessionDataService",
     "ImageService",
     "SoundService",
@@ -138,6 +140,7 @@ _EXPORT_MAP = {
     "SessionManagerService": ("service.session_manager_service", "SessionManagerService"),
     "GoalTreeStateService": ("service.session_data_service", "SessionDataService"),
     "TaskStateService": ("service.task_state_service", "TaskStateService"),
+    "TrafficCaptureService": ("service.traffic_capture_service", "TrafficCaptureService"),
     "SessionDataService": ("service.session_data_service", "SessionDataService"),
     "ImageService": ("service.image_service", "ImageService"),
     "SoundService": ("service.sound_service", "SoundService"),

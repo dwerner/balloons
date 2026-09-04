@@ -28,6 +28,7 @@ import {
   ImageServiceClient,
   FileStateServiceClient,
   DebugLogServiceClient,
+  TrafficCaptureServiceClient,
   SoundServiceClient,
   SupervisorStateServiceClient,
   BrowserStateServiceClient,
@@ -79,6 +80,7 @@ export class BalloonsClient {
   private _images: ImageServiceClient | null = null;
   private _files: FileStateServiceClient | null = null;
   private _debugLog: DebugLogServiceClient | null = null;
+  private _trafficCapture: TrafficCaptureServiceClient | null = null;
   private _sounds: SoundServiceClient | null = null;
   private _supervisor: SupervisorStateServiceClient | null = null;
   private _browser: BrowserStateServiceClient | null = null;
@@ -178,6 +180,14 @@ export class BalloonsClient {
       throw new Error('Not connected. Call connect() first.');
     }
     return this._debugLog;
+  }
+
+  /** Traffic capture service (record raw WebSocket frames to a file) */
+  get trafficCapture(): TrafficCaptureServiceClient {
+    if (!this._trafficCapture) {
+      throw new Error('Not connected. Call connect() first.');
+    }
+    return this._trafficCapture;
   }
 
   /** Sound service (notification sounds) */
@@ -357,6 +367,7 @@ export class BalloonsClient {
     this._images = new ImageServiceClient(this.ws);
     this._files = new FileStateServiceClient(this.ws);
     this._debugLog = new DebugLogServiceClient(this.ws);
+    this._trafficCapture = new TrafficCaptureServiceClient(this.ws);
     this._sounds = new SoundServiceClient(this.ws);
     this._supervisor = new SupervisorStateServiceClient(this.ws);
     this._browser = new BrowserStateServiceClient(this.ws);
@@ -372,6 +383,7 @@ export class BalloonsClient {
     this._images = null;
     this._files = null;
     this._debugLog = null;
+    this._trafficCapture = null;
     this._sounds = null;
     this._supervisor = null;
     this._browser = null;

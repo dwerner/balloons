@@ -1147,6 +1147,18 @@ export interface ServerIdentityInfo {
   startTime: string;
 }
 
+export interface CaptureStatus {
+  active: boolean;
+  path: string;
+  label: string;
+  startedAt: string;
+  messageCount: number;
+  bytesWritten: number;
+  stopReason: string;
+  alreadyActive?: boolean;
+  alreadyInactive?: boolean;
+}
+
 export interface SoundInfo {
   filename: string;
   mediaType: string;

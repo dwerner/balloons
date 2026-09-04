@@ -3733,6 +3733,114 @@ export class DebugLogServiceClient implements DebugLogService {
 }
 
 /**
+ * WebSocket-exposed controls for raw traffic capture.
+ * 
+ * Capture is global (all clients) and idempotent, so a UI toggle reflects and
+ * drives real server state rather than local assumptions. It starts inactive
+ * on server boot and never auto-resumes.
+ */
+export interface TrafficCaptureService {
+  /**
+   * Get current capture state.
+   * 
+   * While active this reports live counts; once stopped it reports the
+   * final state of the last capture, including why it ended.
+   * 
+   * Returns:
+   * CaptureStatus for the current or most recent capture
+   */
+  captureStatus(): Promise<Types.CaptureStatus>;
+
+  /**
+   * Start capturing WebSocket traffic to a file.
+   * 
+   * Idempotent: if a capture is already running this returns its state with
+   * already_active=True and leaves the running capture (and its file)
+   * untouched.
+   * 
+   * Args:
+   * label: Workflow name, embedded in the capture filename
+   * max_bytes: Stop the capture past this size; 0 uses the default
+   * 
+   * Returns:
+   * CaptureStatus for the running capture
+   */
+  startCapture(label?: string, maxBytes?: number): Promise<Types.CaptureStatus>;
+
+  /**
+   * Stop capturing and flush buffered frames to disk.
+   * 
+   * Idempotent: if nothing is running this returns the last capture's state
+   * with already_inactive=True.
+   * 
+   * Returns:
+   * CaptureStatus describing the capture that just ended
+   */
+  stopCapture(): Promise<Types.CaptureStatus>;
+
+}
+
+export class TrafficCaptureServiceClient implements TrafficCaptureService {
+  private ws: WebSocket;
+  private pending: Map<string, { resolve: (v: any) => void; reject: (e: Error) => void }> = new Map();
+  private eventHandlers: Map<string, Set<(data: any) => void>> = new Map();
+
+  constructor(ws: WebSocket) {
+    this.ws = ws;
+    this.ws.addEventListener('message', this.handleMessage.bind(this));
+  }
+
+  private handleMessage(event: MessageEvent): void {
+    const msg = JSON.parse(event.data);
+    if (msg.id && this.pending.has(msg.id)) {
+      const { resolve, reject } = this.pending.get(msg.id)!;
+      this.pending.delete(msg.id);
+      if (msg.error) {
+        reject(new Error(msg.error.message));
+      } else {
+        resolve(msg.result);
+      }
+    } else if (msg.event) {
+      const handlers = this.eventHandlers.get(msg.event);
+      if (handlers) {
+        handlers.forEach(h => h(msg.data));
+      }
+    }
+  }
+
+  private async call<T>(method: string, params: Record<string, unknown>): Promise<T> {
+    const id = generateRequestId();
+    return new Promise((resolve, reject) => {
+      this.pending.set(id, { resolve, reject });
+      this.ws.send(JSON.stringify({ id, method, params }));
+    });
+  }
+
+  private subscribe(event: string, callback: (data: any) => void): Unsubscribe {
+    if (!this.eventHandlers.has(event)) {
+      this.eventHandlers.set(event, new Set());
+    }
+    this.eventHandlers.get(event)!.add(callback);
+    return () => {
+      this.eventHandlers.get(event)?.delete(callback);
+    };
+  }
+
+  async captureStatus(): Promise<Types.CaptureStatus> {
+    return this.call('captureStatus', {  });
+  }
+
+  async startCapture(label?: string, maxBytes?: number): Promise<Types.CaptureStatus> {
+    return this.call('startCapture', { label: label, maxBytes: maxBytes });
+  }
+
+  async stopCapture(): Promise<Types.CaptureStatus> {
+    return this.call('stopCapture', {  });
+  }
+
+}
+
+/**
  * WebSocket-exposed service for sound file management.
  * 
  * Handles listing available sounds, retrieving sound data for browser playback,

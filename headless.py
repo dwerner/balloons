@@ -23,6 +23,7 @@ from service import (
     ImageService,
     SoundService,
     DebugLogService,
+    TrafficCaptureService,
     FileStateService,
     UserAuthService,
     get_user_storage,
@@ -127,6 +128,7 @@ async def run_server(host: str | None = None, port: int | None = None) -> None:
     image_service = ImageService()
     sound_service = SoundService()
     debug_log_service = DebugLogService()
+    traffic_capture_service = TrafficCaptureService()
     file_service = FileStateService()
 
     session_service.set_task_state_service(task_service)
@@ -166,6 +168,7 @@ async def run_server(host: str | None = None, port: int | None = None) -> None:
     ws_server.register_service(image_service)
     ws_server.register_service(sound_service)
     ws_server.register_service(debug_log_service)
+    ws_server.register_service(traffic_capture_service)
     ws_server.register_service(file_service)
 
     from service import SupervisorStateService, LSPService, BrowserStateService

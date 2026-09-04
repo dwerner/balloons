@@ -8,8 +8,8 @@
  */
 
 import React, { useState, useCallback, useEffect, memo } from 'react';
-import type { DebugLogServiceClient } from '../../../../generated/client';
-import type { BufferStats, ServerIdentityInfo } from '../../../../generated/types';
+import type { DebugLogServiceClient, TrafficCaptureServiceClient } from '../../../../generated/client';
+import type { BufferStats, CaptureStatus, ServerIdentityInfo } from '../../../../generated/types';
 import './OptionsTab.css';
 
 // 8 core log categories (matches Category class in Python)
@@ -26,11 +26,13 @@ const LOG_CATEGORIES = [
 
 interface OptionsTabProps {
   debugLogClient?: DebugLogServiceClient;
+  trafficCaptureClient?: TrafficCaptureServiceClient;
   isConnected: boolean;
 }
 
 export const OptionsTab = memo(function OptionsTab({
   debugLogClient,
+  trafficCaptureClient,
   isConnected,
 }: OptionsTabProps) {
   const [loggingEnabled, setLoggingEnabled] = useState(false);
@@ -141,6 +143,73 @@ export const OptionsTab = memo(function OptionsTab({
       console.error('Failed to clear buffer:', err);
     }
   }, [debugLogClient]);
+
+  // --- Traffic capture ---
+  // Server state is the source of truth: a capture is global and may have been
+  // started from another tab or still be running after a page reload.
+  const [capture, setCapture] = useState<CaptureStatus | null>(null);
+  const [captureLabel, setCaptureLabel] = useState('');
+  const [isTogglingCapture, setIsTogglingCapture] = useState(false);
+
+  useEffect(() => {
+    if (!trafficCaptureClient || !isConnected) return;
+
+    let cancelled = false;
+    const loadStatus = async () => {
+      try {
+        const status = await trafficCaptureClient.captureStatus();
+        if (!cancelled) setCapture(status);
+      } catch (err) {
+        console.error('Failed to load traffic capture status:', err);
+      }
+    };
+
+    loadStatus();
+    return () => {
+      cancelled = true;
+    };
+  }, [trafficCaptureClient, isConnected]);
+
+  // Refresh counts while a capture is live.
+  useEffect(() => {
+    if (!trafficCaptureClient || !isConnected || !capture?.active) return;
+
+    const interval = setInterval(async () => {
+      try {
+        const status = await trafficCaptureClient.captureStatus();
+        setCapture(status);
+      } catch (err) {
+        console.error('Failed to refresh traffic capture status:', err);
+      }
+    }, 2000);
+
+    return () => clearInterval(interval);
+  }, [trafficCaptureClient, isConnected, capture?.active]);
+
+  const handleToggleCapture = useCallback(async () => {
+    if (!trafficCaptureClient) return;
+
+    setIsTogglingCapture(true);
+    try {
+      // start/stop are idempotent server-side, so a double-click or stale
+      // toggle state cannot open two captures or error on a redundant stop.
+      const status = capture?.active
+        ? await trafficCaptureClient.stopCapture()
+        : await trafficCaptureClient.startCapture(captureLabel || undefined);
+      setCapture(status);
+    } catch (err) {
+      console.error('Failed to toggle traffic capture:', err);
+    } finally {
+      setIsTogglingCapture(false);
+    }
+  }, [trafficCaptureClient, capture?.active, captureLabel]);
+
+  const formatBytes = (bytes: number): string => {
+    if (!bytes) return '0 B';
+    const units = ['B', 'KB', 'MB', 'GB'];
+    const exp = Math.min(Math.floor(Math.log(bytes) / Math.log(1024)), units.length - 1);
+    return `${(bytes / Math.pow(1024, exp)).toFixed(exp === 0 ? 0 : 1)} ${units[exp]}`;
+  };
 
   if (!isConnected) {
     return (
@@ -336,6 +405,70 @@ export const OptionsTab = memo(function OptionsTab({
           </div>
         </div>
       </div>
+
+      {/* Traffic Capture Card */}
+      {trafficCaptureClient && (
+        <div className="options-card">
+          <div className="options-card__header">
+            <h3 className="options-card__title">Traffic Capture</h3>
+            {capture?.active && (
+              <span className="options-card__subtitle">
+                {capture.messageCount} frames · {formatBytes(capture.bytesWritten)}
+              </span>
+            )}
+          </div>
+
+          <div className="options-card__content">
+            <label className="debug-toggle">
+              <input
+                type="checkbox"
+                checked={capture?.active ?? false}
+                onChange={handleToggleCapture}
+                disabled={isTogglingCapture}
+              />
+              <span className="debug-toggle__label">Capture WebSocket Traffic</span>
+              <span className="debug-toggle__description">
+                {capture?.active
+                  ? 'Recording raw frames to disk'
+                  : capture?.stopReason && capture.path
+                    ? `Last capture ended (${capture.stopReason})`
+                    : 'Records every frame to a file for workflow auditing'}
+              </span>
+            </label>
+
+            <div className={`log-categories-section ${capture?.active ? 'log-categories-section--disabled' : ''}`}>
+              <div className="options-card__section-header">
+                <span className="options-card__section-title">Workflow Label</span>
+                <span className="options-card__hint">Names the capture file</span>
+              </div>
+              <input
+                type="text"
+                className="options-input"
+                value={captureLabel}
+                onChange={e => setCaptureLabel(e.target.value)}
+                placeholder="e.g. checkout-flow"
+                disabled={capture?.active || isTogglingCapture}
+              />
+            </div>
+
+            {capture?.path && (
+              <div className="server-identity">
+                <div className="server-identity__row">
+                  <span className="server-identity__label">{capture.active ? 'Writing' : 'File'}</span>
+                  <span className="server-identity__value">
+                    <code title={capture.path}>{capture.path}</code>
+                  </span>
+                </div>
+              </div>
+            )}
+
+            <div className="options-card__hint">
+              Format: <code>{'datetime||<client|server>||raw-frame'}</code> — split on the first
+              two delimiters only; payloads may contain <code>||</code>.
+            </div>
+          </div>
+        </div>
+      )}
 
       {/* Buffer Stats Card */}
       <div className="options-card">
