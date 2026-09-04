@@ -402,7 +402,6 @@ interface SidebarContentProps {
   client?: BalloonsClient | null;
   selectedSessionId: string | null;
   selectedSession?: SessionInfo | null;
-  turns: TurnInfo[];
   streamingTask: TaskInfo | null;
   onSelectSession: (sessionId: string) => void;
   onSelectTurn?: (turnIdx: number) => void;
@@ -444,7 +443,6 @@ export function SidebarContent({
   client,
   selectedSessionId,
   selectedSession,
-  turns,
   streamingTask,
   onSelectSession,
   onSelectTurn,

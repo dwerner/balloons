@@ -1,10 +1,8 @@
-import React, { useState, useEffect, useCallback, useRef, memo, useMemo, forwardRef, useImperativeHandle } from 'react';
+import React, { useState, useEffect, useCallback, useRef, useMemo } from 'react';
 import { BalloonsClient } from '../../generated/balloons-client';
 import type { ConnectionState, SessionInfo, TurnInfo, TaskInfo, Unsubscribe, ToolUseStartedEvent } from '../../generated/balloons-client';
-import { AppLayout, useLayout, useTheme, ThemeProvider, usePreferences, PreferencesProvider, MarkdownThemeApplicator } from './components/layout';
+import { AppLayout, ThemeProvider, usePreferences, PreferencesProvider, MarkdownThemeApplicator } from './components/layout';
 import { MobileHeader, MainContentHeader, SidebarContent, type MainContentTab } from './components/layout/AppChrome';
-import { SessionTreeView } from './components/SessionTreeView';
-import { HierarchyView } from './components/HierarchyView';
 import { FileBrowserView, type FileBrowserViewRef } from './components/FileBrowserView';
 import { SupervisorTab } from './components/SupervisorTab';
 import { BrowserTab } from './components/BrowserTab';
@@ -17,28 +15,21 @@ import { LLMTab } from './components/LLMTab';
 import { CodeTab, type CodeReview, type CodeTabHandle, type GitStatusInfo } from './components/CodeTab';
 import { SessionStatusBar } from './components/SessionStatusBar';
 import { StreamingStatusBar } from './components/StreamingStatusBar';
-import { ForkProposalTurn } from './components/ForkProposalTurn';
 import { SessionReviewModal, type SessionReview, type BackendInfo } from './components/SessionReviewModal';
 import { PropertiesTab } from './components/PropertiesTab';
 import { StreamingTurnsView, type StreamingProgress } from './components/StreamingTurnsView';
-import { ContextTabView, type ExchangeAction as ContextTabExchangeAction } from './components/ContextTabView';
+import { ContextTabView } from './components/ContextTabView';
 import { DialogProvider, useDialog } from './components/Dialog';
-import { useWakeLock, useSoundNotifications, useLongPress, useVisualViewport, useUnreadSessions, useLinkStash, useInputAreaResize, type LinkStashItem } from './hooks';
+import { useSoundNotifications, useUnreadSessions, useLinkStash, useInputAreaResize } from './hooks';
 import { LinkStashArea } from './components/LinkStashArea';
-import { RenameSessionModal } from './components/RenameSessionModal';
-import { VoiceInput } from './components/VoiceInput';
 import { MessageInputWithIcons, type MessageInputWithIconsHandle } from './components/MessageInputWithIcons';
 import { SendActionButton, type SendAction } from './components/SendActionButton';
-import { setDebugClient, createLogger, isDebugEnabled, setDebugEnabled, debugLog as rawDebugLog } from './utils/debugLog';
+import { setDebugClient, createLogger, debugLog as rawDebugLog } from './utils/debugLog';
 import { logout, isAuthenticated } from './utils/auth';
-import { getWsUrlForSlot, getAuthUrlForSlot, getInitialSlot, SLOT_PORTS, type ServerSlot } from './utils/serverSlots';
-import { sortTurnsByIdx, turnSnapshotToInfo, sessionDataTurnToInfo, loadSessionWithLayers, formatTokens } from './utils/turnTransforms';
+import { getWsUrlForSlot, getAuthUrlForSlot, getInitialSlot, type ServerSlot } from './utils/serverSlots';
+import { sortTurnsByIdx, sessionDataTurnToInfo, loadSessionWithLayers } from './utils/turnTransforms';
 import type { SessionDataTurn } from './hooks/useSessionData';
 import { Login } from './components/Login';
-
-// Module-level client reference for debug logging
-// Set when client connects, cleared on disconnect
-let globalClient: BalloonsClient | null = null;
 
 // Create a scoped logger for this module
 const debugLog = createLogger('App');
@@ -113,13 +104,6 @@ function AppContent() {
   const reconnectFnRef = useRef<(() => Promise<void>) | null>(null);
   const reconnectInFlightRef = useRef(false);
 
-  // Debug logging toggle - persisted to localStorage via debugLog module
-  const [debugEnabled, setDebugEnabledState] = useState<boolean>(isDebugEnabled);
-  const handleToggleDebug = useCallback(() => {
-    const newValue = !debugEnabled;
-    setDebugEnabledState(newValue);
-    setDebugEnabled(newValue);
-  }, [debugEnabled]);
   const [sessions, setSessions] = useState<SessionInfo[]>([]);
 
   // Persist slot to localStorage when changed
@@ -305,8 +289,7 @@ function AppContent() {
     client.connect()
       .then(async () => {
         setError(null);
-        // Set global client for debug logging (both local ref and shared utility)
-        globalClient = client;
+        // Set the shared debug client so debugLog can trace RPC calls.
         setDebugClient(client);
 
         // Load initial session list
@@ -357,7 +340,6 @@ function AppContent() {
     return () => {
       debugLog(`Disconnecting from slot ${serverSlot}`);
       unsubState();
-      globalClient = null;
       setDebugClient(null);
       client.disconnect();
     };
@@ -1054,37 +1036,6 @@ function AppContent() {
   const generateImageId = () => `img-${Date.now()}-${Math.random().toString(36).substring(2, 9)}`;
 
   // Upload image to server
-  const uploadImage = useCallback(async (attachment: ImageAttachment): Promise<ImageAttachment> => {
-    const client = clientRef.current;
-    if (!client || connectionState !== 'connected') {
-      return { ...attachment, error: 'Not connected' };
-    }
-
-    try {
-      // Read file as base64
-      const arrayBuffer = await attachment.file.arrayBuffer();
-      const base64 = btoa(
-        new Uint8Array(arrayBuffer).reduce((data, byte) => data + String.fromCharCode(byte), '')
-      );
-
-      // Upload via WebSocket RPC (images service)
-      // Note: We need to call the images service - for now, we'll extend sessions
-      // Actually, let's store the base64 data directly and let the backend handle it
-      // when we submit the message
-
-      // For now, mark as uploaded with the base64 data stored
-      return {
-        ...attachment,
-        uploading: false,
-        uploaded: true,
-        // We'll send the base64 data with the message
-      };
-    } catch (err) {
-      console.error('Failed to upload image:', err);
-      return { ...attachment, uploading: false, error: `Upload failed: ${err}` };
-    }
-  }, [connectionState]);
-
   // Handle file selection (from file input or paste)
   const handleImageFiles = useCallback(async (files: FileList | File[]) => {
     const imageFiles = Array.from(files).filter(f => f.type.startsWith('image/'));
@@ -1169,14 +1120,7 @@ function AppContent() {
   // Track text before recording started (for cancel/restore)
   const voicePreRecordingTextRef = useRef('');
 
-  // Clear voice input state
-  const handleVoiceClear = useCallback(() => {
-    voiceCommittedTextRef.current = '';
-    setVoicePartialText('');
-    setHasVoiceContent(false);
-    messageInputRef.current?.setValue('');
-    // Note: Don't focus the input - on mobile it would trigger the keyboard
-  }, []);
+  
 
   // Called when voice recording starts - save current text for potential cancel
   // and clear any stale partial text from previous recordings
@@ -1214,19 +1158,7 @@ function AppContent() {
     setHasVoiceContent(voicePreRecordingTextRef.current.length > 0);
   }, []);
 
-  // Commit partial text to the input (called on disconnect to save work)
-  const handleVoiceCommitPartial = useCallback(() => {
-    if (voicePartialText) {
-      // Append partial text to committed text
-      const newCommitted = voiceCommittedTextRef.current
-        ? `${voiceCommittedTextRef.current} ${voicePartialText}`
-        : voicePartialText;
-      voiceCommittedTextRef.current = newCommitted;
-      messageInputRef.current?.setValue(newCommitted);
-      setVoicePartialText('');
-      setHasVoiceContent(true);
-    }
-  }, [voicePartialText]);
+  
 
   // Sync voice state when user manually edits the input
   const handleInputChange = useCallback((value: string) => {
@@ -1764,7 +1696,6 @@ function AppContent() {
           client={clientRef.current}
           selectedSessionId={selectedSessionId}
           selectedSession={selectedSession}
-          turns={turns}
           streamingTask={streamingTask}
           onSelectSession={handleSelectSession}
           onSelectTurn={handleSelectTurn}
