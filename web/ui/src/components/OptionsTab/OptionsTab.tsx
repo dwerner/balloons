@@ -211,18 +211,8 @@ export const OptionsTab = memo(function OptionsTab({
     return `${(bytes / Math.pow(1024, exp)).toFixed(exp === 0 ? 0 : 1)} ${units[exp]}`;
   };
 
-  if (!isConnected) {
-    return (
-      <div className="options-tab">
-        <div className="options-tab__disconnected">
-          Connect to server to configure options
-        </div>
-      </div>
-    );
-  }
-
-  const hasAnyEnabled = enabledCategories.length > 0;
-
+  // Hooks must run unconditionally, so this handler is defined before the
+  // disconnected early-return below.
   const handleToggleLogging = useCallback(async () => {
     if (!debugLogClient) return;
 
@@ -237,6 +227,18 @@ export const OptionsTab = memo(function OptionsTab({
       setIsLoading(false);
     }
   }, [debugLogClient, loggingEnabled]);
+
+  if (!isConnected) {
+    return (
+      <div className="options-tab">
+        <div className="options-tab__disconnected">
+          Connect to server to configure options
+        </div>
+      </div>
+    );
+  }
+
+  const hasAnyEnabled = enabledCategories.length > 0;
 
   // Calculate uptime if we have server identity
   const getUptime = () => {

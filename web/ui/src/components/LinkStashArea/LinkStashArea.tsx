@@ -167,13 +167,14 @@ export const LinkStashArea = memo(function LinkStashArea({
   collapsed = false,
   onCollapseChange,
 }: LinkStashAreaProps) {
-  if (items.length === 0) {
-    return null;
-  }
-
+  // Hooks must run unconditionally; the empty guard lives below them.
   const handleToggleCollapse = useCallback(() => {
     onCollapseChange?.(!collapsed);
   }, [collapsed, onCollapseChange]);
+
+  if (items.length === 0) {
+    return null;
+  }
 
   return (
     <div className={`link-stash-area ${collapsed ? 'link-stash-area--collapsed' : ''}`}>

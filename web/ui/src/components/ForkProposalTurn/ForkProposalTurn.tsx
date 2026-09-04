@@ -332,17 +332,11 @@ export const ForkProposalTurn = memo(function ForkProposalTurn({
   );
   const [isEditing, setIsEditing] = useState(false);
 
-  // If no proposal found, render nothing
-  if (!parsedProposal) {
-    return null;
-  }
-
-  const { proposalId, name, description, bindTo, bindToInherit } = parsedProposal;
-  const isPending = status === 'pending';
-
+  // Hooks must run unconditionally, so the "no proposal" guard lives below
+  // them. The handlers guard against a null proposal internally.
   const handleAccept = useCallback(() => {
     setStatus('accepted');
-    if (onAccept) {
+    if (onAccept && parsedProposal) {
       onAccept({
         ...parsedProposal,
         contextPlan,
@@ -354,10 +348,10 @@ export const ForkProposalTurn = memo(function ForkProposalTurn({
 
   const handleReject = useCallback(() => {
     setStatus('rejected');
-    if (onReject) {
-      onReject(proposalId);
+    if (onReject && parsedProposal) {
+      onReject(parsedProposal.proposalId);
     }
-  }, [proposalId, onReject]);
+  }, [parsedProposal, onReject]);
 
   const handleEdit = useCallback(() => {
     setIsEditing(true);
@@ -366,6 +360,14 @@ export const ForkProposalTurn = memo(function ForkProposalTurn({
   const handleSaveEdit = useCallback(() => {
     setIsEditing(false);
   }, []);
+
+  // If no proposal found, render nothing
+  if (!parsedProposal) {
+    return null;
+  }
+
+  const { proposalId, name, description, bindTo, bindToInherit } = parsedProposal;
+  const isPending = status === 'pending';
 
   return (
     <div className={`fork-proposal-turn status-${status}`}>

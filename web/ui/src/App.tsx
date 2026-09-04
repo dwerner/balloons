@@ -231,6 +231,10 @@ async function loadSessionWithLayers(
   return new Promise((resolve, reject) => {
     const collectedTurns: Map<string, TurnSnapshot> = new Map();
     const handlers: Unsubscribe[] = [];
+    // Declared before `cleanup` (which clears it) but assigned after (the
+    // timeout callback calls `cleanup`) — a genuine circular dependency, so
+    // this cannot be a const.
+    // eslint-disable-next-line prefer-const
     let timeoutId: ReturnType<typeof setTimeout>;
 
     const cleanup = () => {

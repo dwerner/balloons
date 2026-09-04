@@ -89,14 +89,28 @@ export const CardBackgroundPattern = memo(function CardBackgroundPattern({
     };
   }, [seamless]);
 
+  // Check if this is a custom background
+  const isCustom = cardBgPattern.startsWith('custom-');
+  const customBackground = isCustom ? getCustomBackground(cardBgPattern) : undefined;
+
+  // Encode a custom full background as a data URL. Computed unconditionally
+  // (as a hook) so hook order stays stable across renders; returns undefined
+  // for non-custom-full backgrounds.
+  const encodedSvg = useMemo(() => {
+    if (!customBackground || customBackground.type !== 'custom-full') {
+      return undefined;
+    }
+    const svg = customBackground.svg
+      .replace(/[\r\n]+/g, ' ')
+      .replace(/\s+/g, ' ')
+      .trim();
+    return `url("data:image/svg+xml,${encodeURIComponent(svg)}")`;
+  }, [customBackground?.svg]);
+
   // Don't render anything if no pattern selected
   if (cardBgPattern === 'none' || !cardBgPattern || cardBgPatternOpacity <= 0) {
     return null;
   }
-
-  // Check if this is a custom background
-  const isCustom = cardBgPattern.startsWith('custom-');
-  const customBackground = isCustom ? getCustomBackground(cardBgPattern) : undefined;
 
   // Apply scale via CSS transform
   const scaleStyle = cardBgPatternScale !== 1 ? {
@@ -108,14 +122,6 @@ export const CardBackgroundPattern = memo(function CardBackgroundPattern({
 
   // For custom full backgrounds, render as background-image (no seamless for full bg)
   if (isCustom && customBackground?.type === 'custom-full') {
-    const encodedSvg = useMemo(() => {
-      const svg = customBackground.svg
-        .replace(/[\r\n]+/g, ' ')
-        .replace(/\s+/g, ' ')
-        .trim();
-      return `url("data:image/svg+xml,${encodeURIComponent(svg)}")`;
-    }, [customBackground.svg]);
-
     return (
       <div
         ref={overlayRef}

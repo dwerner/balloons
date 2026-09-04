@@ -277,13 +277,14 @@ function TurnNode({
         const input = JSON.parse(turn.toolUse.inputJson || '{}');
         // Format based on tool type
         switch (toolName) {
-          case 'Read':
+          case 'Read': {
             const filePath = input.file_path || '';
             const fileName = filePath.split('/').pop() || filePath;
             const parts = [fileName];
             if (input.offset) parts.push(`@${input.offset}`);
             if (input.limit) parts.push(`+${input.limit}`);
             return `Read: ${parts.join(' ')}`;
+          }
           case 'Edit': {
             const editPath = input.file_path || '';
             const editName = editPath.split('/').pop() || editPath;
@@ -297,31 +298,37 @@ function TurnNode({
             }
             return `Edit: ${editName} (${oldLines}→${newLines} lines)`;
           }
-          case 'Write':
+          case 'Write': {
             const writePath = input.file_path || '';
             const writeName = writePath.split('/').pop() || writePath;
             const contentLen = (input.content || '').length;
             return `Write: ${writeName} (${contentLen} chars)`;
-          case 'Bash':
+          }
+          case 'Bash': {
             const cmd = input.command || '';
             const cmdPreview = cmd.length > 40 ? cmd.slice(0, 40) + '...' : cmd;
             return `Bash: ${cmdPreview}`;
-          case 'Grep':
+          }
+          case 'Grep': {
             const pattern = input.pattern || '';
             const grepPath = input.path ? ` in ${input.path.split('/').pop()}` : '';
             return `Grep: "${pattern}"${grepPath}`;
-          case 'Glob':
+          }
+          case 'Glob': {
             const globPattern = input.pattern || '';
             const globPath = input.path ? ` in ${input.path.split('/').pop()}` : '';
             return `Glob: ${globPattern}${globPath}`;
-          case 'WebFetch':
+          }
+          case 'WebFetch': {
             const url = input.url || '';
             const domain = url.replace(/^https?:\/\//, '').split('/')[0];
             return `WebFetch: ${domain}`;
-          case 'WebSearch':
+          }
+          case 'WebSearch': {
             const query = input.query || '';
             return `WebSearch: "${query}"`;
-          default:
+          }
+          default: {
             // Generic format: show first few input keys/values
             const entries = Object.entries(input).slice(0, 2);
             if (entries.length === 0) return toolName;
@@ -330,6 +337,7 @@ function TurnNode({
               return `${k}=${val}`;
             }).join(', ');
             return `${toolName}: ${summary}`;
+          }
         }
       } catch {
         return toolName;

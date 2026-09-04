@@ -26,8 +26,12 @@
     "noUnusedParameters": false,
     "noPropertyAccessFromIndexSignature": false
   },
-  "exclude": [
-    "**/*.test.ts",
-    "**/*.test.tsx"
+  "include": [
+    "src",
+    "../generated",
+    "happydom.ts",
+    "dev-server.ts",
+    "dev-server-tls.ts",
+    "node_modules/@testing-library/jest-dom/types/bun.d.ts"
   ]
 }

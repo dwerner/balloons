@@ -5,3 +5,7 @@
 
 [install]
 minimumReleaseAge = 1296000
+
+[test]
+# happy-dom window + jest-dom matchers for component tests
+preload = ["./happydom.ts"]

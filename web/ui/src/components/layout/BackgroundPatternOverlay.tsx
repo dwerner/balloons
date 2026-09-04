@@ -37,6 +37,20 @@ export const BackgroundPatternOverlay = memo(function BackgroundPatternOverlay({
   customBackground,
   className = '',
 }: BackgroundPatternOverlayProps) {
+  // Encode a custom full background as a data URL. Computed unconditionally
+  // (as a hook) so hook order stays stable across renders; returns undefined
+  // for non-custom-full backgrounds.
+  const encodedSvg = useMemo(() => {
+    if (!customBackground || customBackground.type !== 'custom-full') {
+      return undefined;
+    }
+    const svg = customBackground.svg
+      .replace(/[\r\n]+/g, ' ')
+      .replace(/\s+/g, ' ')
+      .trim();
+    return `url("data:image/svg+xml,${encodeURIComponent(svg)}")`;
+  }, [customBackground?.svg]);
+
   // Don't render anything if no pattern selected
   if (patternId === 'none' || !patternId || opacity <= 0) {
     return null;
@@ -56,17 +70,6 @@ export const BackgroundPatternOverlay = memo(function BackgroundPatternOverlay({
   // For custom full backgrounds, render the SVG as a background-image with fit mode
   if (isCustom && customBackground?.type === 'custom-full') {
     const fitMode = customBackground.fitMode || 'cover';
-
-    // Encode SVG as data URL for use as background-image
-    // This allows object-fit-like behavior via background-size
-    const encodedSvg = useMemo(() => {
-      // Clean up the SVG and encode it
-      const svg = customBackground.svg
-        .replace(/[\r\n]+/g, ' ')
-        .replace(/\s+/g, ' ')
-        .trim();
-      return `url("data:image/svg+xml,${encodeURIComponent(svg)}")`;
-    }, [customBackground.svg]);
 
     // Map fit modes to background-size/position
     const backgroundStyles: React.CSSProperties = {

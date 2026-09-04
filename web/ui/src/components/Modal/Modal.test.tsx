@@ -10,6 +10,7 @@
  */
 
 import React from 'react';
+import { describe, it, expect, beforeEach, mock } from 'bun:test';
 import { render, screen, fireEvent, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { Modal, ModalFooter } from './Modal';
@@ -17,13 +18,13 @@ import { Modal, ModalFooter } from './Modal';
 describe('Modal', () => {
   const defaultProps = {
     isOpen: true,
-    onClose: jest.fn(),
+    onClose: mock(),
     title: 'Test Modal',
     children: <div>Modal content</div>,
   };
 
   beforeEach(() => {
-    jest.clearAllMocks();
+    defaultProps.onClose.mockClear();
   });
 
   describe('rendering', () => {
@@ -93,7 +94,7 @@ describe('Modal', () => {
 
   describe('closing behavior', () => {
     it('calls onClose when clicking the close button', async () => {
-      const onClose = jest.fn();
+      const onClose = mock();
       render(<Modal {...defaultProps} onClose={onClose} />);
 
       await userEvent.click(screen.getByLabelText('Close modal'));
@@ -101,7 +102,7 @@ describe('Modal', () => {
     });
 
     it('calls onClose when clicking the backdrop', async () => {
-      const onClose = jest.fn();
+      const onClose = mock();
       render(<Modal {...defaultProps} onClose={onClose} />);
 
       // Click on the overlay (backdrop)
@@ -111,7 +112,7 @@ describe('Modal', () => {
     });
 
     it('does not call onClose when clicking inside the modal', async () => {
-      const onClose = jest.fn();
+      const onClose = mock();
       render(<Modal {...defaultProps} onClose={onClose} />);
 
       await userEvent.click(screen.getByText('Modal content'));
@@ -119,7 +120,7 @@ describe('Modal', () => {
     });
 
     it('does not close on backdrop click when closeOnBackdropClick is false', async () => {
-      const onClose = jest.fn();
+      const onClose = mock();
       render(<Modal {...defaultProps} onClose={onClose} closeOnBackdropClick={false} />);
 
       const overlay = screen.getByRole('dialog').parentElement;
@@ -128,7 +129,7 @@ describe('Modal', () => {
     });
 
     it('calls onClose when pressing Escape', async () => {
-      const onClose = jest.fn();
+      const onClose = mock();
       render(<Modal {...defaultProps} onClose={onClose} />);
 
       fireEvent.keyDown(screen.getByRole('dialog').parentElement!, {
@@ -138,7 +139,7 @@ describe('Modal', () => {
     });
 
     it('does not close on Escape when closeOnEscape is false', async () => {
-      const onClose = jest.fn();
+      const onClose = mock();
       render(<Modal {...defaultProps} onClose={onClose} closeOnEscape={false} />);
 
       fireEvent.keyDown(screen.getByRole('dialog').parentElement!, {
@@ -157,8 +158,10 @@ describe('Modal', () => {
         </Modal>
       );
 
+      // The close button is the first focusable element in the dialog
+      // (it precedes the body content), so it receives initial focus.
       await waitFor(() => {
-        expect(screen.getByText('First button')).toHaveFocus();
+        expect(screen.getByLabelText('Close modal')).toHaveFocus();
       });
     });
 

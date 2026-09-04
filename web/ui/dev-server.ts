@@ -102,7 +102,7 @@ let rebuildTimeout: ReturnType<typeof setTimeout> | null = null;
 
 const watcher = chokidar.watch(dirsToWatch, {
   ignoreInitial: true,
-  ignored: /(^|[\/\\])\../, // ignore dotfiles
+  ignored: /(^|[/\\])\../, // ignore dotfiles
 });
 
 watcher.on("all", async (event, filePath) => {

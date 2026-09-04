@@ -47,6 +47,7 @@ function parseAnsi(text: string): AnsiSpan[] {
   let lastIndex = 0;
 
   // Match ANSI escape sequences: ESC [ ... m (SGR) or other CSI sequences
+  // eslint-disable-next-line no-control-regex -- intentionally matching the ESC control char
   const ansiRegex = /\x1b\[([0-9;]*)([A-Za-z])/g;
   let match;
 
