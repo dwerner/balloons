@@ -9,13 +9,12 @@ Completed and verified (typecheck + build + tests green at each commit):
 - **WS0 — build gate**: restored the regressed `create_watcher_session` backend method (the UI "Watch session" action was calling a method that no longer existed); deleted dead `SessionDataContext`; wired `tsc --noEmit` into the dev-server watch loop.
 - **WS1 — dead-code purge**: removed ~2.9k lines (dead turn components, ChessTab, DebugPaneDemo, LinkSessionModal, orphaned `.collapsible*` CSS = Bug #17); routed all debug `console.log` through `debugLog`.
 - **WS2 — test + lint pipeline**: happy-dom + jest-dom preload, `bun test` (52 tests, was 9), ESLint flat config (0 errors), tests included in typecheck. Fixed all 8 `react-hooks/rules-of-hooks` violations (hooks after early returns). Extracted `utils/sessionGrouping.ts` + 14 characterization tests pinning tree-grouping behaviour (guards WS5 / Bugs #7/#23).
-- **WS3 — partial**: extracted `utils/serverSlots.ts` and `utils/turnTransforms.ts`; removed dead `MessageInput`. **App.tsx 4757 → 3696 lines.**
+- **WS3 — most done**: extracted `utils/serverSlots.ts`, `utils/turnTransforms.ts`, and `components/layout/AppChrome.tsx` (mobile/main headers, sidebar, session list item, tab types); removed dead `MessageInput`. **App.tsx 4757 → 3025 lines.**
 - **WS5 — contract fixes**: real `is_pinned` in session events via a server-side pinned cache (Bug #23); generated client now calls qualified RPC names (Bug #11), collision warnings downgraded.
 
 Remaining (larger / need live-app verification — left at a clean checkpoint rather than risk regressions):
 
-- **WS3 (rest)**: move presentational chrome (`MobileHeader`, `MainContentHeader`, `SidebarContent`, `SessionListItem`) out of `AppContent`.
-- **WS4 — single source of truth**: introduce a store to retire the child→parent→sibling turn round-trip and the parallel `TurnInfo`/`SessionDataTurn` state (Bugs #13, #18, #22, #9). Highest bug leverage; needs the `useSessionData` characterization test written first.
+- **WS4 — single source of truth**: introduce a store to retire the child→parent→sibling turn round-trip and the parallel `TurnInfo`/`SessionDataTurn` state (Bugs #13, #18, #22, #9). Highest bug leverage; needs the `useSessionData` characterization test written first, and live streaming QA.
 - **WS6 — theme tokens**: migrate hardcoded hex in `cards.css`/`styles.css` to CSS custom properties (Bug #6). Best done with visual QA.
 - **WS7 — caching + routing**: IndexedDB cache (Bug #5), lazy tree turn-loading (Bug #4), implement the URL-routing spec.
 - **WS8 — polish**: tool-error single-line rendering (Bug #21), rename-while-streaming (Bug #16 — not gated in code; needs live repro).
