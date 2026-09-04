@@ -214,12 +214,15 @@ class WsServer:
             if method_wire_name not in self._method_dispatch:
                 self._method_dispatch[method_wire_name] = (registration, method_spec)
             else:
-                # Collision - remove short name, require qualified
-                logger.warning(
-                    f"Method name collision: {method_wire_name} exists in multiple services. "
-                    f"Use qualified names like {qualified_name}"
+                # Collision on the short name. This is expected: the generated
+                # client always calls the qualified name ("<Service>.<method>"),
+                # which is unambiguous. The short name remains as a legacy
+                # fallback routing to the first-registered service. Logged at
+                # debug to avoid startup noise (BUGS.md #11).
+                logger.debug(
+                    f"Short method name '{method_wire_name}' exists in multiple "
+                    f"services; qualified '{qualified_name}' is canonical."
                 )
-                # Keep the first one registered (or could clear it)
 
         # Wire up event handler
         if hasattr(service_instance, "add_event_handler"):

@@ -266,59 +266,59 @@ export class QueueStateServiceClient implements QueueStateService {
   }
 
   async addMessage(sessionId: string, content: string): Promise<string> {
-    return this.call('addMessage', { sessionId: sessionId, content: content });
+    return this.call('QueueStateService.addMessage', { sessionId: sessionId, content: content });
   }
 
   async clear(sessionId: string): Promise<number> {
-    return this.call('clear', { sessionId: sessionId });
+    return this.call('QueueStateService.clear', { sessionId: sessionId });
   }
 
   async drain(sessionId: string): Promise<string[]> {
-    return this.call('drain', { sessionId: sessionId });
+    return this.call('QueueStateService.drain', { sessionId: sessionId });
   }
 
   async getActiveQueue(): Promise<Types.QueueInfo | null> {
-    return this.call('getActiveQueue', {  });
+    return this.call('QueueStateService.getActiveQueue', {  });
   }
 
   async getActiveSessionId(): Promise<string | null> {
-    return this.call('getActiveSessionId', {  });
+    return this.call('QueueStateService.getActiveSessionId', {  });
   }
 
   async getAllSessionsWithQueues(): Promise<string[]> {
-    return this.call('getAllSessionsWithQueues', {  });
+    return this.call('QueueStateService.getAllSessionsWithQueues', {  });
   }
 
   async getMessageCount(sessionId: string): Promise<number> {
-    return this.call('getMessageCount', { sessionId: sessionId });
+    return this.call('QueueStateService.getMessageCount', { sessionId: sessionId });
   }
 
   async getQueue(sessionId: string): Promise<Types.QueueInfo> {
-    return this.call('getQueue', { sessionId: sessionId });
+    return this.call('QueueStateService.getQueue', { sessionId: sessionId });
   }
 
   async hasMessages(sessionId: string): Promise<boolean> {
-    return this.call('hasMessages', { sessionId: sessionId });
+    return this.call('QueueStateService.hasMessages', { sessionId: sessionId });
   }
 
   async isBlocked(sessionId: string): Promise<boolean> {
-    return this.call('isBlocked', { sessionId: sessionId });
+    return this.call('QueueStateService.isBlocked', { sessionId: sessionId });
   }
 
   async removeMessage(sessionId: string, messageId: string): Promise<boolean> {
-    return this.call('removeMessage', { sessionId: sessionId, messageId: messageId });
+    return this.call('QueueStateService.removeMessage', { sessionId: sessionId, messageId: messageId });
   }
 
   async setActiveSession(sessionId: string | null): Promise<null> {
-    return this.call('setActiveSession', { sessionId: sessionId });
+    return this.call('QueueStateService.setActiveSession', { sessionId: sessionId });
   }
 
   async togglePause(sessionId: string, messageId: string): Promise<boolean | null> {
-    return this.call('togglePause', { sessionId: sessionId, messageId: messageId });
+    return this.call('QueueStateService.togglePause', { sessionId: sessionId, messageId: messageId });
   }
 
   async updateContent(sessionId: string, messageId: string, content: string): Promise<boolean> {
-    return this.call('updateContent', { sessionId: sessionId, messageId: messageId, content: content });
+    return this.call('QueueStateService.updateContent', { sessionId: sessionId, messageId: messageId, content: content });
   }
 
   onFullRebuild(callback: (data: Types.QueueEventData) => void): Unsubscribe {
@@ -1328,239 +1328,239 @@ export class SessionManagerServiceClient implements SessionManagerService {
   }
 
   async addSessionPromptFile(sessionId: string, filePath: string): Promise<Record<string, unknown>> {
-    return this.call('addSessionPromptFile', { sessionId: sessionId, filePath: filePath });
+    return this.call('SessionManagerService.addSessionPromptFile', { sessionId: sessionId, filePath: filePath });
   }
 
   async approveSessionReview(sessionId: string, summaryId: string, approvedTitle: string, editedMarkdown?: string | null): Promise<Types.ApproveSessionReviewResult> {
-    return this.call('approveSessionReview', { sessionId: sessionId, summaryId: summaryId, approvedTitle: approvedTitle, editedMarkdown: editedMarkdown });
+    return this.call('SessionManagerService.approveSessionReview', { sessionId: sessionId, summaryId: summaryId, approvedTitle: approvedTitle, editedMarkdown: editedMarkdown });
   }
 
   async awaitHelperResult(helperId: string, timeoutSeconds?: number): Promise<string> {
-    return this.call('awaitHelperResult', { helperId: helperId, timeoutSeconds: timeoutSeconds });
+    return this.call('SessionManagerService.awaitHelperResult', { helperId: helperId, timeoutSeconds: timeoutSeconds });
   }
 
   async cancelStreaming(sessionId: string): Promise<boolean> {
-    return this.call('cancelStreaming', { sessionId: sessionId });
+    return this.call('SessionManagerService.cancelStreaming', { sessionId: sessionId });
   }
 
   async completeArchive(helperId: string, summary?: string | null): Promise<Types.CompleteArchiveResult> {
-    return this.call('completeArchive', { helperId: helperId, summary: summary });
+    return this.call('SessionManagerService.completeArchive', { helperId: helperId, summary: summary });
   }
 
   async completeDeriveAfterCompression(helperId: string, compressedSummary: string, startStreaming?: boolean): Promise<Types.DeriveSessionResult> {
-    return this.call('completeDeriveAfterCompression', { helperId: helperId, compressedSummary: compressedSummary, startStreaming: startStreaming });
+    return this.call('SessionManagerService.completeDeriveAfterCompression', { helperId: helperId, compressedSummary: compressedSummary, startStreaming: startStreaming });
   }
 
   async completeForkAfterCompression(helperId: string, compressedSummary: string, startStreaming?: boolean): Promise<Types.ForkSessionResult> {
-    return this.call('completeForkAfterCompression', { helperId: helperId, compressedSummary: compressedSummary, startStreaming: startStreaming });
+    return this.call('SessionManagerService.completeForkAfterCompression', { helperId: helperId, compressedSummary: compressedSummary, startStreaming: startStreaming });
   }
 
   async completeSessionReview(helperId: string, resultText: string): Promise<Types.CompleteSessionReviewResult> {
-    return this.call('completeSessionReview', { helperId: helperId, resultText: resultText });
+    return this.call('SessionManagerService.completeSessionReview', { helperId: helperId, resultText: resultText });
   }
 
   async concludeSession(sessionId: string, reason?: string): Promise<Types.ConcludeSessionResult> {
-    return this.call('concludeSession', { sessionId: sessionId, reason: reason });
+    return this.call('SessionManagerService.concludeSession', { sessionId: sessionId, reason: reason });
   }
 
   async createSession(workingDirectory?: string | null): Promise<Types.ManagedSessionInfo> {
-    return this.call('createSession', { workingDirectory: workingDirectory });
+    return this.call('SessionManagerService.createSession', { workingDirectory: workingDirectory });
   }
 
   async createWatcherSession(targetSessionId: string): Promise<Types.CreateWatcherSessionResult> {
-    return this.call('createWatcherSession', { targetSessionId: targetSessionId });
+    return this.call('SessionManagerService.createWatcherSession', { targetSessionId: targetSessionId });
   }
 
   async deleteSession(sessionId: string): Promise<boolean> {
-    return this.call('deleteSession', { sessionId: sessionId });
+    return this.call('SessionManagerService.deleteSession', { sessionId: sessionId });
   }
 
   async deriveSession(sourceSessionId: string, prompt?: string, contextModes?: Record<string, unknown>[] | null, allowedTools?: string[] | null, startStreaming?: boolean): Promise<Types.DeriveSessionResult> {
-    return this.call('deriveSession', { sourceSessionId: sourceSessionId, prompt: prompt, contextModes: contextModes, allowedTools: allowedTools, startStreaming: startStreaming });
+    return this.call('SessionManagerService.deriveSession', { sourceSessionId: sourceSessionId, prompt: prompt, contextModes: contextModes, allowedTools: allowedTools, startStreaming: startStreaming });
   }
 
   async findSwitchTarget(sessionId: string, name: string): Promise<Types.SwitchTargetResult> {
-    return this.call('findSwitchTarget', { sessionId: sessionId, name: name });
+    return this.call('SessionManagerService.findSwitchTarget', { sessionId: sessionId, name: name });
   }
 
   async forkSession(parentSessionId: string, prompt: string, name?: string, background?: boolean, contextModes?: Record<string, unknown>[] | null, allowedTools?: string[] | null, startStreaming?: boolean, autoCompleteCompression?: boolean, backendName?: string): Promise<Types.ForkSessionResult> {
-    return this.call('forkSession', { parentSessionId: parentSessionId, prompt: prompt, name: name, background: background, contextModes: contextModes, allowedTools: allowedTools, startStreaming: startStreaming, autoCompleteCompression: autoCompleteCompression, backendName: backendName });
+    return this.call('SessionManagerService.forkSession', { parentSessionId: parentSessionId, prompt: prompt, name: name, background: background, contextModes: contextModes, allowedTools: allowedTools, startStreaming: startStreaming, autoCompleteCompression: autoCompleteCompression, backendName: backendName });
   }
 
   async generateCommitMessage(gitRoot: string, stagedDiff: string): Promise<Types.GenerateCommitMessageResult> {
-    return this.call('generateCommitMessage', { gitRoot: gitRoot, stagedDiff: stagedDiff });
+    return this.call('SessionManagerService.generateCommitMessage', { gitRoot: gitRoot, stagedDiff: stagedDiff });
   }
 
   async getActiveSessionId(): Promise<string | null> {
-    return this.call('getActiveSessionId', {  });
+    return this.call('SessionManagerService.getActiveSessionId', {  });
   }
 
   async getAllStreamingInfo(): Promise<Types.StreamingInfo[]> {
-    return this.call('getAllStreamingInfo', {  });
+    return this.call('SessionManagerService.getAllStreamingInfo', {  });
   }
 
   async getAvailableTools(): Promise<Record<string, unknown>> {
-    return this.call('getAvailableTools', {  });
+    return this.call('SessionManagerService.getAvailableTools', {  });
   }
 
   async getDefaultEnabledTools(): Promise<string[]> {
-    return this.call('getDefaultEnabledTools', {  });
+    return this.call('SessionManagerService.getDefaultEnabledTools', {  });
   }
 
   async getDomainInfo(): Promise<Record<string, unknown>> {
-    return this.call('getDomainInfo', {  });
+    return this.call('SessionManagerService.getDomainInfo', {  });
   }
 
   async getExchangeSummaries(sessionId: string, excludeCurrent?: boolean): Promise<Types.ExchangeSummary[]> {
-    return this.call('getExchangeSummaries', { sessionId: sessionId, excludeCurrent: excludeCurrent });
+    return this.call('SessionManagerService.getExchangeSummaries', { sessionId: sessionId, excludeCurrent: excludeCurrent });
   }
 
   async getPromptPreview(sessionId?: string | null, enabledTools?: string[] | null): Promise<Record<string, unknown>> {
-    return this.call('getPromptPreview', { sessionId: sessionId, enabledTools: enabledTools });
+    return this.call('SessionManagerService.getPromptPreview', { sessionId: sessionId, enabledTools: enabledTools });
   }
 
   async getRunnerContextPreview(sessionId: string, enabledTools?: string[] | null): Promise<Types.RunnerContextPreviewResult> {
-    return this.call('getRunnerContextPreview', { sessionId: sessionId, enabledTools: enabledTools });
+    return this.call('SessionManagerService.getRunnerContextPreview', { sessionId: sessionId, enabledTools: enabledTools });
   }
 
   async getSession(sessionId: string): Promise<Types.ManagedSessionInfo | null> {
-    return this.call('getSession', { sessionId: sessionId });
+    return this.call('SessionManagerService.getSession', { sessionId: sessionId });
   }
 
   async getSessionBackend(sessionId: string): Promise<string | null> {
-    return this.call('getSessionBackend', { sessionId: sessionId });
+    return this.call('SessionManagerService.getSessionBackend', { sessionId: sessionId });
   }
 
   async getSessionEnabledTools(sessionId: string): Promise<string[]> {
-    return this.call('getSessionEnabledTools', { sessionId: sessionId });
+    return this.call('SessionManagerService.getSessionEnabledTools', { sessionId: sessionId });
   }
 
   async getSessionPromptFiles(sessionId: string): Promise<Record<string, unknown>> {
-    return this.call('getSessionPromptFiles', { sessionId: sessionId });
+    return this.call('SessionManagerService.getSessionPromptFiles', { sessionId: sessionId });
   }
 
   async getSessionReviews(sessionId: string): Promise<Record<string, unknown>[]> {
-    return this.call('getSessionReviews', { sessionId: sessionId });
+    return this.call('SessionManagerService.getSessionReviews', { sessionId: sessionId });
   }
 
   async getStreamingInfo(sessionId: string): Promise<Types.StreamingInfo | null> {
-    return this.call('getStreamingInfo', { sessionId: sessionId });
+    return this.call('SessionManagerService.getStreamingInfo', { sessionId: sessionId });
   }
 
   async getStreamingSessions(): Promise<string[]> {
-    return this.call('getStreamingSessions', {  });
+    return this.call('SessionManagerService.getStreamingSessions', {  });
   }
 
   async getSystemPromptInfo(sessionId?: string | null): Promise<Types.SystemPromptInfoResult> {
-    return this.call('getSystemPromptInfo', { sessionId: sessionId });
+    return this.call('SessionManagerService.getSystemPromptInfo', { sessionId: sessionId });
   }
 
   async getToolSchemasPreview(sessionId?: string | null, enabledTools?: string[] | null): Promise<Record<string, unknown>> {
-    return this.call('getToolSchemasPreview', { sessionId: sessionId, enabledTools: enabledTools });
+    return this.call('SessionManagerService.getToolSchemasPreview', { sessionId: sessionId, enabledTools: enabledTools });
   }
 
   async linkSessions(sourceSessionId: string, targetSessionId: string, summary?: string): Promise<Types.LinkSessionsResult> {
-    return this.call('linkSessions', { sourceSessionId: sourceSessionId, targetSessionId: targetSessionId, summary: summary });
+    return this.call('SessionManagerService.linkSessions', { sourceSessionId: sourceSessionId, targetSessionId: targetSessionId, summary: summary });
   }
 
   async listBackends(): Promise<string[]> {
-    return this.call('listBackends', {  });
+    return this.call('SessionManagerService.listBackends', {  });
   }
 
   async listSessions(): Promise<Types.ManagedSessionInfo[]> {
-    return this.call('listSessions', {  });
+    return this.call('SessionManagerService.listSessions', {  });
   }
 
   async loadDomain(domainId: string, sessionId?: string | null): Promise<Record<string, unknown>> {
-    return this.call('loadDomain', { domainId: domainId, sessionId: sessionId });
+    return this.call('SessionManagerService.loadDomain', { domainId: domainId, sessionId: sessionId });
   }
 
   async mergeSession(forkSessionId: string, mergeSummary: string, filesChanged?: string[] | null, keyAccomplishments?: string[] | null, reason?: string): Promise<Types.MergeSessionResult> {
-    return this.call('mergeSession', { forkSessionId: forkSessionId, mergeSummary: mergeSummary, filesChanged: filesChanged, keyAccomplishments: keyAccomplishments, reason: reason });
+    return this.call('SessionManagerService.mergeSession', { forkSessionId: forkSessionId, mergeSummary: mergeSummary, filesChanged: filesChanged, keyAccomplishments: keyAccomplishments, reason: reason });
   }
 
   async rehydrate(sessionId: string, turnIndex: number): Promise<Types.RehydrateResult> {
-    return this.call('rehydrate', { sessionId: sessionId, turnIndex: turnIndex });
+    return this.call('SessionManagerService.rehydrate', { sessionId: sessionId, turnIndex: turnIndex });
   }
 
   async removeSessionPromptFile(sessionId: string, filePath: string): Promise<Record<string, unknown>> {
-    return this.call('removeSessionPromptFile', { sessionId: sessionId, filePath: filePath });
+    return this.call('SessionManagerService.removeSessionPromptFile', { sessionId: sessionId, filePath: filePath });
   }
 
   async reopenSession(sessionId: string, reason?: string): Promise<Types.ConcludeSessionResult> {
-    return this.call('reopenSession', { sessionId: sessionId, reason: reason });
+    return this.call('SessionManagerService.reopenSession', { sessionId: sessionId, reason: reason });
   }
 
   async requestProposal(sessionId: string, proposalType: string, seedPrompt?: string): Promise<Types.RequestProposalResult> {
-    return this.call('requestProposal', { sessionId: sessionId, proposalType: proposalType, seedPrompt: seedPrompt });
+    return this.call('SessionManagerService.requestProposal', { sessionId: sessionId, proposalType: proposalType, seedPrompt: seedPrompt });
   }
 
   async respondToForkProposal(sessionId: string, proposalId: string, accepted: boolean, contextPlan?: Record<string, unknown>[] | null, initialPrompt?: string | null, name?: string | null, description?: string | null, startStreaming?: boolean, backendName?: string | null): Promise<Types.RespondToForkProposalResult> {
-    return this.call('respondToForkProposal', { sessionId: sessionId, proposalId: proposalId, accepted: accepted, contextPlan: contextPlan, initialPrompt: initialPrompt, name: name, description: description, startStreaming: startStreaming, backendName: backendName });
+    return this.call('SessionManagerService.respondToForkProposal', { sessionId: sessionId, proposalId: proposalId, accepted: accepted, contextPlan: contextPlan, initialPrompt: initialPrompt, name: name, description: description, startStreaming: startStreaming, backendName: backendName });
   }
 
   async respondToMergeProposal(sessionId: string, proposalId: string, accepted: boolean, summary?: string | null, filesChanged?: string[] | null, keyAccomplishments?: string[] | null, reason?: string | null): Promise<Types.RespondToMergeProposalResult> {
-    return this.call('respondToMergeProposal', { sessionId: sessionId, proposalId: proposalId, accepted: accepted, summary: summary, filesChanged: filesChanged, keyAccomplishments: keyAccomplishments, reason: reason });
+    return this.call('SessionManagerService.respondToMergeProposal', { sessionId: sessionId, proposalId: proposalId, accepted: accepted, summary: summary, filesChanged: filesChanged, keyAccomplishments: keyAccomplishments, reason: reason });
   }
 
   async setDefaultEnabledTools(tools: string[]): Promise<boolean> {
-    return this.call('setDefaultEnabledTools', { tools: tools });
+    return this.call('SessionManagerService.setDefaultEnabledTools', { tools: tools });
   }
 
   async setSessionBackend(sessionId: string, backendName: string): Promise<boolean> {
-    return this.call('setSessionBackend', { sessionId: sessionId, backendName: backendName });
+    return this.call('SessionManagerService.setSessionBackend', { sessionId: sessionId, backendName: backendName });
   }
 
   async setSessionEnabledTools(sessionId: string, tools: string[]): Promise<boolean> {
-    return this.call('setSessionEnabledTools', { sessionId: sessionId, tools: tools });
+    return this.call('SessionManagerService.setSessionEnabledTools', { sessionId: sessionId, tools: tools });
   }
 
   async setSessionTitle(sessionId: string, title: string): Promise<boolean> {
-    return this.call('setSessionTitle', { sessionId: sessionId, title: title });
+    return this.call('SessionManagerService.setSessionTitle', { sessionId: sessionId, title: title });
   }
 
   async setSessionWorkingDirectory(sessionId: string, workingDirectory: string): Promise<boolean> {
-    return this.call('setSessionWorkingDirectory', { sessionId: sessionId, workingDirectory: workingDirectory });
+    return this.call('SessionManagerService.setSessionWorkingDirectory', { sessionId: sessionId, workingDirectory: workingDirectory });
   }
 
   async startArchive(sessionId: string, turnIndices: number[], autoComplete?: boolean): Promise<Types.StartArchiveResult> {
-    return this.call('startArchive', { sessionId: sessionId, turnIndices: turnIndices, autoComplete: autoComplete });
+    return this.call('SessionManagerService.startArchive', { sessionId: sessionId, turnIndices: turnIndices, autoComplete: autoComplete });
   }
 
   async startSessionReview(sessionId: string, backendName: string): Promise<Types.StartSessionReviewResult> {
-    return this.call('startSessionReview', { sessionId: sessionId, backendName: backendName });
+    return this.call('SessionManagerService.startSessionReview', { sessionId: sessionId, backendName: backendName });
   }
 
   async startWatchingSession(sessionId: string, targetSessionId: string): Promise<Types.CreateWatcherSessionResult> {
-    return this.call('startWatchingSession', { sessionId: sessionId, targetSessionId: targetSessionId });
+    return this.call('SessionManagerService.startWatchingSession', { sessionId: sessionId, targetSessionId: targetSessionId });
   }
 
   async stopWatchingSession(sessionId: string, targetSessionId?: string | null, reason?: string): Promise<boolean> {
-    return this.call('stopWatchingSession', { sessionId: sessionId, targetSessionId: targetSessionId, reason: reason });
+    return this.call('SessionManagerService.stopWatchingSession', { sessionId: sessionId, targetSessionId: targetSessionId, reason: reason });
   }
 
   async submitMarkdownMessage(sessionId: string, content: string, queue?: boolean, allowedTools?: string[] | null): Promise<Types.SubmitMessageResult> {
-    return this.call('submitMarkdownMessage', { sessionId: sessionId, content: content, queue: queue, allowedTools: allowedTools });
+    return this.call('SessionManagerService.submitMarkdownMessage', { sessionId: sessionId, content: content, queue: queue, allowedTools: allowedTools });
   }
 
   async submitMessage(sessionId: string, content: string, messages?: unknown[] | null, queue?: boolean, allowedTools?: string[] | null): Promise<Types.SubmitMessageResult> {
-    return this.call('submitMessage', { sessionId: sessionId, content: content, messages: messages, queue: queue, allowedTools: allowedTools });
+    return this.call('SessionManagerService.submitMessage', { sessionId: sessionId, content: content, messages: messages, queue: queue, allowedTools: allowedTools });
   }
 
   async submitMessageWithImages(sessionId: string, content: string, images: Record<string, unknown>[], queue?: boolean, allowedTools?: string[] | null): Promise<Types.SubmitMessageResult> {
-    return this.call('submitMessageWithImages', { sessionId: sessionId, content: content, images: images, queue: queue, allowedTools: allowedTools });
+    return this.call('SessionManagerService.submitMessageWithImages', { sessionId: sessionId, content: content, images: images, queue: queue, allowedTools: allowedTools });
   }
 
   async switchSession(sessionId: string): Promise<boolean> {
-    return this.call('switchSession', { sessionId: sessionId });
+    return this.call('SessionManagerService.switchSession', { sessionId: sessionId });
   }
 
   async unloadDomain(domainId: string, sessionId?: string | null): Promise<Record<string, unknown>> {
-    return this.call('unloadDomain', { domainId: domainId, sessionId: sessionId });
+    return this.call('SessionManagerService.unloadDomain', { domainId: domainId, sessionId: sessionId });
   }
 
   async validateMerge(forkSessionId: string): Promise<Types.MergeSessionResult> {
-    return this.call('validateMerge', { forkSessionId: forkSessionId });
+    return this.call('SessionManagerService.validateMerge', { forkSessionId: forkSessionId });
   }
 
   onArchiveCompleted(callback: (data: Types.CompleteArchiveResult) => void): Unsubscribe {
@@ -1989,87 +1989,87 @@ export class TaskStateServiceClient implements TaskStateService {
   }
 
   async cancelTask(taskId: string): Promise<Types.TaskInfo | null> {
-    return this.call('cancelTask', { taskId: taskId });
+    return this.call('TaskStateService.cancelTask', { taskId: taskId });
   }
 
   async clearCompleted(maxAgeSeconds?: number): Promise<number> {
-    return this.call('clearCompleted', { maxAgeSeconds: maxAgeSeconds });
+    return this.call('TaskStateService.clearCompleted', { maxAgeSeconds: maxAgeSeconds });
   }
 
   async completeTask(taskId: string): Promise<Types.TaskInfo | null> {
-    return this.call('completeTask', { taskId: taskId });
+    return this.call('TaskStateService.completeTask', { taskId: taskId });
   }
 
   async failTask(taskId: string, error: string): Promise<Types.TaskInfo | null> {
-    return this.call('failTask', { taskId: taskId, error: error });
+    return this.call('TaskStateService.failTask', { taskId: taskId, error: error });
   }
 
   async getActiveCount(): Promise<number> {
-    return this.call('getActiveCount', {  });
+    return this.call('TaskStateService.getActiveCount', {  });
   }
 
   async getActiveTasks(): Promise<Types.TaskInfo[]> {
-    return this.call('getActiveTasks', {  });
+    return this.call('TaskStateService.getActiveTasks', {  });
   }
 
   async getAllTasks(): Promise<Types.TaskInfo[]> {
-    return this.call('getAllTasks', {  });
+    return this.call('TaskStateService.getAllTasks', {  });
   }
 
   async getBackendSummary(): Promise<Types.BackendSummary[]> {
-    return this.call('getBackendSummary', {  });
+    return this.call('TaskStateService.getBackendSummary', {  });
   }
 
   async getSessionSummary(sessionId: string): Promise<Types.SessionTaskSummary> {
-    return this.call('getSessionSummary', { sessionId: sessionId });
+    return this.call('TaskStateService.getSessionSummary', { sessionId: sessionId });
   }
 
   async getSessionTask(sessionId: string): Promise<Types.TaskInfo | null> {
-    return this.call('getSessionTask', { sessionId: sessionId });
+    return this.call('TaskStateService.getSessionTask', { sessionId: sessionId });
   }
 
   async getStreamingCount(): Promise<number> {
-    return this.call('getStreamingCount', {  });
+    return this.call('TaskStateService.getStreamingCount', {  });
   }
 
   async getStreamingTasks(): Promise<Types.TaskInfo[]> {
-    return this.call('getStreamingTasks', {  });
+    return this.call('TaskStateService.getStreamingTasks', {  });
   }
 
   async getTask(taskId: string): Promise<Types.TaskInfo | null> {
-    return this.call('getTask', { taskId: taskId });
+    return this.call('TaskStateService.getTask', { taskId: taskId });
   }
 
   async getTasksByBackend(backendName: string): Promise<Types.TaskInfo[]> {
-    return this.call('getTasksByBackend', { backendName: backendName });
+    return this.call('TaskStateService.getTasksByBackend', { backendName: backendName });
   }
 
   async getTasksBySession(sessionId: string): Promise<Types.TaskInfo[]> {
-    return this.call('getTasksBySession', { sessionId: sessionId });
+    return this.call('TaskStateService.getTasksBySession', { sessionId: sessionId });
   }
 
   async getTasksByType(taskType: string): Promise<Types.TaskInfo[]> {
-    return this.call('getTasksByType', { taskType: taskType });
+    return this.call('TaskStateService.getTasksByType', { taskType: taskType });
   }
 
   async setTaskExecuting(taskId: string, toolName: string): Promise<Types.TaskInfo | null> {
-    return this.call('setTaskExecuting', { taskId: taskId, toolName: toolName });
+    return this.call('TaskStateService.setTaskExecuting', { taskId: taskId, toolName: toolName });
   }
 
   async setTaskStreaming(taskId: string): Promise<Types.TaskInfo | null> {
-    return this.call('setTaskStreaming', { taskId: taskId });
+    return this.call('TaskStateService.setTaskStreaming', { taskId: taskId });
   }
 
   async startHelperTask(taskId: string, taskType: string, prompt?: string, sessionId?: string | null, backendName?: string): Promise<Types.TaskInfo | null> {
-    return this.call('startHelperTask', { taskId: taskId, taskType: taskType, prompt: prompt, sessionId: sessionId, backendName: backendName });
+    return this.call('TaskStateService.startHelperTask', { taskId: taskId, taskType: taskType, prompt: prompt, sessionId: sessionId, backendName: backendName });
   }
 
   async startSessionTask(sessionId: string, exchangeId: string, prompt: string, backendName?: string): Promise<Types.TaskInfo> {
-    return this.call('startSessionTask', { sessionId: sessionId, exchangeId: exchangeId, prompt: prompt, backendName: backendName });
+    return this.call('TaskStateService.startSessionTask', { sessionId: sessionId, exchangeId: exchangeId, prompt: prompt, backendName: backendName });
   }
 
   async updateTaskProgress(taskId: string, tokensStreamed?: number | null, toolName?: string | null, toolCount?: number | null, inputTokens?: number | null, outputTokens?: number | null, contextWindow?: number | null, model?: string | null): Promise<Types.TaskInfo | null> {
-    return this.call('updateTaskProgress', { taskId: taskId, tokensStreamed: tokensStreamed, toolName: toolName, toolCount: toolCount, inputTokens: inputTokens, outputTokens: outputTokens, contextWindow: contextWindow, model: model });
+    return this.call('TaskStateService.updateTaskProgress', { taskId: taskId, tokensStreamed: tokensStreamed, toolName: toolName, toolCount: toolCount, inputTokens: inputTokens, outputTokens: outputTokens, contextWindow: contextWindow, model: model });
   }
 
   onContentDelta(callback: (data: Types.ContentDeltaEvent) => void): Unsubscribe {
@@ -2608,87 +2608,87 @@ export class SessionDataServiceClient implements SessionDataService {
   }
 
   async deleteTurns(sessionId: string, turnIndices: number[]): Promise<number> {
-    return this.call('deleteTurns', { sessionId: sessionId, turnIndices: turnIndices });
+    return this.call('SessionDataService.deleteTurns', { sessionId: sessionId, turnIndices: turnIndices });
   }
 
   async getAllSessions(): Promise<Types.SessionInfo[]> {
-    return this.call('getAllSessions', {  });
+    return this.call('SessionDataService.getAllSessions', {  });
   }
 
   async getPinnedSessions(): Promise<string[]> {
-    return this.call('getPinnedSessions', {  });
+    return this.call('SessionDataService.getPinnedSessions', {  });
   }
 
   async getSession(sessionId: string): Promise<Types.SessionInfo | null> {
-    return this.call('getSession', { sessionId: sessionId });
+    return this.call('SessionDataService.getSession', { sessionId: sessionId });
   }
 
   async getSessionForkTree(sessionId: string): Promise<Types.ForkTreeNode | null> {
-    return this.call('getSessionForkTree', { sessionId: sessionId });
+    return this.call('SessionDataService.getSessionForkTree', { sessionId: sessionId });
   }
 
   async getSessionParentChain(sessionId: string): Promise<Types.SessionInfo[]> {
-    return this.call('getSessionParentChain', { sessionId: sessionId });
+    return this.call('SessionDataService.getSessionParentChain', { sessionId: sessionId });
   }
 
   async getSessionSnapshot(sessionId: string): Promise<Types.SessionSnapshot | null> {
-    return this.call('getSessionSnapshot', { sessionId: sessionId });
+    return this.call('SessionDataService.getSessionSnapshot', { sessionId: sessionId });
   }
 
   async getSessionSubscriberCount(sessionId: string): Promise<number> {
-    return this.call('getSessionSubscriberCount', { sessionId: sessionId });
+    return this.call('SessionDataService.getSessionSubscriberCount', { sessionId: sessionId });
   }
 
   async getSessionWatcherInfo(sessionId: string): Promise<Types.SessionWatcherInfo> {
-    return this.call('getSessionWatcherInfo', { sessionId: sessionId });
+    return this.call('SessionDataService.getSessionWatcherInfo', { sessionId: sessionId });
   }
 
   async getSubscribedSessions(clientId: string): Promise<string[]> {
-    return this.call('getSubscribedSessions', { clientId: clientId });
+    return this.call('SessionDataService.getSubscribedSessions', { clientId: clientId });
   }
 
   async isPinned(sessionId: string): Promise<boolean> {
-    return this.call('isPinned', { sessionId: sessionId });
+    return this.call('SessionDataService.isPinned', { sessionId: sessionId });
   }
 
   async isSessionStreaming(sessionId: string): Promise<boolean> {
-    return this.call('isSessionStreaming', { sessionId: sessionId });
+    return this.call('SessionDataService.isSessionStreaming', { sessionId: sessionId });
   }
 
   async loadHistoryRange(sessionId: string, clientId: string, startOrder: number, endOrder: number): Promise<Types.SubscriptionResult> {
-    return this.call('loadHistoryRange', { sessionId: sessionId, clientId: clientId, startOrder: startOrder, endOrder: endOrder });
+    return this.call('SessionDataService.loadHistoryRange', { sessionId: sessionId, clientId: clientId, startOrder: startOrder, endOrder: endOrder });
   }
 
   async pinSession(sessionId: string): Promise<boolean> {
-    return this.call('pinSession', { sessionId: sessionId });
+    return this.call('SessionDataService.pinSession', { sessionId: sessionId });
   }
 
   async reloadDomain(domainId: string): Promise<Record<string, unknown>> {
-    return this.call('reloadDomain', { domainId: domainId });
+    return this.call('SessionDataService.reloadDomain', { domainId: domainId });
   }
 
   async requestDomainState(sessionId: string, domainId: string): Promise<boolean> {
-    return this.call('requestDomainState', { sessionId: sessionId, domainId: domainId });
+    return this.call('SessionDataService.requestDomainState', { sessionId: sessionId, domainId: domainId });
   }
 
   async setContextMode(sessionId: string, turnIdx: number, mode: string): Promise<null> {
-    return this.call('setContextMode', { sessionId: sessionId, turnIdx: turnIdx, mode: mode });
+    return this.call('SessionDataService.setContextMode', { sessionId: sessionId, turnIdx: turnIdx, mode: mode });
   }
 
   async subscribeAdd(sessionId: string, clientId: string, layers: string[]): Promise<Types.SubscriptionResult> {
-    return this.call('subscribeAdd', { sessionId: sessionId, clientId: clientId, layers: layers });
+    return this.call('SessionDataService.subscribeAdd', { sessionId: sessionId, clientId: clientId, layers: layers });
   }
 
   async subscribeRemove(sessionId: string, clientId: string, layers: string[]): Promise<Types.SubscriptionResult> {
-    return this.call('subscribeRemove', { sessionId: sessionId, clientId: clientId, layers: layers });
+    return this.call('SessionDataService.subscribeRemove', { sessionId: sessionId, clientId: clientId, layers: layers });
   }
 
   async togglePin(sessionId: string): Promise<boolean> {
-    return this.call('togglePin', { sessionId: sessionId });
+    return this.call('SessionDataService.togglePin', { sessionId: sessionId });
   }
 
   async unpinSession(sessionId: string): Promise<boolean> {
-    return this.call('unpinSession', { sessionId: sessionId });
+    return this.call('SessionDataService.unpinSession', { sessionId: sessionId });
   }
 
   sessionDataDomainEvent(callback: (data: Types.SessionDomainEvent) => void): Unsubscribe {
@@ -2908,23 +2908,23 @@ export class ImageServiceClient implements ImageService {
   }
 
   async deleteImage(filePath: string): Promise<boolean> {
-    return this.call('deleteImage', { filePath: filePath });
+    return this.call('ImageService.deleteImage', { filePath: filePath });
   }
 
   async getImageInfo(filePath: string): Promise<Types.ImageInfo | null> {
-    return this.call('getImageInfo', { filePath: filePath });
+    return this.call('ImageService.getImageInfo', { filePath: filePath });
   }
 
   async getSessionImages(sessionId: string): Promise<string[]> {
-    return this.call('getSessionImages', { sessionId: sessionId });
+    return this.call('ImageService.getSessionImages', { sessionId: sessionId });
   }
 
   async getUploadDir(): Promise<string> {
-    return this.call('getUploadDir', {  });
+    return this.call('ImageService.getUploadDir', {  });
   }
 
   async uploadImage(dataBase64: string, mediaType: string, sessionId?: string | null, originalFilename?: string | null): Promise<Types.ImageUploadResult> {
-    return this.call('uploadImage', { dataBase64: dataBase64, mediaType: mediaType, sessionId: sessionId, originalFilename: originalFilename });
+    return this.call('ImageService.uploadImage', { dataBase64: dataBase64, mediaType: mediaType, sessionId: sessionId, originalFilename: originalFilename });
   }
 
   onImageDeleted(callback: (data: Types.ImageEventData) => void): Unsubscribe {
@@ -3265,87 +3265,87 @@ export class FileStateServiceClient implements FileStateService {
   }
 
   async clearSessionCwd(sessionId: string): Promise<null> {
-    return this.call('clearSessionCwd', { sessionId: sessionId });
+    return this.call('FileStateService.clearSessionCwd', { sessionId: sessionId });
   }
 
   async generateSimpleCommitMessage(gitRoot: string): Promise<string> {
-    return this.call('generateSimpleCommitMessage', { gitRoot: gitRoot });
+    return this.call('FileStateService.generateSimpleCommitMessage', { gitRoot: gitRoot });
   }
 
   async getAllCwds(): Promise<Types.SessionCwd[]> {
-    return this.call('getAllCwds', {  });
+    return this.call('FileStateService.getAllCwds', {  });
   }
 
   async getCwd(sessionId: string): Promise<string> {
-    return this.call('getCwd', { sessionId: sessionId });
+    return this.call('FileStateService.getCwd', { sessionId: sessionId });
   }
 
   async getGitDiff(path: string, staged?: boolean): Promise<Types.GitDiffResult> {
-    return this.call('getGitDiff', { path: path, staged: staged });
+    return this.call('FileStateService.getGitDiff', { path: path, staged: staged });
   }
 
   async getHomeDirectory(): Promise<string> {
-    return this.call('getHomeDirectory', {  });
+    return this.call('FileStateService.getHomeDirectory', {  });
   }
 
   async getParentDirectory(path: string): Promise<string> {
-    return this.call('getParentDirectory', { path: path });
+    return this.call('FileStateService.getParentDirectory', { path: path });
   }
 
   async getStagedDiff(gitRoot: string): Promise<Types.GitDiffResult> {
-    return this.call('getStagedDiff', { gitRoot: gitRoot });
+    return this.call('FileStateService.getStagedDiff', { gitRoot: gitRoot });
   }
 
   async getWorkingTreeStatus(path: string): Promise<Types.WorkingTreeStatus> {
-    return this.call('getWorkingTreeStatus', { path: path });
+    return this.call('FileStateService.getWorkingTreeStatus', { path: path });
   }
 
   async gitCommit(gitRoot: string, message: string): Promise<Types.FileOperationResult> {
-    return this.call('gitCommit', { gitRoot: gitRoot, message: message });
+    return this.call('FileStateService.gitCommit', { gitRoot: gitRoot, message: message });
   }
 
   async isDirectory(path: string): Promise<boolean> {
-    return this.call('isDirectory', { path: path });
+    return this.call('FileStateService.isDirectory', { path: path });
   }
 
   async listDirectory(path: string): Promise<Types.DirectoryListing> {
-    return this.call('listDirectory', { path: path });
+    return this.call('FileStateService.listDirectory', { path: path });
   }
 
   async listDirectoryWithHidden(path: string): Promise<Types.DirectoryListing> {
-    return this.call('listDirectoryWithHidden', { path: path });
+    return this.call('FileStateService.listDirectoryWithHidden', { path: path });
   }
 
   async pathExists(path: string): Promise<boolean> {
-    return this.call('pathExists', { path: path });
+    return this.call('FileStateService.pathExists', { path: path });
   }
 
   async readFile(path: string): Promise<string> {
-    return this.call('readFile', { path: path });
+    return this.call('FileStateService.readFile', { path: path });
   }
 
   async resolvePath(base: string, relative: string): Promise<string> {
-    return this.call('resolvePath', { base: base, relative: relative });
+    return this.call('FileStateService.resolvePath', { base: base, relative: relative });
   }
 
   async setCwd(sessionId: string, cwd: string): Promise<Types.FileOperationResult> {
-    return this.call('setCwd', { sessionId: sessionId, cwd: cwd });
+    return this.call('FileStateService.setCwd', { sessionId: sessionId, cwd: cwd });
   }
 
   async stageAllChanges(gitRoot: string): Promise<Types.FileOperationResult> {
-    return this.call('stageAllChanges', { gitRoot: gitRoot });
+    return this.call('FileStateService.stageAllChanges', { gitRoot: gitRoot });
   }
 
   async stageFiles(gitRoot: string, paths: string[]): Promise<Types.FileOperationResult> {
-    return this.call('stageFiles', { gitRoot: gitRoot, paths: paths });
+    return this.call('FileStateService.stageFiles', { gitRoot: gitRoot, paths: paths });
   }
 
   async unstageFiles(gitRoot: string, paths: string[]): Promise<Types.FileOperationResult> {
-    return this.call('unstageFiles', { gitRoot: gitRoot, paths: paths });
+    return this.call('FileStateService.unstageFiles', { gitRoot: gitRoot, paths: paths });
   }
 
   async writeFile(path: string, content: string): Promise<Types.FileOperationResult> {
-    return this.call('writeFile', { path: path, content: content });
+    return this.call('FileStateService.writeFile', { path: path, content: content });
   }
 
   onCwdChanged(callback: (data: Types.CwdChangedData) => void): Unsubscribe {
@@ -3635,87 +3635,87 @@ export class DebugLogServiceClient implements DebugLogService {
   }
 
   async clearBuffer(category?: string | null): Promise<Types.LogResult> {
-    return this.call('clearBuffer', { category: category });
+    return this.call('DebugLogService.clearBuffer', { category: category });
   }
 
   async clearCategories(): Promise<Types.LogResult> {
-    return this.call('clearCategories', {  });
+    return this.call('DebugLogService.clearCategories', {  });
   }
 
   async debug(message: string, category?: string, sessionId?: string, details?: Record<string, unknown> | null): Promise<Types.LogResult> {
-    return this.call('debug', { message: message, category: category, sessionId: sessionId, details: details });
+    return this.call('DebugLogService.debug', { message: message, category: category, sessionId: sessionId, details: details });
   }
 
   async disableCategory(category: string): Promise<Types.LogResult> {
-    return this.call('disableCategory', { category: category });
+    return this.call('DebugLogService.disableCategory', { category: category });
   }
 
   async enableCategory(category: string): Promise<Types.LogResult> {
-    return this.call('enableCategory', { category: category });
+    return this.call('DebugLogService.enableCategory', { category: category });
   }
 
   async error(message: string, category?: string, sessionId?: string, details?: Record<string, unknown> | null): Promise<Types.LogResult> {
-    return this.call('error', { message: message, category: category, sessionId: sessionId, details: details });
+    return this.call('DebugLogService.error', { message: message, category: category, sessionId: sessionId, details: details });
   }
 
   async getAllCategories(): Promise<string[]> {
-    return this.call('getAllCategories', {  });
+    return this.call('DebugLogService.getAllCategories', {  });
   }
 
   async getBufferStats(): Promise<Types.BufferStats[]> {
-    return this.call('getBufferStats', {  });
+    return this.call('DebugLogService.getBufferStats', {  });
   }
 
   async getCategories(): Promise<string[]> {
-    return this.call('getCategories', {  });
+    return this.call('DebugLogService.getCategories', {  });
   }
 
   async getLevel(): Promise<string> {
-    return this.call('getLevel', {  });
+    return this.call('DebugLogService.getLevel', {  });
   }
 
   async getServerIdentity(): Promise<Types.ServerIdentityInfo | null> {
-    return this.call('getServerIdentity', {  });
+    return this.call('DebugLogService.getServerIdentity', {  });
   }
 
   async info(message: string, category?: string, sessionId?: string, details?: Record<string, unknown> | null): Promise<Types.LogResult> {
-    return this.call('info', { message: message, category: category, sessionId: sessionId, details: details });
+    return this.call('DebugLogService.info', { message: message, category: category, sessionId: sessionId, details: details });
   }
 
   async isEnabled(): Promise<boolean> {
-    return this.call('isEnabled', {  });
+    return this.call('DebugLogService.isEnabled', {  });
   }
 
   async log(entry: Types.LogEntryInput): Promise<Types.LogResult> {
-    return this.call('log', { entry: entry });
+    return this.call('DebugLogService.log', { entry: entry });
   }
 
   async logBatch(entries: Types.LogEntryInput[]): Promise<Types.LogResult> {
-    return this.call('logBatch', { entries: entries });
+    return this.call('DebugLogService.logBatch', { entries: entries });
   }
 
   async query(category: string, limit?: number, level?: string | null, sessionId?: string | null, runId?: string | null): Promise<Types.QueryResult> {
-    return this.call('query', { category: category, limit: limit, level: level, sessionId: sessionId, runId: runId });
+    return this.call('DebugLogService.query', { category: category, limit: limit, level: level, sessionId: sessionId, runId: runId });
   }
 
   async setBufferSize(category: string, size: number): Promise<Types.LogResult> {
-    return this.call('setBufferSize', { category: category, size: size });
+    return this.call('DebugLogService.setBufferSize', { category: category, size: size });
   }
 
   async setCategories(categories: string[]): Promise<Types.LogResult> {
-    return this.call('setCategories', { categories: categories });
+    return this.call('DebugLogService.setCategories', { categories: categories });
   }
 
   async setEnabled(enabled: boolean): Promise<Types.LogResult> {
-    return this.call('setEnabled', { enabled: enabled });
+    return this.call('DebugLogService.setEnabled', { enabled: enabled });
   }
 
   async setLevel(level: string): Promise<Types.LogResult> {
-    return this.call('setLevel', { level: level });
+    return this.call('DebugLogService.setLevel', { level: level });
   }
 
   async warning(message: string, category?: string, sessionId?: string, details?: Record<string, unknown> | null): Promise<Types.LogResult> {
-    return this.call('warning', { message: message, category: category, sessionId: sessionId, details: details });
+    return this.call('DebugLogService.warning', { message: message, category: category, sessionId: sessionId, details: details });
   }
 
 }
@@ -3815,15 +3815,15 @@ export class TrafficCaptureServiceClient implements TrafficCaptureService {
   }
 
   async captureStatus(): Promise<Types.CaptureStatus> {
-    return this.call('captureStatus', {  });
+    return this.call('TrafficCaptureService.captureStatus', {  });
   }
 
   async startCapture(label?: string, maxBytes?: number): Promise<Types.CaptureStatus> {
-    return this.call('startCapture', { label: label, maxBytes: maxBytes });
+    return this.call('TrafficCaptureService.startCapture', { label: label, maxBytes: maxBytes });
   }
 
   async stopCapture(): Promise<Types.CaptureStatus> {
-    return this.call('stopCapture', {  });
+    return this.call('TrafficCaptureService.stopCapture', {  });
   }
 
 }
@@ -3948,23 +3948,23 @@ export class SoundServiceClient implements SoundService {
   }
 
   async deleteSound(filename: string): Promise<boolean> {
-    return this.call('deleteSound', { filename: filename });
+    return this.call('SoundService.deleteSound', { filename: filename });
   }
 
   async getSoundData(filename: string): Promise<Types.SoundData | null> {
-    return this.call('getSoundData', { filename: filename });
+    return this.call('SoundService.getSoundData', { filename: filename });
   }
 
   async getSoundsDir(): Promise<string> {
-    return this.call('getSoundsDir', {  });
+    return this.call('SoundService.getSoundsDir', {  });
   }
 
   async listSounds(): Promise<Types.SoundInfo[]> {
-    return this.call('listSounds', {  });
+    return this.call('SoundService.listSounds', {  });
   }
 
   async uploadSound(dataBase64: string, filename: string, mediaType: string): Promise<Types.SoundUploadResult> {
-    return this.call('uploadSound', { dataBase64: dataBase64, filename: filename, mediaType: mediaType });
+    return this.call('SoundService.uploadSound', { dataBase64: dataBase64, filename: filename, mediaType: mediaType });
   }
 
   onSoundDeleted(callback: (data: Types.SoundEventData) => void): Unsubscribe {
@@ -4243,67 +4243,67 @@ export class SupervisorStateServiceClient implements SupervisorStateService {
   }
 
   async addHost(request: Types.HostUpdateRequest | Record<string, unknown>): Promise<Types.ConfigUpdateResult> {
-    return this.call('addHost', { request: request });
+    return this.call('SupervisorStateService.addHost', { request: request });
   }
 
   async checkHostStatus(hostName: string): Promise<Types.HostStatusResult> {
-    return this.call('checkHostStatus', { hostName: hostName });
+    return this.call('SupervisorStateService.checkHostStatus', { hostName: hostName });
   }
 
   async getProcessOutput(processId: string, limit?: number, offset?: number, source?: string | null): Promise<Types.ProcessOutputBatch> {
-    return this.call('getProcessOutput', { processId: processId, limit: limit, offset: offset, source: source });
+    return this.call('SupervisorStateService.getProcessOutput', { processId: processId, limit: limit, offset: offset, source: source });
   }
 
   async getServerStatus(): Promise<Record<string, unknown>> {
-    return this.call('getServerStatus', {  });
+    return this.call('SupervisorStateService.getServerStatus', {  });
   }
 
   async getState(): Promise<Types.SupervisorState> {
-    return this.call('getState', {  });
+    return this.call('SupervisorStateService.getState', {  });
   }
 
   async listHosts(tags?: string[] | null, hostType?: string | null): Promise<Types.HostQueryResult> {
-    return this.call('listHosts', { tags: tags, hostType: hostType });
+    return this.call('SupervisorStateService.listHosts', { tags: tags, hostType: hostType });
   }
 
   async listProcesses(sessionId?: string | null, host?: string | null, processType?: string | null): Promise<Types.ProcessListResult> {
-    return this.call('listProcesses', { sessionId: sessionId, host: host, processType: processType });
+    return this.call('SupervisorStateService.listProcesses', { sessionId: sessionId, host: host, processType: processType });
   }
 
   async reloadConfig(): Promise<boolean> {
-    return this.call('reloadConfig', {  });
+    return this.call('SupervisorStateService.reloadConfig', {  });
   }
 
   async removeBackendHost(backendName: string): Promise<Types.ConfigUpdateResult> {
-    return this.call('removeBackendHost', { backendName: backendName });
+    return this.call('SupervisorStateService.removeBackendHost', { backendName: backendName });
   }
 
   async removeHost(hostName: string): Promise<Types.ConfigUpdateResult> {
-    return this.call('removeHost', { hostName: hostName });
+    return this.call('SupervisorStateService.removeHost', { hostName: hostName });
   }
 
   async restartBackend(slot: string): Promise<Types.ConfigUpdateResult> {
-    return this.call('restartBackend', { slot: slot });
+    return this.call('SupervisorStateService.restartBackend', { slot: slot });
   }
 
   async restartUi(): Promise<Types.ConfigUpdateResult> {
-    return this.call('restartUi', {  });
+    return this.call('SupervisorStateService.restartUi', {  });
   }
 
   async sendProcessInput(processId: string, data: string): Promise<Types.ConfigUpdateResult> {
-    return this.call('sendProcessInput', { processId: processId, data: data });
+    return this.call('SupervisorStateService.sendProcessInput', { processId: processId, data: data });
   }
 
   async setBackendHost(backendName: string, hostName: string): Promise<Types.ConfigUpdateResult> {
-    return this.call('setBackendHost', { backendName: backendName, hostName: hostName });
+    return this.call('SupervisorStateService.setBackendHost', { backendName: backendName, hostName: hostName });
   }
 
   async stopProcess(processId: string): Promise<Types.ConfigUpdateResult> {
-    return this.call('stopProcess', { processId: processId });
+    return this.call('SupervisorStateService.stopProcess', { processId: processId });
   }
 
   async updateHost(request: Types.HostUpdateRequest | Record<string, unknown>): Promise<Types.ConfigUpdateResult> {
-    return this.call('updateHost', { request: request });
+    return this.call('SupervisorStateService.updateHost', { request: request });
   }
 
   hostStatusChanged(callback: (data: Types.HostInfo) => void): Unsubscribe {
@@ -4713,107 +4713,107 @@ export class BrowserStateServiceClient implements BrowserStateService {
   }
 
   async back(name?: string | null): Promise<Types.BrowserResult> {
-    return this.call('back', { name: name });
+    return this.call('BrowserStateService.back', { name: name });
   }
 
   async buttons(name?: string | null): Promise<Types.BrowserResult> {
-    return this.call('buttons', { name: name });
+    return this.call('BrowserStateService.buttons', { name: name });
   }
 
   async click(selector: string, name?: string | null): Promise<Types.BrowserResult> {
-    return this.call('click', { selector: selector, name: name });
+    return this.call('BrowserStateService.click', { selector: selector, name: name });
   }
 
   async clickButton(index: number, name?: string | null): Promise<Types.BrowserResult> {
-    return this.call('clickButton', { index: index, name: name });
+    return this.call('BrowserStateService.clickButton', { index: index, name: name });
   }
 
   async closeTab(name?: string | null): Promise<Types.BrowserResult> {
-    return this.call('closeTab', { name: name });
+    return this.call('BrowserStateService.closeTab', { name: name });
   }
 
   async createBrowser(name?: string | null, browserType?: string, headless?: boolean, webdriverUrl?: string | null, port?: number | null, setAsDefault?: boolean): Promise<Types.BrowserResult> {
-    return this.call('createBrowser', { name: name, browserType: browserType, headless: headless, webdriverUrl: webdriverUrl, port: port, setAsDefault: setAsDefault });
+    return this.call('BrowserStateService.createBrowser', { name: name, browserType: browserType, headless: headless, webdriverUrl: webdriverUrl, port: port, setAsDefault: setAsDefault });
   }
 
   async destroyBrowser(name: string): Promise<Types.BrowserResult> {
-    return this.call('destroyBrowser', { name: name });
+    return this.call('BrowserStateService.destroyBrowser', { name: name });
   }
 
   async executeJs(script: string, name?: string | null): Promise<Types.BrowserResult> {
-    return this.call('executeJs', { script: script, name: name });
+    return this.call('BrowserStateService.executeJs', { script: script, name: name });
   }
 
   async fill(selector: string, text: string, name?: string | null): Promise<Types.BrowserResult> {
-    return this.call('fill', { selector: selector, text: text, name: name });
+    return this.call('BrowserStateService.fill', { selector: selector, text: text, name: name });
   }
 
   async forward(name?: string | null): Promise<Types.BrowserResult> {
-    return this.call('forward', { name: name });
+    return this.call('BrowserStateService.forward', { name: name });
   }
 
   async getBrowser(name: string): Promise<Types.BrowserResult> {
-    return this.call('getBrowser', { name: name });
+    return this.call('BrowserStateService.getBrowser', { name: name });
   }
 
   async getTitle(name?: string | null): Promise<Types.BrowserResult> {
-    return this.call('getTitle', { name: name });
+    return this.call('BrowserStateService.getTitle', { name: name });
   }
 
   async getUrl(name?: string | null): Promise<Types.BrowserResult> {
-    return this.call('getUrl', { name: name });
+    return this.call('BrowserStateService.getUrl', { name: name });
   }
 
   async goto(url: string, name?: string | null): Promise<Types.BrowserNavigateResult> {
-    return this.call('goto', { url: url, name: name });
+    return this.call('BrowserStateService.goto', { url: url, name: name });
   }
 
   async inputs(name?: string | null): Promise<Types.BrowserResult> {
-    return this.call('inputs', { name: name });
+    return this.call('BrowserStateService.inputs', { name: name });
   }
 
   async links(limit?: number | null, name?: string | null): Promise<Types.BrowserResult> {
-    return this.call('links', { limit: limit, name: name });
+    return this.call('BrowserStateService.links', { limit: limit, name: name });
   }
 
   async listBrowsers(): Promise<Types.BrowserListResult> {
-    return this.call('listBrowsers', {  });
+    return this.call('BrowserStateService.listBrowsers', {  });
   }
 
   async listTabs(name?: string | null): Promise<Types.TabListResult> {
-    return this.call('listTabs', { name: name });
+    return this.call('BrowserStateService.listTabs', { name: name });
   }
 
   async newTab(url?: string | null, name?: string | null): Promise<Types.BrowserResult> {
-    return this.call('newTab', { url: url, name: name });
+    return this.call('BrowserStateService.newTab', { url: url, name: name });
   }
 
   async refresh(name?: string | null): Promise<Types.BrowserResult> {
-    return this.call('refresh', { name: name });
+    return this.call('BrowserStateService.refresh', { name: name });
   }
 
   async renameBrowser(oldName: string, newName: string): Promise<Types.BrowserResult> {
-    return this.call('renameBrowser', { oldName: oldName, newName: newName });
+    return this.call('BrowserStateService.renameBrowser', { oldName: oldName, newName: newName });
   }
 
   async screenshot(name?: string | null, saveToFile?: boolean): Promise<Types.BrowserScreenshotResult> {
-    return this.call('screenshot', { name: name, saveToFile: saveToFile });
+    return this.call('BrowserStateService.screenshot', { name: name, saveToFile: saveToFile });
   }
 
   async see(name?: string | null): Promise<Types.BrowserSeeResult> {
-    return this.call('see', { name: name });
+    return this.call('BrowserStateService.see', { name: name });
   }
 
   async setDefault(name: string): Promise<Types.BrowserResult> {
-    return this.call('setDefault', { name: name });
+    return this.call('BrowserStateService.setDefault', { name: name });
   }
 
   async setInput(index: number, value: string, name?: string | null): Promise<Types.BrowserResult> {
-    return this.call('setInput', { index: index, value: value, name: name });
+    return this.call('BrowserStateService.setInput', { index: index, value: value, name: name });
   }
 
   async switchTab(handle: string, name?: string | null): Promise<Types.BrowserResult> {
-    return this.call('switchTab', { handle: handle, name: name });
+    return this.call('BrowserStateService.switchTab', { handle: handle, name: name });
   }
 
   browserCreated(callback: (data: Types.BrowserInfo) => void): Unsubscribe {
@@ -4974,27 +4974,27 @@ export class LSPServiceClient implements LSPService {
   }
 
   async getDocumentSymbols(filePath: string): Promise<Types.LSPDocumentSymbolsResult> {
-    return this.call('getDocumentSymbols', { filePath: filePath });
+    return this.call('LSPService.getDocumentSymbols', { filePath: filePath });
   }
 
   async getStatus(): Promise<Types.LSPStatusResult> {
-    return this.call('getStatus', {  });
+    return this.call('LSPService.getStatus', {  });
   }
 
   async restartServer(language?: string | null, workspace?: string | null, key?: string | null): Promise<Types.LSPActionResult> {
-    return this.call('restartServer', { language: language, workspace: workspace, key: key });
+    return this.call('LSPService.restartServer', { language: language, workspace: workspace, key: key });
   }
 
   async startServer(language: string, workspace?: string | null): Promise<Types.LSPActionResult> {
-    return this.call('startServer', { language: language, workspace: workspace });
+    return this.call('LSPService.startServer', { language: language, workspace: workspace });
   }
 
   async stopAllServers(): Promise<number> {
-    return this.call('stopAllServers', {  });
+    return this.call('LSPService.stopAllServers', {  });
   }
 
   async stopServer(language?: string | null, workspace?: string | null, key?: string | null): Promise<Types.LSPActionResult> {
-    return this.call('stopServer', { language: language, workspace: workspace, key: key });
+    return this.call('LSPService.stopServer', { language: language, workspace: workspace, key: key });
   }
 
   lspServerRestarted(callback: (data: Record<string, unknown>) => void): Unsubscribe {
@@ -5083,7 +5083,7 @@ export class DomainRpcServiceClient implements DomainRpcService {
   }
 
   async callDomainMethod(methodName: string, sessionId: string, params?: Record<string, unknown> | null): Promise<Record<string, unknown>> {
-    return this.call('callDomainMethod', { methodName: methodName, sessionId: sessionId, params: params });
+    return this.call('DomainRpcService.callDomainMethod', { methodName: methodName, sessionId: sessionId, params: params });
   }
 
 }

@@ -303,7 +303,10 @@ def generate_client_class(service: ServiceSpec, registered_types: set[str] = Non
         call_params_str = ", ".join(f"{p}: {p}" for p in call_params)
 
         lines.append(f"  async {method.wire_name}({params_str}): Promise<{return_type}> {{")
-        lines.append(f"    return this.call('{method.wire_name}', {{ {call_params_str} }});")
+        # Call the qualified method name ("<ServiceName>.<method>") so dispatch
+        # is unambiguous even when multiple services expose a same-named method
+        # (see ws_server._qualified_dispatch). Fixes BUGS.md #11.
+        lines.append(f"    return this.call('{service.name}.{method.wire_name}', {{ {call_params_str} }});")
         lines.append("  }")
         lines.append("")
 

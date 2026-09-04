@@ -158,16 +158,38 @@ class ExampleServiceRegistration:
         with pytest.raises(ValueError, match="must be decorated with @ws_service"):
             server.register_service(NotAService())
 
-    def test_method_collision_logs_warning(self, caplog):
+    def test_method_collision_is_benign_and_qualified_is_canonical(self, caplog):
+        # BUGS.md #11: duplicate short names are expected. The generated client
+        # calls qualified names, so the collision must not be a startup warning.
+        caplog.set_level("DEBUG")
         server = WsServer()
-        service1 = ExampleService()
-        service2 = AnotherService()
+        server.register_service(ExampleService())
+        server.register_service(AnotherService())
 
-        server.register_service(service1)
-        server.register_service(service2)
+        # No WARNING raised for the collision (downgraded to debug).
+        warnings = [r for r in caplog.records if r.levelname == "WARNING"]
+        assert not any("collision" in r.getMessage().lower() for r in warnings)
 
-        # Should log warning about collision
-        assert "collision" in caplog.text.lower() or "echo" in caplog.text
+        # Both qualified names resolve unambiguously.
+        assert "ExampleService.echo" in server._qualified_dispatch
+        assert "AnotherService.echo" in server._qualified_dispatch
+
+    def test_qualified_dispatch_resolves_correct_service(self):
+        # Qualified dispatch must route to the right service even when the
+        # short name is ambiguous.
+        import asyncio
+
+        server = WsServer()
+        server.register_service(ExampleService())
+        server.register_service(AnotherService())
+        mock_ws = MagicMock()
+        client = ConnectedClient(websocket=mock_ws, client_id="c1")
+
+        # ExampleService.echo returns the message; AnotherService.echo differs.
+        result = asyncio.get_event_loop().run_until_complete(
+            server._dispatch_method("ExampleService.echo", {"message": "hi"}, client)
+        )
+        assert result == "hi"
 
     def test_qualified_method_names(self):
         server = WsServer()
