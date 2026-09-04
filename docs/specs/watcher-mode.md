@@ -1,6 +1,6 @@
 # Watcher Mode MVP Implementation
 
-This document describes the actual implementation of the watcher mode feature, as built for the MVP. See [watcher-spec.md](./watcher-spec.md) for the original specification.
+This document describes the actual implementation of the watcher mode feature, as built for the MVP. It supersedes the original spec (deleted; see git history).
 
 ## Summary
 
@@ -200,6 +200,15 @@ Additional gaps:
 - **Fork follows** - When target forks, watcher should follow (specified but unclear if implemented)
 - **Visual connection** - No lines/badges showing watcher-target relationship
 - **Expand to full exchange** - Can't view full exchange from summary
+
+## Future: Split/Swap UI
+
+(From the original spec, which this document supersedes.) Side-by-side viewing of watcher and target:
+
+- **Desktop**: split the streaming tab into two panes — watcher (summaries + user conversation) alongside target (full turn history), with a pane selector for message delivery.
+- **Mobile**: quick-swap toggle between watcher and target in a single view.
+
+Other deferred ideas: automatic triggers/alerting, watcher-initiated injection, lockstep mode, expand-to-full-exchange from a summary.
 
 ## File Locations
 

@@ -4155,7 +4155,7 @@ function MobileHeader({ connectionState, selectedSession }: MobileHeaderProps) {
 // Global tabs: code, logs, llm, settings (app-wide)
 //
 // URL ROUTING: When adding new tabs, also update:
-// - docs/url-routing.md (add route to URL scheme)
+// - docs/specs/url-routing.md (add route to URL scheme)
 // - routes.ts (add route constant when created)
 // - useRouter hook (add route handler when created)
 // DEPRECATED: 'session-kanban' and 'kanban' tabs removed - kanban now uses domain plugin system

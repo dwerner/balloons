@@ -108,13 +108,10 @@ balloons/
 
 ## Transitional Debt
 
-The repo still contains documentation and comments that drift from the supported headless/web product, including:
-- old plan documents
-- pre-removal design docs
+The bulk documentation cleanup is done: completed/superseded plan documents have been removed (recoverable from git history) and current-facing docs are rewritten around the headless/web product. Remaining debt:
 - comments/docstrings that still describe deleted UI ownership or outdated workflows
 - command-mode references that no longer reflect supported behavior
-
-These are cleanup debt, not part of the supported architecture.
+- deprecated compatibility exports (e.g. the service-locator shims in `service/__init__.py`) pending import-surface cleanup
 
 ## Layer Boundaries and Placement Rules
 
@@ -258,7 +255,7 @@ When touching code in later workstreams, use these rules:
 
 ## Near-Term Architectural Priorities
 
-1. Finish documenting current headless/web-only reality
+1. Keep docs aligned with the headless/web reality as it evolves
 2. Use these boundary rules to guide decomposition of `session.py`
 3. Extract workflow orchestration responsibilities out of `SessionManagerService` incrementally
 4. Keep `service/` focused on transport/API exposure and event delivery

@@ -243,38 +243,8 @@ The Options tab will show:
 1. Note the `run_id` from streaming events
 2. Query: `debug_log_query(category="runner", run_id="run-123")`
 
-## Migration from v1
-
-1. Remove `debug_log_file` config option ✓
-2. Remove single-file logging path ✓
-3. Add `Category` class with component-based constants ✓
-4. Add per-category ring buffers (replacing single shared buffer) ✓
-5. Add `RingBuffer` class with resize support ✓
-6. Add `query()` method for category-specific queries ✓
-7. Add WebSocket API for query and buffer management ✓
-8. Add server identity capture at startup ✓ (`core/server_identity.py`)
-9. Add lifecycle event logging ✓ (`headless.py` start/stop events)
-10. Add balloons-tools for LLM querying ✓ (`core/debug_tools.py`)
-11. Update prompt documentation ✓
-
-## Files Modified
-
-| File | Changes | Status |
-|------|---------|--------|
-| `core/debug_log.py` | Per-category buffers, new categories, RingBuffer class | ✓ |
-| `core/server_identity.py` | Server identity capture (git state, metadata) | ✓ New |
-| `core/debug_tools.py` | LLM-facing debug tools | ✓ New |
-| `core/tools.py` | DEBUG_TOOLS definitions, get_tools_for_request | ✓ |
-| `core/tool_executor.py` | Dispatch for debug tools | ✓ |
-| `service/debug_log_service.py` | Query endpoints, identity endpoint, buffer management | ✓ |
-| `headless.py` | Capture git identity at startup, lifecycle events | ✓ |
-| `web/ui/src/components/OptionsTab/` | Buffer size controls, identity display | ✓ |
-| `prompts/shared/debug-logging.md` | Document new categories and tools | ✓ |
-
 ## Open Questions
 
-1. ~~What should default buffer sizes be per category?~~ → 500 per category (implemented)
-2. Should buffer sizes persist in config or be session-only?
-3. ~~Should we add a "clear buffer" action?~~ → Yes, implemented via `clear_buffer()` WebSocket API
-4. Do we need log rotation for disk files?
-5. Should lifecycle events also go to their own file (`lifecycle.log`)?
+1. Should buffer sizes persist in config or be session-only?
+2. Do we need log rotation for disk files?
+3. Should lifecycle events also go to their own file (`lifecycle.log`)?

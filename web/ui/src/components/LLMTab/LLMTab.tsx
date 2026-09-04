@@ -15,7 +15,7 @@
  * URL ROUTING: This is a global tab at #/llm
  * - Task selection could use #/llm/:taskId
  * - "Jump to session" should navigate to #/sessions/:sessionId
- * - See docs/url-routing.md for the full routing design
+ * - See docs/specs/url-routing.md for the full routing design
  */
 
 import React, { useState, useCallback, useEffect, memo, useRef } from 'react';

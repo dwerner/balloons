@@ -2,7 +2,7 @@
 
 ## What Is It?
 
-The Supervisor Tab is a **command center for distributed infrastructure**. It gives both Claude and humans visibility and control over:
+The Supervisor Tab gives both the LLM and humans visibility and control over:
 
 - **Hosts**: Machines where work can happen (local + SSH remotes)
 - **Processes**: Long-running tasks spawned by sessions

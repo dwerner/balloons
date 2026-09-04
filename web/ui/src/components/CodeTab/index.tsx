@@ -12,7 +12,7 @@
  * - File selection should update URL to #/code/*filePath
  * - Sub-view (changes/files) could be #/code/changes or #/code/files
  * - Line selection could use hash fragment: #/code/src/foo.ts#L10-L20
- * - See docs/url-routing.md for the full routing design
+ * - See docs/specs/url-routing.md for the full routing design
  */
 
 import React, { useState, useEffect, useCallback, useMemo, memo, useImperativeHandle, forwardRef } from 'react';

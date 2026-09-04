@@ -15,7 +15,7 @@
  * URL ROUTING INTEGRATION:
  * - Process selection should update URL to #/supervisor/:processId
  * - Host selection could use #/supervisor/host/:hostName
- * - See docs/url-routing.md for the full routing design
+ * - See docs/specs/url-routing.md for the full routing design
  */
 
 import React, { useState, useCallback, useEffect, memo } from 'react';

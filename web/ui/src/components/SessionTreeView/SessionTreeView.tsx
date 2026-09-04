@@ -18,7 +18,7 @@
  * URL ROUTING INTEGRATION:
  * - onSelectSession should trigger URL navigation to #/sessions/:sessionId
  * - Router should call onSelectSession when URL changes to a session route
- * - See docs/url-routing.md for the full routing design
+ * - See docs/specs/url-routing.md for the full routing design
  */
 
 import React, { useState, useCallback, useMemo, memo, useEffect } from 'react';

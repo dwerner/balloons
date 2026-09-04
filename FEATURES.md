@@ -65,6 +65,7 @@ Supported clients expose session and turn context controls so users can:
 - inspect sessions and their turns
 - review tool-use history alongside assistant turns
 - adjust per-turn context modes (COPY / COMPRESS / DROP)
+- inspect token usage and preview the context that will be sent to the model
 - navigate between related sessions and derived conversations
 - sort or filter session history according to the active client experience
 
@@ -84,7 +85,7 @@ Sessions support fork/merge workflows with explicit tracking:
 
 **Merge behavior**:
 - Forks can be merged back to their parent with summary information
-- Merge markers are preserved in session history
+- Merge markers and the child session's work summary are preserved in session history
 - Forks become concluded/read-only after merge depending on workflow
 
 ### Derive Sessions
@@ -122,9 +123,6 @@ backends:
     api_key: ollama
     model: llama3.2
     system_prompt: ~/.balloons/prompts/minimal.md
-
-# Optional debug log persistence
-debug_log_file: /tmp/balloons_debug.log
 ```
 
 See `config/config.sample.yaml` for the full configuration surface, including optional WebSocket, auth, voice-input, sound, and report settings.
@@ -257,12 +255,12 @@ Supervisor state changes are exposed as events, including:
 
 ### Debug Logging
 
-The current system exposes debug logging through `DebugLogService` and optional persisted log output.
+The current system exposes debug logging through `DebugLogService`, backed by per-category in-memory ring buffers (`core/debug_log.py`).
 Supported observability capabilities include:
 - structured log entries for runtime and tool activity
 - severity/category-based inspection
-- log retrieval through service surfaces
-- optional file persistence via `debug_log_file`
+- log retrieval and buffer management through service surfaces
+- LLM-facing debug tools (`debug_log_query`, `debug_log_config`, `debug_log_tail`)
 
 ### Request and Session Inspection
 

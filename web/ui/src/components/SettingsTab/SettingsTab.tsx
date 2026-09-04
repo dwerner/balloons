@@ -7,7 +7,7 @@
  *
  * URL ROUTING: This is a global tab at #/settings
  * - Sub-sections could use hash fragments: #/settings#sounds
- * - See docs/url-routing.md for the full routing design
+ * - See docs/specs/url-routing.md for the full routing design
  */
 
 import React, { memo, useCallback, useState } from 'react';

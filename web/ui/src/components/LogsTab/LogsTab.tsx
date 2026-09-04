@@ -10,7 +10,7 @@
  * URL ROUTING INTEGRATION:
  * - Category selection could update URL to #/logs/:category
  * - Level filter could be a query param: #/logs/runner?level=error
- * - See docs/url-routing.md for the full routing design
+ * - See docs/specs/url-routing.md for the full routing design
  */
 
 import React, { useState, useEffect, useCallback, useRef, memo } from 'react';

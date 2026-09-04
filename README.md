@@ -115,6 +115,10 @@ Default ports:
 - **8710** — Secondary backend (slot B)
 - **3030** — Web UI dev server
 
+### A/B Slots
+
+Two fixed slots support safe self-modification: run stable code on slot A, start slot B with edited source, and test in the web UI via the sidebar slot toggle (persisted, auto-reconnects). Since running servers are unaffected by source edits until restart, a broken experiment never takes down slot A. When changes are verified, `restart` slot A to promote them.
+
 ## Configuration
 
 Create `~/.balloons/config.yaml`:
@@ -234,8 +238,8 @@ mypy .
 
 - [ARCHITECTURE.md](ARCHITECTURE.md) — System architecture and design decisions
 - [FEATURES.md](FEATURES.md) — Feature specification
-- [CONTEXT-MANAGEMENT.md](CONTEXT-MANAGEMENT.md) — Context curation system
-- [docs/](docs/) — Additional design docs and plans
+- [ROADMAP.md](ROADMAP.md) — Active workstreams and future ideas
+- [docs/](docs/) — Additional design docs and guides
 
 ## Status
 

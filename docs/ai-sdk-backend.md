@@ -1,13 +1,24 @@
 # AI SDK Backend (Rust)
 
-The AI SDK backend uses the high-performance Rust implementation of the OpenAI-compatible protocol via the `ai-sdk-openai-compatible` crate.
+**Status: experimental.** `type: openai` is the primary OpenAI-compatible backend; `ai_sdk` is kept as an active experiment to see how far the Rust path goes.
 
-## Features
+The AI SDK backend uses the Rust implementation of the OpenAI-compatible protocol via the `ai-sdk-openai-compatible` crate, with Python bindings.
 
-- **Native async streaming** with proper SSE handling
-- **Reasoning/Text separation** - Qwen's thinking process is emitted separately from the final response
-- **Type-safe** Rust implementation with Python bindings
-- **Better performance** compared to pure Python implementations
+## Current State
+
+- Tool calling and image support are implemented (commit `c4aacbf`)
+- **Streaming is buffered**: `_stream_one_response` awaits a `(result, events)` tuple and replays events after the HTTP response completes, so deltas arrive in one burst (`core/ai_sdk_runner.py:218`). The openai runner had the identical flaw and was fixed by converting it to an async generator with a caller-owned outcome object — the same transformation applies here and is the main thing standing between this runner and parity.
+- Several tests are xfail-marked as **stale** (they mock out `_stream_one_response` and then assert on events it emits) — they need rewriting against the async-generator form, not bug-hunting.
+
+## Comparison with OpenAI Runner
+
+| Feature | OpenAI Runner | AI SDK Runner |
+|---------|---------------|---------------|
+| Implementation | Python (OpenAI SDK) | Rust (native) |
+| Incremental streaming | Yes | No (buffered) |
+| Reasoning separation | Yes | Yes |
+| Tool calling | Yes | Yes |
+| Test health | Green | Partially xfail (stale tests) |
 
 ## Setup
 
@@ -67,9 +78,8 @@ backends:
 
 ## Known Limitations
 
-1. **Tool calling**: Not yet implemented in this runner (falls back to text-only)
-2. **Image support**: Not yet implemented
-3. **Max tokens**: Requires 500+ tokens for models with thinking/reasoning phases
+1. **Buffered streaming** — see Current State; no incremental deltas yet
+2. **Max tokens**: Requires 500+ tokens for models with thinking/reasoning phases
 
 ## Testing
 
