@@ -287,46 +287,6 @@ export const BaseToolCard = React.memo(function BaseToolCard({
 });
 
 /**
- * CollapsibleContent - Optional collapsible section for tool output
- *
- * Unlike the old accordion pattern, this:
- * - Has no header label (implicit content)
- * - Defaults to expanded
- * - Only collapses for very long content
- */
-export interface CollapsibleContentProps {
-  children: React.ReactNode;
-  /** Maximum height before showing collapse toggle (default: 300px worth of content) */
-  maxLines?: number;
-  /** Force collapsed state */
-  defaultCollapsed?: boolean;
-}
-
-export function CollapsibleContent({
-  children,
-  maxLines = 20,
-  defaultCollapsed = false,
-}: CollapsibleContentProps) {
-  const [collapsed, setCollapsed] = useState(defaultCollapsed);
-
-  // For now, simple implementation - can enhance with actual line counting later
-  return (
-    <div className={`tool-collapsible-content ${collapsed ? 'collapsed' : ''}`}>
-      {children}
-      {collapsed && (
-        <button
-          className="tool-expand-button"
-          onClick={() => setCollapsed(false)}
-          type="button"
-        >
-          Show more...
-        </button>
-      )}
-    </div>
-  );
-}
-
-/**
  * Utility: Format file path relative to base (removes common prefix)
  */
 export function formatRelativePath(fullPath: string, basePath?: string): string {

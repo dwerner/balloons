@@ -2043,46 +2043,6 @@
   word-break: break-word;
 }
 
-/* Collapsible content for tool cards */
-.tool-collapsible-content {
-  position: relative;
-}
-
-.tool-collapsible-content.collapsed {
-  max-height: 150px;
-  overflow: hidden;
-}
-
-.tool-collapsible-content.collapsed::after {
-  content: '';
-  position: absolute;
-  bottom: 0;
-  left: 0;
-  right: 0;
-  height: 40px;
-  background: linear-gradient(transparent, var(--bg-primary, #1e1e1e));
-}
-
-.tool-expand-button {
-  position: absolute;
-  bottom: 4px;
-  left: 50%;
-  transform: translateX(-50%);
-  padding: 4px 12px;
-  background: var(--bg-secondary, #2d2d2d);
-  border: 1px solid var(--border-color, #333);
-  border-radius: 4px;
-  color: var(--text-secondary, #888);
-  font-size: 11px;
-  cursor: pointer;
-  z-index: 1;
-}
-
-.tool-expand-button:hover {
-  background: var(--bg-tertiary, #252525);
-  color: var(--text-primary, #e0e0e0);
-}
-
 /* ============================================================================
  * Mobile Responsive Styles for All Cards
  * ============================================================================ */
@@ -3309,11 +3269,6 @@
 /* Fade overlays - flat */
 :root[data-theme="dark-flat"] .tool-card-fade-overlay,
 [data-theme="dark-flat"] .tool-card-fade-overlay {
-  background: linear-gradient(transparent, var(--bg-primary, #0c0c0c));
-}
-
-:root[data-theme="dark-flat"] .tool-collapsible-content.collapsed::after,
-[data-theme="dark-flat"] .tool-collapsible-content.collapsed::after {
   background: linear-gradient(transparent, var(--bg-primary, #0c0c0c));
 }
 
