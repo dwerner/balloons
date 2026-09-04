@@ -101,10 +101,14 @@ function AppContent() {
   const { inputAreaHeight, handleResizeStart: handleInputAreaResizeStart } = useInputAreaResize();
 
   // Hash-based session deep links (#/sessions/:id[/:tab]). initialRoute seeds the
-  // first selection; replaceSession mirrors selection changes back into the URL.
-  // (Back/forward via currentRoute is wired behind the hook but not yet consumed
-  // here — see PLAN-frontend-remediation.md WS7.) See hooks/useUrlRouting.
-  const { initialRoute, replaceSession } = useUrlRouting();
+  // first selection; replaceSession mirrors selection changes back into the URL;
+  // the onNavigate callback handles browser back/forward. The callback is a
+  // stable indirection through urlNavigateRef (assigned below, once
+  // handleSelectSession exists) so it always sees the latest state — the hook
+  // stores it in a ref and only invokes it on genuine popstate/hashchange, never
+  // on our own replaceSession writes, so there is no feedback loop.
+  const urlNavigateRef = useRef<(route: import('./utils/urlRouting').Route) => void>(() => {});
+  const { initialRoute, replaceSession } = useUrlRouting((route) => urlNavigateRef.current(route));
 
   // Server slot (A=8765, B=8766) - persisted to localStorage
   const [serverSlot, setServerSlot] = useState<ServerSlot>(getInitialSlot);
@@ -982,6 +986,18 @@ function AppContent() {
       setIsLoadingTurns(false);
     }
   }, [connectionState, selectedSessionId]);
+
+  // URL → selection (browser back/forward, manual hash edits). Assigned to a ref
+  // each render so the hook's stable callback always sees the latest state. Only
+  // invoked on genuine popstate/hashchange (never on our replaceSession writes),
+  // so mirroring selection→URL and reacting to URL→selection cannot loop.
+  urlNavigateRef.current = (route) => {
+    if (route.kind !== 'session') return;
+    const match = matchSessionId(route.sessionId, sessions.map((s) => s.id));
+    if (!match) return; // sessions not loaded yet — nothing to select
+    if (match !== selectedSessionId) void handleSelectSession(match);
+    if (route.tab !== mainContentTab) setMainContentTab(route.tab);
+  };
 
   // Mirror the current session selection into the URL hash (session tabs only).
   // replaceSession uses history.replaceState, which emits no popstate/hashchange,

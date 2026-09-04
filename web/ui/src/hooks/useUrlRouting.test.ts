@@ -70,4 +70,33 @@ describe('useUrlRouting', () => {
       tab: 'streaming',
     });
   });
+
+  it('onNavigate fires on popstate/hashchange with the parsed route', () => {
+    const calls: unknown[] = [];
+    renderHook(() => useUrlRouting((r) => calls.push(r)));
+
+    act(() => {
+      window.history.replaceState(null, '', '#/sessions/nav1/context');
+      window.dispatchEvent(new HashChangeEvent('hashchange'));
+    });
+    act(() => {
+      window.history.replaceState(null, '', '#/sessions/nav2');
+      window.dispatchEvent(new PopStateEvent('popstate'));
+    });
+
+    expect(calls).toEqual([
+      { kind: 'session', sessionId: 'nav1', tab: 'context' },
+      { kind: 'session', sessionId: 'nav2', tab: 'streaming' },
+    ]);
+  });
+
+  it('onNavigate is NOT called by replaceSession (no feedback loop)', () => {
+    const calls: unknown[] = [];
+    const { result } = renderHook(() => useUrlRouting((r) => calls.push(r)));
+    act(() => {
+      result.current.replaceSession('mirror1', 'slides');
+    });
+    expect(window.location.hash).toBe('#/sessions/mirror1/slides');
+    expect(calls).toHaveLength(0);
+  });
 });

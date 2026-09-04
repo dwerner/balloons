@@ -16,7 +16,7 @@
  * routes are future work; they parse to `default` and are ignored here.
  */
 
-import { useState, useEffect, useCallback } from 'react';
+import { useState, useEffect, useCallback, useRef } from 'react';
 import {
   parseRoute,
   formatSessionRoute,
@@ -37,12 +37,27 @@ function readHash(): string {
   return typeof window !== 'undefined' ? window.location.hash : '';
 }
 
-export function useUrlRouting(): UrlRouting {
+/**
+ * @param onNavigate invoked ONLY on genuine user navigation (popstate /
+ *   hashchange) with the freshly parsed route. It is deliberately NOT called by
+ *   replaceSession — replaceState emits no event — which is what makes
+ *   selection→URL mirroring and URL→selection handling free of feedback loops.
+ *   The latest callback is always used (stored in a ref), so callers can pass a
+ *   closure over current state without re-subscribing.
+ */
+export function useUrlRouting(onNavigate?: (route: Route) => void): UrlRouting {
   const [initialRoute] = useState<Route>(() => parseRoute(readHash()));
   const [currentRoute, setCurrentRoute] = useState<Route>(initialRoute);
 
+  const onNavigateRef = useRef(onNavigate);
+  onNavigateRef.current = onNavigate;
+
   useEffect(() => {
-    const onNav = () => setCurrentRoute(parseRoute(readHash()));
+    const onNav = () => {
+      const route = parseRoute(readHash());
+      setCurrentRoute(route);
+      onNavigateRef.current?.(route);
+    };
     window.addEventListener('popstate', onNav);
     window.addEventListener('hashchange', onNav);
     return () => {
