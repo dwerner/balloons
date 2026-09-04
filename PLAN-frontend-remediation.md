@@ -11,6 +11,7 @@ Completed and verified (typecheck + build + tests green at each commit):
 - **WS2 — test + lint pipeline**: happy-dom + jest-dom preload, `bun test` (52 tests, was 9), ESLint flat config (0 errors), tests included in typecheck. Fixed all 8 `react-hooks/rules-of-hooks` violations (hooks after early returns). Extracted `utils/sessionGrouping.ts` + 14 characterization tests pinning tree-grouping behaviour (guards WS5 / Bugs #7/#23).
 - **WS3 — most done**: extracted `utils/serverSlots.ts`, `utils/turnTransforms.ts`, and `components/layout/AppChrome.tsx` (mobile/main headers, sidebar, session list item, tab types); removed dead `MessageInput`. **App.tsx 4757 → 3025 lines.**
 - **WS5 — contract fixes**: real `is_pinned` in session events via a server-side pinned cache (Bug #23); generated client now calls qualified RPC names (Bug #11), collision warnings downgraded.
+- **WS6 — theme tokens (targeted)**: defined the turn-type accent tokens (`--accent-summary/watch/steering/debug/focus/primary`, `--error-color`, `--bg-active`) that cards.css referenced but no theme defined, so those turn types now observe the theme (Bug #6). The broader 400-color migration in cards.css remains future work.
 
 Remaining (larger / need live-app verification — left at a clean checkpoint rather than risk regressions):
 
