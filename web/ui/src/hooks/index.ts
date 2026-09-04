@@ -46,3 +46,5 @@ export type {
   LinkStashItem,
   UseLinkStashReturn,
 } from './useLinkStash';
+
+export { useInputAreaResize } from './useInputAreaResize';

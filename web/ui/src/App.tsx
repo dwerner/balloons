@@ -23,7 +23,7 @@ import { PropertiesTab } from './components/PropertiesTab';
 import { StreamingTurnsView, type StreamingProgress } from './components/StreamingTurnsView';
 import { ContextTabView, type ExchangeAction as ContextTabExchangeAction } from './components/ContextTabView';
 import { DialogProvider, useDialog } from './components/Dialog';
-import { useWakeLock, useSoundNotifications, useLongPress, useVisualViewport, useUnreadSessions, useLinkStash, type LinkStashItem } from './hooks';
+import { useWakeLock, useSoundNotifications, useLongPress, useVisualViewport, useUnreadSessions, useLinkStash, useInputAreaResize, type LinkStashItem } from './hooks';
 import { LinkStashArea } from './components/LinkStashArea';
 import { RenameSessionModal } from './components/RenameSessionModal';
 import { VoiceInput } from './components/VoiceInput';
@@ -104,23 +104,8 @@ function AppContent() {
   // Voice input and history loading preferences
   const { voiceInputEnabled, voiceInputHost, voiceInputPort, historyLoadMode } = usePreferences();
 
-  // Input area height - resizable by dragging top edge
-  // On mobile, cap the height to a reasonable max to prevent huge text areas
-  const [inputAreaHeight, setInputAreaHeight] = useState(() => {
-    const saved = localStorage.getItem('balloons:input-area-height');
-    const height = saved ? parseInt(saved, 10) : 100;
-    // On mobile, cap at 150px by default
-    const isMobile = typeof window !== 'undefined' && window.innerWidth <= 767;
-    return isMobile ? Math.min(height, 150) : height;
-  });
-  const inputAreaResizing = useRef(false);
-  const inputAreaStartY = useRef(0);
-  const inputAreaStartHeight = useRef(0);
-
-  // Persist input area height
-  useEffect(() => {
-    localStorage.setItem('balloons:input-area-height', String(inputAreaHeight));
-  }, [inputAreaHeight]);
+  // Input area height - resizable by dragging top edge (persisted; see hook).
+  const { inputAreaHeight, handleResizeStart: handleInputAreaResizeStart } = useInputAreaResize();
 
   // Server slot (A=8765, B=8766) - persisted to localStorage
   const [serverSlot, setServerSlot] = useState<ServerSlot>(getInitialSlot);
@@ -1171,56 +1156,6 @@ function AppContent() {
       }
       return prev.filter(a => a.id !== id);
     });
-  }, []);
-
-  // Input area resize handlers
-  const handleInputAreaResizeStart = useCallback((e: React.MouseEvent | React.TouchEvent) => {
-    e.preventDefault();
-    inputAreaResizing.current = true;
-    const clientY = 'touches' in e ? e.touches[0]?.clientY ?? 0 : e.clientY;
-    inputAreaStartY.current = clientY;
-    inputAreaStartHeight.current = inputAreaHeight;
-    document.body.style.cursor = 'row-resize';
-    document.body.style.userSelect = 'none';
-  }, [inputAreaHeight]);
-
-  useEffect(() => {
-    const handleMouseMove = (e: MouseEvent) => {
-      if (!inputAreaResizing.current) return;
-      // Dragging up (negative delta) should increase height
-      const delta = inputAreaStartY.current - e.clientY;
-      const newHeight = Math.max(60, Math.min(500, inputAreaStartHeight.current + delta));
-      setInputAreaHeight(newHeight);
-    };
-
-    const handleTouchMove = (e: TouchEvent) => {
-      if (!inputAreaResizing.current) return;
-      const touch = e.touches[0];
-      if (!touch) return;
-      const delta = inputAreaStartY.current - touch.clientY;
-      const newHeight = Math.max(60, Math.min(500, inputAreaStartHeight.current + delta));
-      setInputAreaHeight(newHeight);
-    };
-
-    const handleEnd = () => {
-      if (inputAreaResizing.current) {
-        inputAreaResizing.current = false;
-        document.body.style.cursor = '';
-        document.body.style.userSelect = '';
-      }
-    };
-
-    document.addEventListener('mousemove', handleMouseMove);
-    document.addEventListener('mouseup', handleEnd);
-    document.addEventListener('touchmove', handleTouchMove);
-    document.addEventListener('touchend', handleEnd);
-
-    return () => {
-      document.removeEventListener('mousemove', handleMouseMove);
-      document.removeEventListener('mouseup', handleEnd);
-      document.removeEventListener('touchmove', handleTouchMove);
-      document.removeEventListener('touchend', handleEnd);
-    };
   }, []);
 
   // Track the committed text (from final transcriptions) for voice input
