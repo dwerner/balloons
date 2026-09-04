@@ -155,7 +155,9 @@ async def run_server(host: str | None = None, port: int | None = None) -> None:
 
     auth_ws_config = deepcopy(ws_config)
     auth_ws_config.port = auth_port
-    http_auth_server = await create_http_auth_server(auth_ws_config, user_service)
+    http_auth_server = await create_http_auth_server(
+        auth_ws_config, user_service, upload_dir=image_service.upload_dir
+    )
     await http_auth_server.start()
     auth_scheme = "https" if ws_config.tls.enabled else "http"
     print(f"Auth server listening on {auth_scheme}://{ws_config.host}:{auth_port}")

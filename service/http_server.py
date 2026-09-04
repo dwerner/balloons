@@ -26,6 +26,28 @@ if TYPE_CHECKING:
 logger = logging.getLogger(__name__)
 
 
+def resolve_upload_path(upload_dir: Path, filename: str) -> Optional[Path]:
+    """Resolve a requested upload filename to a real file inside upload_dir.
+
+    Returns the resolved Path, or None if the name is unsafe or the file does
+    not exist. The filename must be a single path component: separators and
+    dot-segments are rejected outright, and the resolved path is additionally
+    checked to stay under upload_dir (defense in depth against symlink/`..`
+    tricks). Only regular files are returned.
+    """
+    if not filename or "/" in filename or "\\" in filename or filename in (".", ".."):
+        return None
+    base = Path(upload_dir).resolve()
+    candidate = (base / filename).resolve()
+    try:
+        candidate.relative_to(base)
+    except ValueError:
+        return None
+    if not candidate.is_file():
+        return None
+    return candidate
+
+
 @dataclass
 class ServerConfig:
     """Configuration for the combined HTTP/WS server."""
@@ -52,6 +74,7 @@ class HttpAuthServer:
         config: ServerConfig,
         auth_routes: "AuthRoutes",
         jwt_auth: "JWTAuth",
+        upload_dir: Optional[Path] = None,
     ):
         """Initialize the server.
 
@@ -59,10 +82,13 @@ class HttpAuthServer:
             config: Server configuration
             auth_routes: HTTP routes for authentication
             jwt_auth: JWT authentication handler
+            upload_dir: If set, GET /uploads/{filename} serves image files
+                        from this directory (auth-gated). None disables the route.
         """
         self.config = config
         self._auth_routes = auth_routes
         self._jwt_auth = jwt_auth
+        self._upload_dir = upload_dir
 
         self._app: Optional[web.Application] = None
         self._runner: Optional[web.AppRunner] = None
@@ -100,6 +126,47 @@ class HttpAuthServer:
         """Health check endpoint."""
         return web.json_response({"status": "ok"})
 
+    async def _handle_upload(self, request: web.Request) -> web.Response:
+        """Serve an uploaded image by filename (GET /uploads/{filename}).
+
+        Auth: requires a valid Bearer JWT when JWT auth is enabled, matching
+        the system-wide posture (the WS server and /auth routes enforce the
+        same way; when auth is globally disabled everything is open). The
+        browser can attach this header via fetch (the UI uses authFetch and
+        renders the result as a blob URL), so no token ever appears in a URL.
+
+        Only single-component filenames resolving to a real file inside the
+        upload dir are served (see resolve_upload_path).
+        """
+        if self._jwt_auth is not None and getattr(self._jwt_auth.config, "enabled", True):
+            auth_header = request.headers.get("Authorization", "")
+            token = auth_header[7:] if auth_header.startswith("Bearer ") else None
+            if not token:
+                raise web.HTTPUnauthorized(
+                    text='{"error": "Authentication required"}',
+                    content_type="application/json",
+                )
+            try:
+                self._jwt_auth.validate_token(token)
+            except Exception:
+                raise web.HTTPUnauthorized(
+                    text='{"error": "Invalid or expired token"}',
+                    content_type="application/json",
+                )
+
+        filename = request.match_info.get("filename", "")
+        path = resolve_upload_path(self._upload_dir, filename) if self._upload_dir else None
+        if path is None:
+            raise web.HTTPNotFound(text="Not found")
+
+        response = web.FileResponse(path)
+        # Upload filenames are content-hashed + timestamped and never mutated,
+        # so the bytes for a given URL are immutable. Cache privately (the
+        # response is per-user only in the sense that it requires auth; the
+        # bytes themselves are not user-specific).
+        response.headers["Cache-Control"] = "private, max-age=31536000, immutable"
+        return response
+
     async def start(self) -> None:
         """Start the server."""
         if self._running:
@@ -117,6 +184,11 @@ class HttpAuthServer:
 
         # Health check
         self._app.router.add_get("/health", self._handle_health)
+
+        # Image serving for the chat UI (auth-gated). Upload filenames are
+        # content-hashed and immutable, so responses are cached hard.
+        if self._upload_dir is not None:
+            self._app.router.add_get("/uploads/{filename}", self._handle_upload)
 
         # Create SSL context
         ssl_context = self._create_ssl_context()
@@ -195,12 +267,14 @@ class HttpAuthServer:
 async def create_http_auth_server(
     ws_config: "WebSocketConfig",
     user_service: "UserAuthService",
+    upload_dir: Optional[Path] = None,
 ) -> HttpAuthServer:
     """Create and configure the HTTP auth server.
 
     Args:
         ws_config: WebSocket configuration (for host/port/tls settings)
         user_service: User authentication service
+        upload_dir: Optional uploads directory to serve via GET /uploads/{filename}
 
     Returns:
         Configured HttpAuthServer instance
@@ -236,6 +310,7 @@ async def create_http_auth_server(
         config=server_config,
         auth_routes=auth_routes,
         jwt_auth=jwt_auth,
+        upload_dir=upload_dir,
     )
 
     return server

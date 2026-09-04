@@ -3421,3 +3421,39 @@
   color: var(--text-secondary, #aaa);
   font-style: italic;
 }
+
+/* --- Image blocks (ImageBlockView) --- */
+.image-block {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding: 4px 0;
+}
+
+.image-block__img {
+  max-width: 100%;
+  max-height: 480px;
+  width: auto;
+  height: auto;
+  object-fit: contain;
+  border: 1px solid var(--border-color, #333);
+  border-radius: 6px;
+  background: var(--bg-code, #1a1a1a);
+}
+
+.image-block__caption {
+  font-size: 12px;
+  color: var(--text-tertiary, #666);
+}
+
+.image-block--loading .image-block__placeholder,
+.image-block--error .image-block__placeholder {
+  color: var(--text-secondary, #888);
+  font-style: italic;
+}
+
+.image-block--error .image-block__error {
+  display: block;
+  font-size: 12px;
+  color: var(--error-color, #e06c75);
+}

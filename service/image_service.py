@@ -108,6 +108,15 @@ class ImageService:
         # Ensure upload directory exists
         self._upload_dir.mkdir(parents=True, exist_ok=True)
 
+    @property
+    def upload_dir(self) -> Path:
+        """Resolved directory where uploaded images are stored.
+
+        Sync accessor (unlike the ws_expose'd get_upload_dir) so non-async
+        wiring -- e.g. the HTTP uploads route -- can serve from it.
+        """
+        return self._upload_dir
+
     def add_event_handler(self, handler: Callable[[str, dict], None]) -> None:
         """Register a handler for WebSocket events."""
         self._event_handlers.append(handler)

@@ -125,6 +125,29 @@ export function getApiBaseUrl(port: number): string {
 }
 
 /**
+ * Auth server HTTP ports per server slot (WS port + 1).
+ * Mirrors AUTH_PORTS in App.tsx -- keep in sync.
+ */
+const AUTH_PORTS: Record<'A' | 'B', number> = { A: 8701, B: 8711 };
+
+/**
+ * Get the base URL of the HTTP auth server for the current server slot.
+ *
+ * This is the server that also serves GET /uploads/{filename}, so image
+ * fetches must target it (not the WS server). Slot is persisted by App.tsx
+ * under 'balloons:server-slot'; defaults to A.
+ */
+export function getAuthBaseUrl(): string {
+  if (typeof window === 'undefined') {
+    return `https://localhost:${AUTH_PORTS.A}`;
+  }
+  const slot: 'A' | 'B' =
+    localStorage.getItem('balloons:server-slot') === 'B' ? 'B' : 'A';
+  const protocol = window.location.protocol === 'https:' ? 'https:' : 'http:';
+  return `${protocol}//${window.location.hostname}:${AUTH_PORTS[slot]}`;
+}
+
+/**
  * Get the WebSocket URL with auth token.
  *
  * Note: WS server runs on a different port than HTTP auth server.

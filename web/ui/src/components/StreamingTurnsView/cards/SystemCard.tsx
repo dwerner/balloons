@@ -33,6 +33,7 @@ import type {
   WatchSummaryBlock,
 } from '../../../../../generated/types';
 import { useSelectSession, useClient } from './ClientContext';
+import { ImageBlockView } from './ImageBlockView';
 import { createLogger } from '../../../utils/debugLog';
 import './cards.css';
 
@@ -352,6 +353,13 @@ export const SystemCard = React.memo(function SystemCard({ turn, sessionId }: Sy
   const renderBody = () => {
     if (displayMode === 'raw') {
       return <RawDataDisplay data={turn} />;
+    }
+
+    // Images are rendered as real <img> elements backed by the auth'd uploads
+    // route, not as markdown (a markdown href would be a server file path the
+    // browser cannot load, and an <img src> cannot carry the auth header).
+    if (blockType === 'image' && contentBlock) {
+      return <ImageBlockView block={contentBlock as ImageBlock} />;
     }
 
     if (displayContent) {

@@ -14,6 +14,8 @@
 	- minimap doesnt show some areas of a chat
 	- memory use of the chat seems high
 - long-slow pause when forking, TONS of ws messages
+- hitting stop on a stream is janky, hides turns etc
+- what about token back-pressure? if a user likes to be able to read the reasoning, then ux could benefit from setting a max tps
 
 ## bigger features
 - scheduling/watching
