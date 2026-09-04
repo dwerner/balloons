@@ -27,6 +27,8 @@ import { SendActionButton, type SendAction } from './components/SendActionButton
 import { setDebugClient, createLogger, debugLog as rawDebugLog } from './utils/debugLog';
 import { logout, isAuthenticated } from './utils/auth';
 import { getWsUrlForSlot, getAuthUrlForSlot, getInitialSlot, type ServerSlot } from './utils/serverSlots';
+import { matchSessionId, isSessionTab } from './utils/urlRouting';
+import { useUrlRouting } from './hooks/useUrlRouting';
 import { sortTurnsByIdx, sessionDataTurnToInfo, loadSessionWithLayers } from './utils/turnTransforms';
 import type { SessionDataTurn } from './hooks/useSessionData';
 import { Login } from './components/Login';
@@ -97,6 +99,12 @@ function AppContent() {
 
   // Input area height - resizable by dragging top edge (persisted; see hook).
   const { inputAreaHeight, handleResizeStart: handleInputAreaResizeStart } = useInputAreaResize();
+
+  // Hash-based session deep links (#/sessions/:id[/:tab]). initialRoute seeds the
+  // first selection; replaceSession mirrors selection changes back into the URL.
+  // (Back/forward via currentRoute is wired behind the hook but not yet consumed
+  // here — see PLAN-frontend-remediation.md WS7.) See hooks/useUrlRouting.
+  const { initialRoute, replaceSession } = useUrlRouting();
 
   // Server slot (A=8765, B=8766) - persisted to localStorage
   const [serverSlot, setServerSlot] = useState<ServerSlot>(getInitialSlot);
@@ -298,14 +306,25 @@ function AppContent() {
           setSessions(sessionList);
 
           // Determine which session to select:
-          // 1. Check for persisted session ID in localStorage
-          // 2. Fall back to current session from backend
+          // 1. Deep link from the URL hash (#/sessions/:id), prefix-matched
+          // 2. Persisted session ID in localStorage
+          // 3. Most recent session (sessions are sorted by last_modified)
           const persistedId = localStorage.getItem('balloons:selected-session');
           const persistedSessionExists = persistedId && sessionList.some(s => s.id === persistedId);
+          const deepLinkMatch =
+            initialRoute.kind === 'session'
+              ? matchSessionId(initialRoute.sessionId, sessionList.map(s => s.id))
+              : null;
 
           let sessionIdToLoad: string | null = null;
 
-          if (persistedSessionExists) {
+          if (deepLinkMatch) {
+            // Deep link wins; also honour the requested session tab.
+            sessionIdToLoad = deepLinkMatch;
+            if (initialRoute.kind === 'session' && initialRoute.tab !== 'streaming') {
+              setMainContentTab(initialRoute.tab);
+            }
+          } else if (persistedSessionExists) {
             // Use persisted session if it still exists
             sessionIdToLoad = persistedId;
           } else {
@@ -963,6 +982,17 @@ function AppContent() {
       setIsLoadingTurns(false);
     }
   }, [connectionState, selectedSessionId]);
+
+  // Mirror the current session selection into the URL hash (session tabs only).
+  // replaceSession uses history.replaceState, which emits no popstate/hashchange,
+  // so this never re-enters the hook's reactive route. Global tabs (code/logs/…)
+  // leave the hash untouched — deep-linking those is future work.
+  useEffect(() => {
+    if (connectionState !== 'connected' || !selectedSessionId) return;
+    if (isSessionTab(mainContentTab)) {
+      replaceSession(selectedSessionId, mainContentTab);
+    }
+  }, [selectedSessionId, mainContentTab, connectionState, replaceSession]);
 
   // Handle turns change from StreamingTurnsView
   // This callback is called whenever useSessionData's turns change
