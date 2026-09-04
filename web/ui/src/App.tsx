@@ -542,16 +542,14 @@ function AppContent() {
       unsubscribers.push(
         client.sessionData.sessionDataSessionUpdated((data) => {
           const tStart = performance.now();
-          // Update session in place using the event data - no refetch needed
+          // Update session in place using the event data - no refetch needed.
           // The event includes the full SessionInfo with updated fields like
-          // cachedContextTokens, isStreaming, etc.
-          // NOTE: Preserve local isPinned state - server events don't include pin status
+          // cachedContextTokens, isStreaming, and isPinned (the server keeps a
+          // pinned cache in sync, so no client-side preservation is needed).
           if (data.session) {
             setSessions(prev => {
               const result = prev.map(s =>
-                s.id === data.sessionId
-                  ? { ...data.session, isPinned: s.isPinned }  // Preserve local pin state
-                  : s
+                s.id === data.sessionId ? data.session! : s
               );
               const elapsed = performance.now() - tStart;
               if (elapsed > 1) {

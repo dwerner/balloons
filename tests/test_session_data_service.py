@@ -1296,3 +1296,51 @@ class TestLayerBasedSubscriptions:
         # Both clients should receive (turnCreated goes to HEADER layer)
         assert "client-header" in events[0][1]
         assert "client-all" in events[0][1]
+
+
+class TestPinnedCache:
+    """session_to_info must report real is_pinned from the cached set so
+    synchronous event emission (sessionUpdated) no longer hardcodes False.
+    Regression guard for BUGS.md #23 (pinned sessions falling into date groups)."""
+
+    @pytest.fixture
+    def service(self):
+        return SessionDataService()
+
+    class _FakeSession:
+        def __init__(self, session_id):
+            self.id = session_id
+            self.title = "T"
+            self.created = "2026-01-01T00:00:00Z"
+            self.last_modified = "2026-01-01T00:00:00Z"
+            self.model = "m"
+            self.turns = []
+            self.total_cost = 0.0
+            self.fork_name = ""
+            self.fork_status = ""
+            self.concluded = False
+            self.concluded_at = None
+            self.parent_id = None
+            self.cached_context_tokens = 0
+            self.context_window = 150000
+            self.binding_indicator = ""
+            self.backend_name = "claude"
+            self.working_directory = "/tmp"
+            self.children = []
+
+    def test_is_pinned_cached_reflects_set(self, service):
+        service._pinned_ids = {"a", "b"}
+        assert service.is_pinned_cached("a") is True
+        assert service.is_pinned_cached("c") is False
+
+    def test_session_to_info_uses_cache_when_is_pinned_omitted(self, service):
+        service._pinned_ids = {"pinned-1"}
+        pinned = service.session_to_info(self._FakeSession("pinned-1"))
+        unpinned = service.session_to_info(self._FakeSession("other"))
+        assert pinned.is_pinned is True
+        assert unpinned.is_pinned is False
+
+    def test_session_to_info_explicit_is_pinned_overrides_cache(self, service):
+        service._pinned_ids = set()
+        info = service.session_to_info(self._FakeSession("x"), is_pinned=True)
+        assert info.is_pinned is True

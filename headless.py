@@ -141,6 +141,10 @@ async def run_server(host: str | None = None, port: int | None = None) -> None:
     await session_service.initialize()
     session_service.start_event_pump()
 
+    # Load the pinned-session cache so synchronous event emission reports
+    # accurate is_pinned (see SessionDataService.refresh_pinned_cache).
+    await session_data_service.refresh_pinned_cache()
+
     auth_port = ws_config.port + 1
     user_storage = await get_user_storage()
     user_service = UserAuthService(user_storage)

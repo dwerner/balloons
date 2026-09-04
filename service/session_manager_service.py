@@ -830,7 +830,7 @@ class SessionManagerService:
 
         session_info = self._session_data_service.session_to_info(
             session,
-            is_pinned=False,  # New sessions are not pinned
+            is_pinned=False,  # New sessions are never pinned
             is_streaming=is_streaming,
         )
         self._session_data_service.emit_session_added(session_info)
@@ -853,7 +853,6 @@ class SessionManagerService:
 
         session_info = self._session_data_service.session_to_info(
             session,
-            is_pinned=False,  # TODO: Check actual pinned state
             is_streaming=is_streaming,
         )
         self._session_data_service.emit_session_updated(session_info)

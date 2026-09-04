@@ -653,6 +653,22 @@ class SessionDataService:
         # observer pattern, and we call it back for session lookup and event emission.
         self._manager: Any = None  # SessionManagerService - set via set_manager()
         self._session_manager: Any = None  # Alias for _manager, used for event emission
+        # Cached set of pinned session IDs. Loaded at startup and kept in sync
+        # by pin_session/unpin_session so synchronous event emission
+        # (session_to_info) can report the real is_pinned without an await.
+        self._pinned_ids: set[str] = set()
+
+    async def refresh_pinned_cache(self) -> None:
+        """Reload the cached pinned-session set from UserPrefs storage.
+
+        Called at startup and after any pin/unpin so that synchronous callers
+        (session_to_info during event emission) can report accurate is_pinned.
+        """
+        self._pinned_ids = await self._load_pinned_session_ids()
+
+    def is_pinned_cached(self, session_id: str) -> bool:
+        """Synchronous pinned-state lookup against the cache."""
+        return session_id in self._pinned_ids
 
     def set_manager(self, manager: Any) -> None:
         """Set the SessionManagerService reference.
@@ -1676,7 +1692,7 @@ class SessionDataService:
     def session_to_info(
         self,
         session: Any,
-        is_pinned: bool = False,
+        is_pinned: bool | None = None,
         is_streaming: bool = False,
     ) -> SessionInfo:
         """Convert a Session object to SessionInfo.
@@ -1686,12 +1702,15 @@ class SessionDataService:
 
         Args:
             session: The Session object to convert
-            is_pinned: Whether the session is pinned
+            is_pinned: Whether the session is pinned. When None, resolved from
+                the cached pinned set (so event emission reports real state).
             is_streaming: Whether the session is currently streaming
 
         Returns:
             SessionInfo with all fields populated
         """
+        if is_pinned is None:
+            is_pinned = session.id in self._pinned_ids
         # Convert children list to ForkChild objects
         children = [
             ForkChild(
@@ -2267,6 +2286,7 @@ class SessionDataService:
 
             prefs.pinned_session_ids.append(session_id)
             await storage.save_prefs(prefs)
+            self._pinned_ids.add(session_id)
 
             debug_log.info(
                 f"Session pinned: {session_id[:8]}",
@@ -2310,6 +2330,7 @@ class SessionDataService:
 
             prefs.pinned_session_ids.remove(session_id)
             await storage.save_prefs(prefs)
+            self._pinned_ids.discard(session_id)
 
             debug_log.info(
                 f"Session unpinned: {session_id[:8]}",
