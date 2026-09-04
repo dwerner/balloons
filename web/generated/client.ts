@@ -508,6 +508,14 @@ export interface SessionManagerService {
   createSession(workingDirectory?: string | null): Promise<Types.ManagedSessionInfo>;
 
   /**
+   * Create a new watcher session that observes a target session.
+   * 
+   * The new session receives a WatchStartBlock establishing the relationship
+   * plus instructions describing watcher behaviour.
+   */
+  createWatcherSession(targetSessionId: string): Promise<Types.CreateWatcherSessionResult>;
+
+  /**
    * Delete a session.
    * 
    * Note: This removes the session from memory and storage.
@@ -1357,6 +1365,10 @@ export class SessionManagerServiceClient implements SessionManagerService {
 
   async createSession(workingDirectory?: string | null): Promise<Types.ManagedSessionInfo> {
     return this.call('createSession', { workingDirectory: workingDirectory });
+  }
+
+  async createWatcherSession(targetSessionId: string): Promise<Types.CreateWatcherSessionResult> {
+    return this.call('createWatcherSession', { targetSessionId: targetSessionId });
   }
 
   async deleteSession(sessionId: string): Promise<boolean> {

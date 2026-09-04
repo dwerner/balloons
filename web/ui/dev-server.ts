@@ -11,6 +11,45 @@ interface BuildOutput {
   css: string;
 }
 
+// Typecheck in the background after each build.
+// Bun.build strips types without checking them, so without this a broken
+// type (or a call to a method that no longer exists on the generated client)
+// ships silently and only fails at runtime. Runs async so it never stalls
+// the rebuild/serve loop.
+let typecheckProc: ReturnType<typeof Bun.spawn> | null = null;
+function runTypecheck(): void {
+  if (typecheckProc) {
+    try {
+      typecheckProc.kill();
+    } catch {
+      /* already exited */
+    }
+  }
+  const proc = Bun.spawn(["bun", "x", "tsc", "--noEmit"], {
+    cwd: projectDir,
+    stdout: "pipe",
+    stderr: "pipe",
+  });
+  typecheckProc = proc;
+
+  // Start draining the pipes immediately; reading after `exited` resolves
+  // can lose buffered output.
+  const outP = new Response(proc.stdout).text();
+  const errP = new Response(proc.stderr).text();
+
+  proc.exited.then(async (code) => {
+    if (typecheckProc === proc) typecheckProc = null;
+    const [o, e] = await Promise.all([outP, errP]);
+    const text = (o + e).trim();
+    if (code === 0) {
+      console.log("\x1b[32m[typecheck] OK\x1b[0m");
+    } else {
+      console.error("\x1b[31m[typecheck] FAILED\x1b[0m");
+      console.error(text);
+    }
+  });
+}
+
 // Build the app bundle
 async function buildApp(): Promise<BuildOutput | null> {
   const entrypoint = join(projectDir, "src/main.tsx");
@@ -50,6 +89,7 @@ async function buildApp(): Promise<BuildOutput | null> {
 
 // Initial build
 let buildOutput = await buildApp();
+runTypecheck();
 
 // Watch for changes and rebuild using chokidar (reliable on Linux)
 const dirsToWatch = [
@@ -76,6 +116,7 @@ watcher.on("all", async (event, filePath) => {
         buildOutput = newBuild;
         console.log("Rebuild complete");
       }
+      runTypecheck();
     }, 50);
   }
 });

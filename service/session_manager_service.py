@@ -4789,6 +4789,146 @@ Then I'll mark the session as concluded."""
 
     # --- Watcher Operations ---
 
+    async def _create_watcher_session_impl(
+        self,
+        target_session_id: str,
+        initial_prompt: str | None = None,
+    ) -> CreateWatcherSessionResult:
+        """Internal implementation for creating a new watcher session.
+
+        Creates a fresh session, establishes the watching relationship with a
+        WatchStartBlock, and seeds it with the watcher instructions so the LLM
+        understands its role.
+        """
+        debug_log.info(
+            f"create_watcher_session called for target {target_session_id[:8]}",
+            category=Category.SESSION,
+        )
+
+        target_session = self._manager.get_session(target_session_id)
+        if not target_session:
+            target_session = await self._manager.load_session(target_session_id)
+            if not target_session:
+                return CreateWatcherSessionResult(
+                    success=False,
+                    error=f"Target session {target_session_id} not found",
+                )
+
+        target_name = (
+            target_session.title or target_session.fork_name or target_session.id[:8]
+        )
+
+        watcher_session = await self._manager.create_session(
+            working_directory=target_session.working_directory
+        )
+
+        # UI display logic relies on watch relationships, not title prefixes.
+        watcher_name = f"Watcher for {target_name}"
+        watcher_session.title = watcher_name
+
+        watch_turn = watcher_session.add_watch_start_turn(
+            target_session_id=target_session_id,
+            target_session_name=target_name,
+        )
+
+        watcher_instructions = self._get_watcher_instructions(target_name)
+        instructions_turn = watcher_session.add_turn(
+            role="user",
+            content_block=TextBlock(text=watcher_instructions),
+        )
+
+        extra_prompt_turn = None
+        if initial_prompt:
+            extra_prompt_turn = watcher_session.add_turn(
+                role="user",
+                content_block=TextBlock(text=initial_prompt),
+            )
+
+        await watcher_session.save()
+
+        self._emit_event(SessionManagerEvent.SESSION_CREATED, watcher_session.id)
+        self._emit_session_added(watcher_session, is_streaming=False)
+
+        for turn, role, block_type, summary in (
+            (
+                watch_turn,
+                "system",
+                "watch_start",
+                f"[Watching {target_name}]",
+            ),
+            (
+                instructions_turn,
+                "user",
+                "text",
+                watcher_instructions[:100] + "...",
+            ),
+            (
+                extra_prompt_turn,
+                "user",
+                "text",
+                (initial_prompt or "")[:100],
+            ),
+        ):
+            if turn is None:
+                continue
+            exchange_id = str(uuid.uuid4())
+            turn_index = next(
+                i for i, t in enumerate(watcher_session.turns) if t is turn
+            )
+            await self._notify_observers(
+                "on_turn_created",
+                TurnCreatedEvent(
+                    session_id=watcher_session.id,
+                    turn_id=turn.id,
+                    turn_index=turn_index,
+                    role=role,
+                    exchange_id=exchange_id,
+                    content_block_type=block_type,
+                ),
+            )
+            await self._notify_observers(
+                "on_turn_finished",
+                TurnFinishedEvent(
+                    session_id=watcher_session.id,
+                    turn_id=turn.id,
+                    turn_index=turn_index,
+                    role=role,
+                    content=summary,
+                    tokens=0,
+                    content_block=turn.content_block,
+                ),
+            )
+
+        await self._register_watcher_internal(
+            watcher_session.id, target_session_id, target_name
+        )
+
+        debug_log.info(
+            f"Created watcher session: {watcher_session.id[:8]} watching {target_session_id[:8]}",
+            category=Category.SESSION,
+            details={"target_name": target_name, "watcher_name": watcher_name},
+        )
+
+        return CreateWatcherSessionResult(
+            success=True,
+            watcher_session_id=watcher_session.id,
+            target_session_id=target_session_id,
+            target_session_name=target_name,
+            watcher_name=watcher_name,
+        )
+
+    @ws_expose
+    async def create_watcher_session(
+        self,
+        target_session_id: str,
+    ) -> CreateWatcherSessionResult:
+        """Create a new watcher session that observes a target session.
+
+        The new session receives a WatchStartBlock establishing the relationship
+        plus instructions describing watcher behaviour.
+        """
+        return await self._create_watcher_session_impl(target_session_id)
+
     @ws_expose
     async def start_watching_session(
         self,
