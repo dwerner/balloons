@@ -1,18 +1,19 @@
 /**
  * URL routing (hash-based) — pure parsing/formatting helpers.
  *
- * Implements the session-route slice of docs/specs/url-routing.md:
+ * Implements the session- and global-tab-route slices of docs/specs/url-routing.md:
  *
  *   #/                              default (last active session / picker)
  *   #/sessions/:sessionId           specific session, streaming tab
  *   #/sessions/:sessionId/:tab      specific session + session tab
+ *   #/code | #/logs | #/llm | #/settings | #/surveys   app-global tabs
  *
  * Session IDs support prefix matching (see matchSessionId): a shared link like
  * `#/sessions/abc` resolves to the full id `abc123-def456-...` once the session
  * list is known.
  *
- * Other route families from the spec (goals, global tabs, turns) are intentionally
- * NOT implemented yet; they parse to `default` so unknown hashes fall back to the
+ * Other route families from the spec (goals, turns) are intentionally NOT
+ * implemented yet; they parse to `default` so unknown hashes fall back to the
  * existing selection logic rather than blanking the view. This module is pure and
  * side-effect free so the logic is unit-testable without a DOM.
  */
@@ -31,9 +32,29 @@ export function isSessionTab(value: string | undefined): value is SessionTab {
   return value !== undefined && (SESSION_TABS as readonly string[]).includes(value);
 }
 
+/**
+ * App-global tabs (not tied to a session). The URL segment equals the tab name
+ * (e.g. `#/settings`). These mirror `MainContentTab`'s global subset in
+ * AppChrome; kept in sync manually (see App.tsx wiring).
+ */
+export type GlobalTab = 'code' | 'logs' | 'llm' | 'settings' | 'surveys';
+
+export const GLOBAL_TABS: readonly GlobalTab[] = [
+  'code',
+  'logs',
+  'llm',
+  'settings',
+  'surveys',
+];
+
+export function isGlobalTab(value: string | undefined): value is GlobalTab {
+  return value !== undefined && (GLOBAL_TABS as readonly string[]).includes(value);
+}
+
 export type Route =
   | { kind: 'default' }
-  | { kind: 'session'; sessionId: string; tab: SessionTab };
+  | { kind: 'session'; sessionId: string; tab: SessionTab }
+  | { kind: 'global'; tab: GlobalTab };
 
 /**
  * Parse a raw `window.location.hash` (e.g. "#/sessions/abc/context") into a Route.
@@ -49,14 +70,22 @@ export function parseRoute(hash: string): Route {
 
   // "#/", "", "#/sessions" (bare) → default.
   if (segments.length === 0) return { kind: 'default' };
-  if (segments[0] !== 'sessions') return { kind: 'default' };
 
-  const sessionId = segments[1];
-  if (!sessionId) return { kind: 'default' };
+  if (segments[0] === 'sessions') {
+    const sessionId = segments[1];
+    if (!sessionId) return { kind: 'default' };
 
-  const rawTab = segments[2];
-  const tab: SessionTab = isSessionTab(rawTab) ? rawTab : 'streaming';
-  return { kind: 'session', sessionId, tab };
+    const rawTab = segments[2];
+    const tab: SessionTab = isSessionTab(rawTab) ? rawTab : 'streaming';
+    return { kind: 'session', sessionId, tab };
+  }
+
+  // App-global tab routes: "#/code", "#/settings", etc.
+  if (isGlobalTab(segments[0])) {
+    return { kind: 'global', tab: segments[0] };
+  }
+
+  return { kind: 'default' };
 }
 
 /**
@@ -68,6 +97,11 @@ export function formatSessionRoute(sessionId: string, tab: SessionTab): string {
   return tab === 'streaming'
     ? `#/sessions/${sessionId}`
     : `#/sessions/${sessionId}/${tab}`;
+}
+
+/** Build a hash for an app-global tab (e.g. "#/settings"). */
+export function formatGlobalRoute(tab: GlobalTab): string {
+  return `#/${tab}`;
 }
 
 /**

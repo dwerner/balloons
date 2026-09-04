@@ -2,8 +2,10 @@ import { describe, it, expect } from 'bun:test';
 import {
   parseRoute,
   formatSessionRoute,
+  formatGlobalRoute,
   matchSessionId,
   isSessionTab,
+  isGlobalTab,
 } from './urlRouting';
 
 describe('parseRoute', () => {
@@ -52,9 +54,25 @@ describe('parseRoute', () => {
   });
 
   it('returns default for unimplemented route families', () => {
-    expect(parseRoute('#/code')).toEqual({ kind: 'default' });
     expect(parseRoute('#/goals/g1')).toEqual({ kind: 'default' });
-    expect(parseRoute('#/logs')).toEqual({ kind: 'default' });
+    expect(parseRoute('#/sessions/abc123/turn/5')).toEqual({
+      kind: 'session',
+      sessionId: 'abc123',
+      tab: 'streaming',
+    });
+    expect(parseRoute('#/bogus')).toEqual({ kind: 'default' });
+  });
+
+  it('parses app-global tab routes', () => {
+    expect(parseRoute('#/code')).toEqual({ kind: 'global', tab: 'code' });
+    expect(parseRoute('#/logs')).toEqual({ kind: 'global', tab: 'logs' });
+    expect(parseRoute('#/llm')).toEqual({ kind: 'global', tab: 'llm' });
+    expect(parseRoute('#/settings')).toEqual({ kind: 'global', tab: 'settings' });
+    expect(parseRoute('#/surveys')).toEqual({ kind: 'global', tab: 'surveys' });
+  });
+
+  it('tolerates a missing leading slash on a global tab', () => {
+    expect(parseRoute('#settings')).toEqual({ kind: 'global', tab: 'settings' });
   });
 });
 
@@ -76,6 +94,19 @@ describe('formatSessionRoute', () => {
     for (const tab of ['streaming', 'context', 'properties', 'slides'] as const) {
       const hash = formatSessionRoute('sess-xyz', tab);
       expect(parseRoute(hash)).toEqual({ kind: 'session', sessionId: 'sess-xyz', tab });
+    }
+  });
+});
+
+describe('formatGlobalRoute', () => {
+  it('builds a "#/<tab>" hash', () => {
+    expect(formatGlobalRoute('code')).toBe('#/code');
+    expect(formatGlobalRoute('settings')).toBe('#/settings');
+  });
+
+  it('round-trips through parseRoute', () => {
+    for (const tab of ['code', 'logs', 'llm', 'settings', 'surveys'] as const) {
+      expect(parseRoute(formatGlobalRoute(tab))).toEqual({ kind: 'global', tab });
     }
   });
 });
@@ -114,5 +145,22 @@ describe('isSessionTab', () => {
     expect(isSessionTab('code')).toBe(false);
     expect(isSessionTab('logs')).toBe(false);
     expect(isSessionTab(undefined)).toBe(false);
+  });
+});
+
+describe('isGlobalTab', () => {
+  it('accepts known global tabs', () => {
+    expect(isGlobalTab('code')).toBe(true);
+    expect(isGlobalTab('logs')).toBe(true);
+    expect(isGlobalTab('llm')).toBe(true);
+    expect(isGlobalTab('settings')).toBe(true);
+    expect(isGlobalTab('surveys')).toBe(true);
+  });
+
+  it('rejects session tabs and unknown values', () => {
+    expect(isGlobalTab('streaming')).toBe(false);
+    expect(isGlobalTab('context')).toBe(false);
+    expect(isGlobalTab('sessions')).toBe(false);
+    expect(isGlobalTab(undefined)).toBe(false);
   });
 });

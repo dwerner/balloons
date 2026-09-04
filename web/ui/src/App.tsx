@@ -27,7 +27,7 @@ import { SendActionButton, type SendAction } from './components/SendActionButton
 import { setDebugClient, createLogger, debugLog as rawDebugLog } from './utils/debugLog';
 import { logout, isAuthenticated } from './utils/auth';
 import { getWsUrlForSlot, getAuthUrlForSlot, getInitialSlot, type ServerSlot } from './utils/serverSlots';
-import { matchSessionId, isSessionTab } from './utils/urlRouting';
+import { matchSessionId, isSessionTab, isGlobalTab } from './utils/urlRouting';
 import { useUrlRouting } from './hooks/useUrlRouting';
 import { sortTurnsByIdx, sessionDataTurnToInfo, loadSessionWithLayers } from './utils/turnTransforms';
 import type { SessionDataTurn } from './hooks/useSessionData';
@@ -108,7 +108,7 @@ function AppContent() {
   // stores it in a ref and only invokes it on genuine popstate/hashchange, never
   // on our own replaceSession writes, so there is no feedback loop.
   const urlNavigateRef = useRef<(route: import('./utils/urlRouting').Route) => void>(() => {});
-  const { initialRoute, replaceSession } = useUrlRouting((route) => urlNavigateRef.current(route));
+  const { initialRoute, replaceSession, replaceGlobalTab } = useUrlRouting((route) => urlNavigateRef.current(route));
 
   // Server slot (A=8765, B=8766) - persisted to localStorage
   const [serverSlot, setServerSlot] = useState<ServerSlot>(getInitialSlot);
@@ -334,6 +334,12 @@ function AppContent() {
           } else {
             // Fall back to most recent session (sessions are sorted by last_modified)
             sessionIdToLoad = sessionList[0]?.id ?? null;
+          }
+
+          // A global-tab deep link (#/settings, #/code, …) shows that tab. A session
+          // still loads in the background (sidebar + when switching back to a session tab).
+          if (initialRoute.kind === 'global') {
+            setMainContentTab(initialRoute.tab);
           }
 
           if (sessionIdToLoad) {
@@ -989,9 +995,13 @@ function AppContent() {
 
   // URL → selection (browser back/forward, manual hash edits). Assigned to a ref
   // each render so the hook's stable callback always sees the latest state. Only
-  // invoked on genuine popstate/hashchange (never on our replaceSession writes),
+  // invoked on genuine popstate/hashchange (never on our replaceState writes),
   // so mirroring selection→URL and reacting to URL→selection cannot loop.
   urlNavigateRef.current = (route) => {
+    if (route.kind === 'global') {
+      if (route.tab !== mainContentTab) setMainContentTab(route.tab);
+      return;
+    }
     if (route.kind !== 'session') return;
     const match = matchSessionId(route.sessionId, sessions.map((s) => s.id));
     if (!match) return; // sessions not loaded yet — nothing to select
@@ -999,16 +1009,18 @@ function AppContent() {
     if (route.tab !== mainContentTab) setMainContentTab(route.tab);
   };
 
-  // Mirror the current session selection into the URL hash (session tabs only).
-  // replaceSession uses history.replaceState, which emits no popstate/hashchange,
-  // so this never re-enters the hook's reactive route. Global tabs (code/logs/…)
-  // leave the hash untouched — deep-linking those is future work.
+  // Mirror the current tab into the URL hash. Session tabs → #/sessions/:id/:tab
+  // (needs a selected session); global tabs → #/<tab> (no session required). Both
+  // writes use history.replaceState, which emits no popstate/hashchange, so this
+  // never re-enters the hook's reactive route.
   useEffect(() => {
-    if (connectionState !== 'connected' || !selectedSessionId) return;
-    if (isSessionTab(mainContentTab)) {
+    if (connectionState !== 'connected') return;
+    if (isGlobalTab(mainContentTab)) {
+      replaceGlobalTab(mainContentTab);
+    } else if (selectedSessionId && isSessionTab(mainContentTab)) {
       replaceSession(selectedSessionId, mainContentTab);
     }
-  }, [selectedSessionId, mainContentTab, connectionState, replaceSession]);
+  }, [selectedSessionId, mainContentTab, connectionState, replaceSession, replaceGlobalTab]);
 
   // Handle turns change from StreamingTurnsView
   // This callback is called whenever useSessionData's turns change

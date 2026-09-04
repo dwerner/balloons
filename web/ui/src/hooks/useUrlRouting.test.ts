@@ -99,4 +99,35 @@ describe('useUrlRouting', () => {
     expect(window.location.hash).toBe('#/sessions/mirror1/slides');
     expect(calls).toHaveLength(0);
   });
+
+  it('replaceGlobalTab writes the hash without firing a reactive route change', () => {
+    const { result } = renderHook(() => useUrlRouting());
+    act(() => {
+      result.current.replaceGlobalTab('settings');
+    });
+    expect(window.location.hash).toBe('#/settings');
+    // replaceState emits no event, so currentRoute stays at its mount value.
+    expect(result.current.currentRoute).toEqual({ kind: 'default' });
+  });
+
+  it('onNavigate is NOT called by replaceGlobalTab (no feedback loop)', () => {
+    const calls: unknown[] = [];
+    const { result } = renderHook(() => useUrlRouting((r) => calls.push(r)));
+    act(() => {
+      result.current.replaceGlobalTab('code');
+    });
+    expect(window.location.hash).toBe('#/code');
+    expect(calls).toHaveLength(0);
+  });
+
+  it('currentRoute + onNavigate update on hashchange to a global route', () => {
+    const calls: unknown[] = [];
+    const { result } = renderHook(() => useUrlRouting((r) => calls.push(r)));
+    act(() => {
+      window.history.replaceState(null, '', '#/logs');
+      window.dispatchEvent(new HashChangeEvent('hashchange'));
+    });
+    expect(result.current.currentRoute).toEqual({ kind: 'global', tab: 'logs' });
+    expect(calls).toEqual([{ kind: 'global', tab: 'logs' }]);
+  });
 });

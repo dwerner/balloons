@@ -20,8 +20,10 @@ import { useState, useEffect, useCallback, useRef } from 'react';
 import {
   parseRoute,
   formatSessionRoute,
+  formatGlobalRoute,
   type Route,
   type SessionTab,
+  type GlobalTab,
 } from '../utils/urlRouting';
 
 export interface UrlRouting {
@@ -31,6 +33,8 @@ export interface UrlRouting {
   currentRoute: Route;
   /** Write the session hash without adding a history entry (no event fired). */
   replaceSession: (sessionId: string, tab: SessionTab) => void;
+  /** Write a global-tab hash without adding a history entry (no event fired). */
+  replaceGlobalTab: (tab: GlobalTab) => void;
 }
 
 function readHash(): string {
@@ -75,5 +79,12 @@ export function useUrlRouting(onNavigate?: (route: Route) => void): UrlRouting {
     }
   }, []);
 
-  return { initialRoute, currentRoute, replaceSession };
+  const replaceGlobalTab = useCallback((tab: GlobalTab) => {
+    const hash = formatGlobalRoute(tab);
+    if (window.location.hash !== hash) {
+      window.history.replaceState(null, '', hash);
+    }
+  }, []);
+
+  return { initialRoute, currentRoute, replaceSession, replaceGlobalTab };
 }
