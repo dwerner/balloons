@@ -581,6 +581,29 @@
   color: var(--error, #ff6b6b);
 }
 
+/* Compact single-line tool error (Bug #21): <tool_use_error> content renders
+   as one line instead of a large multi-line block. */
+.tool-result-error-line {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 4px 8px;
+  color: var(--error, #ff6b6b);
+  font-size: 12px;
+  line-height: 1.4;
+}
+
+.tool-result-error-icon {
+  flex: 0 0 auto;
+}
+
+.tool-result-error-text {
+  flex: 1 1 auto;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
 /* ============================================================================
  * System Card Styles
  * ============================================================================ */

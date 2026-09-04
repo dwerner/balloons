@@ -11,6 +11,7 @@
 import React, { useState } from 'react';
 import { SyntaxHighlightedCode } from './SyntaxHighlighter';
 import { formatTimestamp } from '../../../utils';
+import { parseToolUseError, singleLine } from '../../../utils/toolError';
 import type { SessionDataTurn } from '../../../hooks/useSessionData';
 import type { ToolResultBlock } from '../../../../../generated/types';
 import './cards.css';
@@ -89,6 +90,9 @@ export const ToolResultCard = React.memo(function ToolResultCard({ turn }: ToolR
     : null;
   const content = resultBlock?.content || '';
   const isError = resultBlock?.isError || false;
+  // A <tool_use_error>…</tool_use_error> wrapper renders as a compact
+  // single-line error rather than a large multi-line block (Bug #21).
+  const toolError = parseToolUseError(content);
   const isPreview = streaming;
   const previewChunks = turn.toolResultPreview || [];
   const stdoutPreview = previewChunks.filter((chunk) => chunk.stream !== 'stderr').map((chunk) => chunk.delta).join('');
@@ -101,6 +105,16 @@ export const ToolResultCard = React.memo(function ToolResultCard({ turn }: ToolR
   const renderBody = () => {
     if (displayMode === 'raw') {
       return <RawDataDisplay data={turn} />;
+    }
+
+    // Compact single-line error for <tool_use_error> content (Bug #21).
+    if (toolError) {
+      return (
+        <div className="tool-result-error-line" role="status">
+          <span className="tool-result-error-icon">❌</span>
+          <span className="tool-result-error-text">{singleLine(toolError)}</span>
+        </div>
+      );
     }
 
     if (isPreview && previewChunks.length > 0) {
@@ -134,9 +148,9 @@ export const ToolResultCard = React.memo(function ToolResultCard({ turn }: ToolR
   };
 
   return (
-    <div className={`turn-card tool-result-card ${isError ? 'error' : ''} ${streaming ? 'streaming' : ''} ${displayMode === 'raw' ? 'raw-mode' : ''}`}>
+    <div className={`turn-card tool-result-card ${isError || toolError ? 'error' : ''} ${streaming ? 'streaming' : ''} ${displayMode === 'raw' ? 'raw-mode' : ''}`}>
       <div className="turn-card-header">
-        <span className="turn-icon">{isError ? '❌' : '✓'}</span>
+        <span className="turn-icon">{isError || toolError ? '❌' : '✓'}</span>
         <span className="turn-label">Tool Result</span>
         {isPreview && <span className="tool-preview-badge">Live output</span>}
         {timestamp && <span className="turn-timestamp">{formatTimestamp(timestamp)}</span>}
