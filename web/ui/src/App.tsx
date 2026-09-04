@@ -1,6 +1,6 @@
 import React, { useState, useEffect, useCallback, useRef, memo, useMemo, forwardRef, useImperativeHandle } from 'react';
 import { BalloonsClient } from '../../generated/balloons-client';
-import type { ConnectionState, SessionInfo, TurnInfo, TaskInfo, Unsubscribe, ToolUseStartedEvent, ToolInputDeltaEvent, ToolResultEvent } from '../../generated/balloons-client';
+import type { ConnectionState, SessionInfo, TurnInfo, TaskInfo, Unsubscribe, ToolUseStartedEvent } from '../../generated/balloons-client';
 import { AppLayout, useLayout, useTheme, ThemeProvider, usePreferences, PreferencesProvider, MarkdownThemeApplicator } from './components/layout';
 import { MobileHeader, MainContentHeader, SidebarContent, type MainContentTab } from './components/layout/AppChrome';
 import { SessionTreeView } from './components/SessionTreeView';
@@ -45,21 +45,6 @@ const debugLog = createLogger('App');
 
 // View mode for conversation display
 // StreamingTurnsView uses SessionDataService for real-time streaming
-
-// Tool use state tracked during streaming
-interface ToolUseState {
-  toolUseId: string;
-  toolName: string;
-  turnIndex: number;
-  toolIndex: number;
-  exchangeId?: string;  // Used for matching tool uses to assistant turns
-  status: 'streaming' | 'executing' | 'completed' | 'error';
-  inputJson: string;
-  result?: string;
-  isError?: boolean;
-  startTime: number;
-  endTime?: number;
-}
 
 // Image attachment state
 interface ImageAttachment {
@@ -177,7 +162,6 @@ function AppContent() {
   const [rawTurns, setRawTurns] = useState<SessionDataTurn[]>([]);
   const [error, setError] = useState<string | null>(null);
   const [streamingTask, setStreamingTask] = useState<TaskInfo | null>(null);
-  const [toolUses, setToolUses] = useState<ToolUseState[]>([]);
   const [imageAttachments, setImageAttachments] = useState<ImageAttachment[]>([]);
   const [isLoadingTurns, setIsLoadingTurns] = useState(false);
   // History state for ContextTab incomplete history detection
@@ -560,11 +544,7 @@ function AppContent() {
             s.id === data.sessionId ? { ...s, isStreaming: true } : s
           ));
 
-          // Clear tool uses when a new streaming session starts
-          if (data.sessionId === selectedSessionId) {
-            setToolUses([]);
-          }
-        })
+          })
       );
 
       unsubscribers.push(
@@ -637,7 +617,6 @@ function AppContent() {
       // Note: Turn updates are handled by useSessionData via events
       const cleanupAfterTaskEnd = (_sessionId: string) => {
         setStreamingTask(null);
-        setToolUses([]);
       };
 
       unsubscribers.push(
@@ -729,7 +708,10 @@ function AppContent() {
         })
       );
 
-      // Tool use events - for visualizing tool calls during streaming
+      // Tool use events - patch tool info onto `turns` so the sidebar/context
+      // renders tool calls during streaming. (The old `toolUses` mirror state
+      // was never read and has been removed; tool cards render from the
+      // SessionDataService turn stream, not this array.)
       unsubscribers.push(
         client.tasks.onToolUseStarted((data: ToolUseStartedEvent) => {
           if (data.sessionId === selectedSessionId) {
@@ -744,39 +726,10 @@ function AppContent() {
                     toolUse: {
                       toolUseId: data.toolUseId,
                       name: data.toolName,
-                      inputJson: '',  // Will be populated by toolInputDelta/toolUse events
+                      inputJson: '',  // Will be populated by the toolUse event
                     },
                   }
                 : t
-            ));
-
-            setToolUses(prev => {
-              // Check if this tool use already exists
-              if (prev.some(tu => tu.toolUseId === data.toolUseId)) {
-                return prev;
-              }
-              return [...prev, {
-                toolUseId: data.toolUseId,
-                toolName: data.toolName,
-                turnIndex: data.turnIndex,
-                toolIndex: data.toolIndex,
-                exchangeId: data.exchangeId,  // Capture exchange ID for matching
-                status: 'streaming',
-                inputJson: '',
-                startTime: Date.now(),
-              }];
-            });
-          }
-        })
-      );
-
-      unsubscribers.push(
-        client.tasks.onToolInputDelta((data: ToolInputDeltaEvent) => {
-          if (data.sessionId === selectedSessionId) {
-            setToolUses(prev => prev.map(tu =>
-              tu.toolUseId === data.toolUseId
-                ? { ...tu, inputJson: tu.inputJson + data.partialJson }
-                : tu
             ));
           }
         })
@@ -796,34 +749,6 @@ function AppContent() {
                     },
                   }
                 : t
-            ));
-
-            setToolUses(prev => prev.map(tu =>
-              tu.toolUseId === data.toolUseId
-                ? {
-                    ...tu,
-                    status: 'executing' as const,
-                    inputJson: JSON.stringify(data.toolInput),
-                  }
-                : tu
-            ));
-          }
-        })
-      );
-
-      unsubscribers.push(
-        client.tasks.onToolResult((data: ToolResultEvent) => {
-          if (data.sessionId === selectedSessionId) {
-            setToolUses(prev => prev.map(tu =>
-              tu.toolUseId === data.toolUseId
-                ? {
-                    ...tu,
-                    status: data.isError ? 'error' as const : 'completed' as const,
-                    result: data.result,
-                    isError: data.isError,
-                    endTime: Date.now(),
-                  }
-                : tu
             ));
           }
         })
@@ -1012,7 +937,6 @@ function AppContent() {
     const t1 = performance.now();
     setIsLoadingTurns(true);
     setTurns([]);
-    setToolUses([]);
     setStreamingTask(null);
     setError(null);
     // Clear archiving state - it's session-specific and shouldn't persist across session switches
