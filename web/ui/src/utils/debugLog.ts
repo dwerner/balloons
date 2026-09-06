@@ -60,15 +60,30 @@ export function debugLog(
   message: string,
   data?: Record<string, unknown>
 ): void {
-  // Console logging is gated by _debugEnabled
-  if (_debugEnabled) {
-    const timestamp = new Date().toISOString().split('T')[1]?.slice(0, 12) ?? '';
-    console.log(`[${timestamp}][${category}]`, message, data ?? '');
-  }
+  // Single gate for both outputs: when debug logging is disabled, debugLog()
+  // is a no-op -- nothing is printed AND nothing goes on the wire.
+  //
+  // The socket send used to be unconditional ("Always send to server if
+  // connected"), so toggling this setting silenced the devtools console while
+  // every log line still cost a frame on the WebSocket. On a single
+  // "run ls and stop" session that was 866 notifications / 239 KB = 70% of all
+  // traffic, the largest category by far (see tools/wslog).
+  //
+  // Accepted consequence: the server-side debug pane (LogsTab, which reads the
+  // 'client' category buffer) only shows web-UI logs while debug is enabled.
+  // Server-side logs and this pane's read/control RPCs are unaffected.
+  //
+  // The gate lives here rather than at call sites on purpose: callers still
+  // evaluate their arguments, so disabling saves wire bytes but not the cost of
+  // building the message. Scattering `if (isDebugEnabled())` guards across the
+  // UI was judged not worth it.
+  if (!_debugEnabled) return;
 
-  // Always send to server if connected (for server-side debugging)
-  // Send to 'client' category (which has a dedicated buffer on the server)
-  // Include the component category in the details for filtering.
+  const timestamp = new Date().toISOString().split('T')[1]?.slice(0, 12) ?? '';
+  console.log(`[${timestamp}][${category}]`, message, data ?? '');
+
+  // Send to the 'client' category (which has a dedicated buffer on the server),
+  // carrying the component category in details for filtering.
   //
   // debugLog.info is a fire-and-forget call (JSON-RPC notification): it sends
   // with no "id", the server never replies, and it returns void. The client
