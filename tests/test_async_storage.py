@@ -82,6 +82,31 @@ def sample_session():
     return session
 
 
+def test_interrupted_partial_block_round_trip(temp_db):
+    """A partial (interrupted) text/thinking block survives save/load.
+
+    Regression: thinking blocks were never serialized, so reasoning turns were
+    silently dropped on reload - which would defeat keeping partial content.
+    """
+    from models import ThinkingBlock
+
+    storage = AsyncStorage(temp_db)
+
+    for block in (
+        TextBlock(text="half an answer", interrupted=True),
+        ThinkingBlock(text="half a thought", interrupted=True),
+    ):
+        wire = storage._serialize_content_block(block)
+        back = storage._deserialize_content_block(wire)
+        assert back.type == block.type
+        assert back.text == block.text
+        assert back.interrupted is True
+
+    # Uninterrupted blocks stay uninterrupted
+    plain = storage._deserialize_content_block(storage._serialize_content_block(TextBlock(text="whole")))
+    assert plain.interrupted is False
+
+
 @pytest.mark.asyncio
 async def test_save_and_load_session(temp_db, sample_session):
     """Test saving and loading a session."""

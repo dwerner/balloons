@@ -227,7 +227,11 @@ function getDisplayContent(block: SessionDataTurn['contentBlock']): string {
     }
     case 'interruption': {
       const b = block as InterruptionBlock;
-      return b.reason || 'User cancelled';
+      const labels: Record<string, string> = {
+        user_cancelled: 'Cancelled by user',
+        timeout: 'Timed out',
+      };
+      return labels[b.reason ?? ''] ?? b.reason ?? 'Cancelled by user';
     }
     case 'archive': {
       const b = block as ArchiveBlock;

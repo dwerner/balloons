@@ -10,6 +10,7 @@
 export interface TextBlock {
   type?: string;
   text?: string;
+  interrupted?: boolean;
 }
 
 export interface MarkdownBlock {
@@ -20,6 +21,7 @@ export interface MarkdownBlock {
 export interface ThinkingBlock {
   type?: string;
   text?: string;
+  interrupted?: boolean;
 }
 
 export interface ImageBlock {
@@ -228,6 +230,7 @@ export interface WatchSummaryBlock {
 export interface ThinkingBlock {
   type?: string;
   text?: string;
+  interrupted?: boolean;
 }
 
 export interface QueuedMessageInfo {

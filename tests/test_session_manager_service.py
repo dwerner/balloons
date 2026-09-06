@@ -757,7 +757,12 @@ class TestEventPump:
 
     @pytest.mark.asyncio
     async def test_cancel_streaming_cleans_up_context(self, service_with_pump, mock_manager, mock_session, mock_runner, stream_state):
-        """Test that cancelling streaming cleans up the streaming context."""
+        """Cancelling keeps the context until the cancelled event is dispatched.
+
+        The context must survive the cancel *request* so the pump can persist the
+        partial response (the queued deltas precede the 'cancelled' event), but it is
+        flagged so a message submitted right after Stop gets a fresh one.
+        """
         # Set up streaming state
         mock_session.turns = []
         mock_session.add_message = MagicMock()
@@ -780,8 +785,36 @@ class TestEventPump:
         # Cancel streaming
         await service_with_pump.cancel_streaming(mock_session.id)
 
-        # Verify context was cleaned up
-        assert mock_session.id not in service_with_pump._streaming_contexts
+        # Context is retained (flagged) so the queued deltas can still be persisted
+        ctx = service_with_pump._streaming_contexts[mock_session.id]
+        assert ctx.cancelling is True
+
+        # A new submission must not inherit a cancelling context
+        service_with_pump.register_streaming_context(
+            session_id=mock_session.id,
+            exchange_id="fresh-exchange",
+            user_turn_idx=0,
+        )
+        assert service_with_pump._streaming_contexts[mock_session.id].exchange_id == "fresh-exchange"
+
+        # Dispatching the cancelled event releases the original context
+        exchange_id = ctx.exchange_id
+        ctx.content = ""
+        mock_runner.is_streaming = False
+        await service_with_pump._dispatch_event(
+            mock_session.id, _Evt("cancelled", None), ctx
+        )
+        assert service_with_pump._streaming_contexts.get(mock_session.id) is None or (
+            service_with_pump._streaming_contexts[mock_session.id].exchange_id != exchange_id
+        )
+
+
+class _Evt:
+    """Minimal stand-in for a runner StreamEvent."""
+
+    def __init__(self, event_type, data=None):
+        self.event_type = event_type
+        self.data = data
 
 
 class TestStreamingContextDataclass:
@@ -1572,6 +1605,182 @@ class TestAsyncObservers:
         call_args = observer.on_stream_error.call_args[0][0]
         print("DEBUG event type:", type(call_args), "module:", type(call_args).__module__, "expected:", StreamErrorEvent, "expected module:", StreamErrorEvent.__module__)
         assert isinstance(call_args, StreamErrorEvent)
+
+    @pytest.mark.asyncio
+    async def test_duplicate_cancelled_event_adds_single_interruption(
+        self, service, ctx, mock_event, mock_session, stream_state
+    ):
+        """A second 'cancelled' event for the same exchange must not duplicate the interruption turn.
+
+        SessionRunner.cancel() queues 'cancelled' directly and the background task's
+        CancelledError handler can queue a second one - the service must dedupe.
+        """
+        from models import InterruptionBlock
+        from session import Turn
+
+        observer = MagicMock()
+        observer.on_stream_error = AsyncMock()
+        observer.on_turn_created = AsyncMock()
+        observer.on_turn_finished = AsyncMock()
+        service.add_observer(observer)
+
+        stream_state.register_session_stream(
+            session_id=mock_session.id,
+            exchange_id=ctx.exchange_id,
+            prompt="Test",
+        )
+
+        def fake_add_turn(role, content_block, tokens=0, exchange_id=None):
+            turn = Turn(role=role, content_block=content_block)
+            turn.exchange_id = exchange_id
+            mock_session.turns.append(turn)
+            return turn
+
+        mock_session.add_turn.side_effect = fake_add_turn
+        service._streaming_contexts[mock_session.id] = ctx
+
+        event = mock_event("cancelled", None)
+        # First dispatch: adds the interruption turn.
+        await service._dispatch_event(mock_session.id, event, ctx)
+        # Second dispatch (duplicate event, same pump ctx): must be ignored.
+        await service._dispatch_event(mock_session.id, event, ctx)
+
+        assert len(mock_session.turns) == 1
+        assert isinstance(mock_session.turns[0].content_block, InterruptionBlock)
+        observer.on_stream_error.assert_called_once()
+        observer.on_turn_created.assert_called_once()
+        observer.on_turn_finished.assert_called_once()
+
+    @pytest.mark.asyncio
+    async def test_cancelled_with_partial_content_marks_turn_interrupted(
+        self, service, ctx, mock_event, mock_session, stream_state
+    ):
+        """Cancelling mid-response keeps the partial content and marks it interrupted.
+
+        Replaces the old behaviour of appending a standalone InterruptionBlock turn,
+        which collided with the in-flight turn's order and discarded partial text.
+        """
+        from models import InterruptionBlock, TextBlock
+        from session import Turn
+
+        observer = MagicMock()
+        observer.on_stream_error = AsyncMock()
+        observer.on_turn_created = AsyncMock()
+        observer.on_turn_finished = AsyncMock()
+        service.add_observer(observer)
+
+        mock_session.save = AsyncMock(return_value=True)
+        service._manager.get_session.return_value = mock_session
+
+        def fake_add_turn(role, content_block, tokens=0, exchange_id=None):
+            turn = Turn(role=role, content_block=content_block)
+            turn.exchange_id = exchange_id
+            mock_session.turns.append(turn)
+            return turn
+
+        mock_session.add_turn.side_effect = fake_add_turn
+
+        ctx.content = "Partial answer"
+        ctx.content_block_type = "text"
+        stream_state.register_session_stream(
+            session_id=mock_session.id,
+            exchange_id=ctx.exchange_id,
+            prompt="Test",
+        )
+        service._streaming_contexts[mock_session.id] = ctx
+
+        await service._dispatch_event(mock_session.id, mock_event("cancelled", None), ctx)
+
+        # Exactly one turn: the partial response, not an interruption marker.
+        assert len(mock_session.turns) == 1
+        turn = mock_session.turns[0]
+        assert isinstance(turn.content_block, TextBlock)
+        assert turn.content_block.text == "Partial answer"
+        assert turn.content_block.interrupted is True
+        # Reuses the ID the UI already knows the streaming turn by.
+        assert turn.id == ctx.assistant_turn_id
+        assert not isinstance(turn.content_block, InterruptionBlock)
+
+        # Finalized in place via turn_finished (no extra turn_created).
+        observer.on_turn_finished.assert_called_once()
+        observer.on_turn_created.assert_not_called()
+        assert observer.on_turn_finished.call_args[0][0].content_block.interrupted is True
+
+        # A duplicate cancelled event must not mark it twice.
+        await service._dispatch_event(mock_session.id, mock_event("cancelled", None), ctx)
+        assert len(mock_session.turns) == 1
+        observer.on_turn_finished.assert_called_once()
+
+    @pytest.mark.asyncio
+    async def test_cancelled_keeps_partial_reasoning_as_thinking(self, service, ctx, mock_event, mock_session):
+        """A partial reasoning stream is kept as an interrupted ThinkingBlock.
+
+        Regression: partial reasoning/answers were discarded on Stop because the
+        streaming context was popped before the cancelled event was dispatched.
+        """
+        from models import InterruptionBlock, ThinkingBlock
+        from session import Turn
+
+        observer = MagicMock()
+        observer.on_turn_finished = AsyncMock()
+        observer.on_turn_created = AsyncMock()
+        service.add_observer(observer)
+
+        mock_session.save = AsyncMock(return_value=True)
+        service._manager.get_session.return_value = mock_session
+
+        def fake_add_turn(role, content_block, tokens=0, exchange_id=None):
+            turn = Turn(role=role, content_block=content_block)
+            turn.exchange_id = exchange_id
+            mock_session.turns.append(turn)
+            return turn
+
+        mock_session.add_turn.side_effect = fake_add_turn
+
+        ctx.content = "Half a thought about the problem"
+        ctx.content_block_type = "thinking"
+        service._streaming_contexts[mock_session.id] = ctx
+
+        await service._dispatch_event(mock_session.id, mock_event("cancelled", None), ctx)
+
+        assert len(mock_session.turns) == 1
+        block = mock_session.turns[0].content_block
+        assert isinstance(block, ThinkingBlock)
+        assert block.text == "Half a thought about the problem"
+        assert block.interrupted is True
+        # No standalone interruption turn was appended
+        assert not any(isinstance(t.content_block, InterruptionBlock) for t in mock_session.turns)
+        observer.on_turn_created.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_cancelled_stream_is_not_reported_as_streaming(
+        self, service, mock_session
+    ):
+        """A context retained after Stop must not make the session look like it's streaming.
+
+        Regression: keeping the cancelling context made _emit_session_updated derive
+        is_streaming=True, so the UI stayed stuck (e.g. "Cannot send images while
+        streaming" after the stream had already stopped).
+        """
+        sds = MagicMock()
+        service.set_session_data_service(sds)
+
+        ctx = _StreamingContext(
+            session_id=mock_session.id,
+            exchange_id="exchange-456",
+            user_turn_idx=0,
+        )
+        service._streaming_contexts[mock_session.id] = ctx
+
+        # Live stream -> reported as streaming
+        service._emit_session_updated(mock_session)
+        assert sds.session_to_info.call_args.kwargs["is_streaming"] is True
+
+        # Cancelled (context retained so the partial can still be persisted) -> not streaming
+        sds.session_to_info.reset_mock()
+        ctx.cancelling = True
+        service._emit_session_updated(mock_session)
+        assert sds.session_to_info.call_args.kwargs["is_streaming"] is False
 
     @pytest.mark.asyncio
     async def test_dispatch_result_triggers_token_kill_switch(self, service, mock_manager, ctx):

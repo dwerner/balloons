@@ -127,7 +127,7 @@ export function StreamingTurnsView({ sessionId, client, onSelectSession, onScrol
   // useSessionData now gets the clientId directly from client.clientId when connected
   // refreshKey forces re-subscription when incremented (e.g., after archive)
   // historyLoadMode determines which history layer to use: 'history', 'history_reverse', or 'history_lazy'
-  const { turns, pendingAssistantTurns, isLoading, isLoadingHistory, isStreaming, streamError, error, streamingProgress, totalHistoryTurns, loadHistoryRange } = useSessionData(client, sessionId, refreshKey, historyLoadMode);
+  const { turns, pendingAssistantTurns, isLoading, isLoadingHistory, isStreaming, streamError, clearStreamError, error, streamingProgress, totalHistoryTurns, loadHistoryRange } = useSessionData(client, sessionId, refreshKey, historyLoadMode);
   const streamStartTimeRef = useRef<number | null>(null);
   const baseDurationRef = useRef(0);
   const [streamingCounter, setStreamingCounter] = useState('0.00s');
@@ -1162,6 +1162,23 @@ export function StreamingTurnsView({ sessionId, client, onSelectSession, onScrol
         {isInitializing && (
           <div className="streaming-turns-view-initializing-overlay">
             <span className="loading-spinner" />
+          </div>
+        )}
+
+        {/* Stream error banner - non-destructive: the transcript stays visible.
+            A user cancellation never lands here (it arrives as errorType 'cancelled'). */}
+        {streamError && (
+          <div className="stream-error-banner" role="alert">
+            <span className="stream-error-banner__icon" aria-hidden="true">⚠</span>
+            <span className="stream-error-banner__text">{streamError}</span>
+            <button
+              type="button"
+              className="stream-error-banner__dismiss"
+              onClick={clearStreamError}
+              aria-label="Dismiss stream error"
+            >
+              ✕
+            </button>
           </div>
         )}
 

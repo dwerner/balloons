@@ -46,7 +46,7 @@ from service.session_events import (
     DomainEventWrapper,
 )
 from models import (
-    TextBlock, MarkdownBlock, ImageBlock, ToolUseBlock, ToolResultBlock,
+    TextBlock, MarkdownBlock, ThinkingBlock, ImageBlock, ToolUseBlock, ToolResultBlock,
     InterruptionBlock, ErrorBlock, LinkBlock, ForkBlock, ForkedFromBlock,
     MergeBlock, MergedToBlock, ArchiveBlock, SlideBlock, ReviewBlock,
     ForkProposalBlock, MergeProposalBlock,
@@ -1474,9 +1474,11 @@ class SessionDataService:
         block_type = data.get("type", "text")
 
         if block_type == "text":
-            return TextBlock(type="text", text=data.get("text", ""))
+            return TextBlock(type="text", text=data.get("text", ""), interrupted=data.get("interrupted", False))
         elif block_type == "markdown":
             return MarkdownBlock(type="markdown", text=data.get("text", ""))
+        elif block_type == "thinking":
+            return ThinkingBlock(type="thinking", text=data.get("text", ""), interrupted=data.get("interrupted", False))
         elif block_type == "image":
             return ImageBlock(
                 type="image",

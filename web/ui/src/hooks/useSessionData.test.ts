@@ -254,4 +254,92 @@ describe('useSessionData', () => {
     });
     expect(result.current.isStreaming).toBe(false);
   });
+
+  it('finalizes still-streaming turns when the stream ends', async () => {
+    const { result, emit } = await setup();
+
+    act(() => {
+      emit('streamStarted', { sessionId: SESSION });
+      emit('turnCreated', { sessionId: SESSION, turnId: 'u1', order: 0, role: 'user', contentBlockType: 'text' });
+    });
+    expect(result.current.getTurn('u1')!.streaming).toBe(true);
+
+    // Stream ends without a turnFinished for u1 - it must not spin forever.
+    act(() => {
+      emit('streamDone', { sessionId: SESSION });
+    });
+
+    expect(result.current.isStreaming).toBe(false);
+    expect(result.current.getTurn('u1')!.streaming).toBe(false);
+  });
+
+  it('treats a cancelled stream error as a benign interruption (transcript survives)', async () => {
+    const { result, emit } = await setup();
+
+    act(() => {
+      emit('streamStarted', { sessionId: SESSION });
+      emit('turnCreated', { sessionId: SESSION, turnId: 'u1', order: 0, role: 'user', contentBlockType: 'text' });
+      emit('turnCreated', { sessionId: SESSION, turnId: 'as1', order: 1, role: 'assistant', contentBlockType: 'text' });
+      emit('turnDelta', { sessionId: SESSION, turnId: 'as1', delta: 'Partial answer', contentBlockType: 'text' });
+    });
+    await act(async () => {
+      await sleep(60);
+    });
+
+    // Partial assistant text materialized from deltas and still streaming.
+    expect(result.current.getTurn('as1')?.streaming).toBe(true);
+
+    act(() => {
+      emit('streamError', { sessionId: SESSION, exchangeId: 'ex1', error: 'Stream cancelled', errorType: 'cancelled' });
+    });
+
+    // No fatal error state: the transcript must stay visible, not be replaced by an error view.
+    expect(result.current.error).toBeNull();
+    expect(result.current.streamError).toBeNull();
+    expect(result.current.isStreaming).toBe(false);
+    expect(result.current.turns.map((t) => t.turnId)).toEqual(['u1', 'as1']);
+
+    // Partial text is kept and the spinner is cleared.
+    expect((result.current.getTurn('as1')!.contentBlock as { text?: string }).text).toBe('Partial answer');
+    expect(result.current.getTurn('as1')!.streaming).toBe(false);
+  });
+
+  it('surfaces a genuine stream error without blanking the transcript', async () => {
+    const { result, emit } = await setup();
+
+    act(() => {
+      emit('streamStarted', { sessionId: SESSION });
+      emit('turnCreated', { sessionId: SESSION, turnId: 'u1', order: 0, role: 'user', contentBlockType: 'text' });
+    });
+
+    act(() => {
+      emit('streamError', { sessionId: SESSION, exchangeId: 'ex1', error: 'boom', errorType: 'error' });
+    });
+
+    // Non-destructive: banner state only, never the transcript-blanking `error`.
+    expect(result.current.error).toBeNull();
+    expect(result.current.streamError).toContain('boom');
+    expect(result.current.turns.map((t) => t.turnId)).toEqual(['u1']);
+    expect(result.current.isStreaming).toBe(false);
+    expect(result.current.getTurn('u1')!.streaming).toBe(false);
+
+    act(() => {
+      result.current.clearStreamError();
+    });
+    expect(result.current.streamError).toBeNull();
+  });
+
+  it('clears a previous stream error when a new stream starts', async () => {
+    const { result, emit } = await setup();
+
+    act(() => {
+      emit('streamError', { sessionId: SESSION, exchangeId: 'ex1', error: 'boom', errorType: 'error' });
+    });
+    expect(result.current.streamError).toContain('boom');
+
+    act(() => {
+      emit('streamStarted', { sessionId: SESSION });
+    });
+    expect(result.current.streamError).toBeNull();
+  });
 });

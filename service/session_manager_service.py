@@ -569,6 +569,11 @@ class _StreamingContext:
     pending_tool_count: int = 0  # Tools started but not yet resulted
     # Progress event throttling
     last_progress_emit: float = 0.0  # Timestamp of last progress event emission
+    # Set when the stream was cancelled but the 'cancelled' event is still queued in
+    # the runner. The context is kept alive so the pump can accumulate the deltas
+    # that precede that event (they carry the partial response to persist), but it
+    # must not be handed to a newly submitted stream.
+    cancelling: bool = False
 
 
 @dataclass
@@ -847,9 +852,13 @@ class SessionManagerService:
         if self._session_data_service is None:
             return
 
-        # Determine streaming state
+        # Determine streaming state. A context left behind by a cancelled stream is kept
+        # only so the pump can persist the partial response - the session is NOT
+        # streaming, and reporting it as such would leave the UI stuck (e.g. refusing
+        # image sends with "Cannot send images while streaming").
         if is_streaming is None:
-            is_streaming = session.id in self._streaming_contexts
+            ctx = self._streaming_contexts.get(session.id)
+            is_streaming = ctx is not None and not ctx.cancelling
 
         session_info = self._session_data_service.session_to_info(
             session,
@@ -1424,13 +1433,22 @@ class SessionManagerService:
             assistant_turn_id: Stable UUID for the assistant turn (if known)
         """
         from core.debug_log import debug_log
-        if session_id in self._streaming_contexts:
+        existing = self._streaming_contexts.get(session_id)
+        if existing:
+            if not existing.cancelling:
+                debug_log.debug(
+                    f"register_streaming_context: session already registered",
+                    category=Category.API,
+                    session_id=session_id,
+                )
+                return
+            # A cancelled stream's context is only kept so the pump can finish
+            # persisting its partial response - a new stream needs a fresh one.
             debug_log.debug(
-                f"register_streaming_context: session already registered",
+                "register_streaming_context: replacing context left cancelling by a cancelled stream",
                 category=Category.API,
                 session_id=session_id,
             )
-            return
 
         ctx = _StreamingContext(
             session_id=session_id,
@@ -2845,6 +2863,34 @@ class SessionManagerService:
         elif event_type == "cancelled":
             # Cancelled - mark stream as cancelled
 
+            # Dedupe: SessionRunner.cancel() queues a "cancelled" event directly, and
+            # the background task's CancelledError handler can queue a second one for
+            # the same stream. A duplicate would double-mark the turn and delete any
+            # streaming context re-registered by queued-message processing.
+            if self._cancellation_already_recorded(session_id, ctx):
+                debug_log.debug(
+                    "cancelled: duplicate event ignored (cancellation already recorded)",
+                    category=Category.RUNNER,
+                    session_id=session_id,
+                )
+                return
+
+            # If a new stream is already running, this is a late cancelled event from
+            # the previous one - its context belongs to the live stream, so leave it.
+            _runner = self._manager.get_runner(session_id)
+            if _runner and _runner.is_streaming:
+                debug_log.debug(
+                    "cancelled: ignored, a new stream is already running",
+                    category=Category.RUNNER,
+                    session_id=session_id,
+                )
+                return
+
+            # Keep whatever the model had already produced: the partial reasoning/answer
+            # is written onto the assistant turn itself (marked interrupted) instead of
+            # being discarded in favour of a standalone interruption turn.
+            partial_flushed = await self._flush_partial_as_interrupted(session_id, ctx)
+
             # Notify observers with typed event
             await self._notify_observers(
                 "on_stream_error",
@@ -2859,10 +2905,11 @@ class SessionManagerService:
 
             self._stream_state.cancel_stream(ctx.exchange_id)
 
-            # Add an InterruptionBlock turn to the session
             session = self._manager.get_session(session_id)
-            if session:
-                # Create and add the interruption turn
+
+            # Nothing was streamed to mark (e.g. stopped before the first token) -
+            # record a standalone interruption marker so the stop is still visible.
+            if session and not partial_flushed:
                 interruption_block = InterruptionBlock(reason="user_cancelled")
                 turn = session.add_turn(
                     role="assistant",
@@ -2899,11 +2946,14 @@ class SessionManagerService:
                     ),
                 )
 
-                # Emit session updated so React frontend hides stop button
+            # Emit session updated so React frontend hides stop button
+            if session:
                 self._emit_session_updated(session, is_streaming=False)
 
-            if session_id in self._streaming_contexts:
-                del self._streaming_contexts[session_id]
+            # Release only the context this cancellation belongs to - a message submitted
+            # right after Stop may already have installed a fresh one.
+            if self._streaming_contexts.get(session_id) is ctx:
+                self._streaming_contexts.pop(session_id, None)
 
             # Process any queued messages now that streaming is cancelled
             await self._process_queued_messages(session_id)
@@ -6447,6 +6497,113 @@ Summary:""")
         """
         return await self._cancel_streaming_internal(session_id)
 
+    async def _flush_partial_as_interrupted(
+        self, session_id: str, ctx: _StreamingContext
+    ) -> bool:
+        """Persist the in-flight assistant response, marked as interrupted.
+
+        Called when a stream is cancelled so the partial reasoning/answer the user
+        already saw is kept instead of discarded. The partial is written onto the
+        assistant turn itself (TextBlock/ThinkingBlock with interrupted=True) rather
+        than a separate interruption turn, which keeps turn ordering consistent.
+
+        Idempotent: clears ctx.content so a second call is a no-op.
+
+        Returns True if a partial response was flushed.
+        """
+        if not ctx.content:
+            return False
+
+        session = self._manager.get_session(session_id)
+        if not session:
+            return False
+
+        partial_text = ctx.content
+        # Consumed up-front so re-entry can never double-write
+        ctx.content = ""
+
+        partial_block = (
+            ThinkingBlock(type="thinking", text=partial_text, interrupted=True)
+            if ctx.content_block_type == "thinking"
+            else TextBlock(type="text", text=partial_text, interrupted=True)
+        )
+        content_tokens = count_tokens(partial_text)
+
+        partial_turn = None
+        turn_idx = -1
+        if ctx.assistant_turn_id:
+            for _i, _turn in enumerate(session.turns):
+                if _turn.id == ctx.assistant_turn_id:
+                    _turn.content_block = partial_block
+                    _turn.tokens = content_tokens
+                    _turn.mark_dirty()
+                    partial_turn = _turn
+                    turn_idx = _i
+                    break
+
+        if partial_turn is None:
+            # The runner only persists text turns at flush points, so on cancel the
+            # in-flight turn usually isn't in the session yet - add it here, reusing
+            # the ID the UI already knows it by.
+            partial_turn = session.add_turn(
+                role="assistant",
+                content_block=partial_block,
+                tokens=content_tokens,
+                exchange_id=ctx.exchange_id,
+            )
+            if ctx.assistant_turn_id:
+                partial_turn.id = ctx.assistant_turn_id
+            partial_turn.mark_dirty()
+            turn_idx = len(session.turns) - 1
+
+        await self._notify_observers(
+            "on_turn_finished",
+            TurnFinishedEvent(
+                session_id=session_id,
+                turn_id=partial_turn.id,
+                turn_index=turn_idx,
+                role="assistant",
+                content=partial_text,
+                tokens=content_tokens,
+                content_block=partial_block,
+                context_tokens=0,
+                output_tokens_total=0,
+            ),
+        )
+        asyncio.create_task(session.save())
+
+        debug_log.info(
+            f"Cancelled stream: kept partial {ctx.content_block_type} response "
+            f"({len(partial_text)} chars)",
+            category=Category.RUNNER,
+            session_id=session_id,
+        )
+        return True
+
+    def _cancellation_already_recorded(
+        self, session_id: str, ctx: _StreamingContext
+    ) -> bool:
+        """Whether this exchange's cancellation has already been written to the session.
+
+        Guards against the duplicate 'cancelled' event SessionRunner can emit
+        (cancel() queues one, the task's CancelledError handler may queue another).
+        """
+        session = self._manager.get_session(session_id)
+        if not session or not session.turns:
+            return False
+        last = session.turns[-1]
+        if ctx.exchange_id:
+            # Prefer an exact exchange match: a previous exchange may legitimately
+            # have ended interrupted.
+            if getattr(last, "exchange_id", None) != ctx.exchange_id:
+                return False
+            return isinstance(last.content_block, InterruptionBlock) or getattr(
+                last.content_block, "interrupted", False
+            )
+        # Exchange unknown (context created by the pump, e.g. TUI-originated): only
+        # trust the explicit marker, so a real partial is never skipped.
+        return isinstance(last.content_block, InterruptionBlock)
+
     async def _cancel_streaming_internal(self, session_id: str, reason: str | None = None) -> bool:
         """Internal streaming cancellation helper.
 
@@ -6466,9 +6623,17 @@ Summary:""")
 
         runner.cancel()
 
-        # Clean up streaming context
-        if session_id in self._streaming_contexts:
-            ctx = self._streaming_contexts.pop(session_id)
+        # NOTE: the streaming context is intentionally NOT popped here. The pump
+        # drains the runner's queued deltas and the "cancelled" event in order, so
+        # the cancelled dispatch is where ctx.content is complete - that's what
+        # persists the partial response. Popping it here handed the dispatch a fresh
+        # empty context and silently discarded the partial reasoning/answer.
+        # Flagging it keeps a message submitted right after Stop from inheriting it.
+        ctx = self._streaming_contexts.get(session_id)
+        if ctx:
+            ctx.cancelling = True
+            # Mark the stream inactive immediately so streaming-state queries are
+            # correct even if the queued 'cancelled' event is dropped or ignored.
             self._stream_state.cancel_stream(ctx.exchange_id)
 
         return True

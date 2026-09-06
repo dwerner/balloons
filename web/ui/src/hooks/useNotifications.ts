@@ -242,6 +242,8 @@ export function useNotifications(
     // Stream error event
     unsubscribers.push(
       client.sessionData.sessionDataStreamError((event: SessionStreamErrorEvent) => {
+        // A user-initiated stop is not an error - don't notify.
+        if (event.errorType === 'cancelled') return;
         if (event.sessionId === sessionId && shouldNotify()) {
           showNotification('Streaming Error', event.error || 'An error occurred during streaming.');
         }

@@ -89,6 +89,10 @@ export const TextCard = React.memo(function TextCard({ turn }: TextCardProps) {
   const isMarkdownBlock = contentBlock?.type === 'markdown';
   const isThinkingBlock = contentBlock?.type === 'thinking';
 
+  // Set when generation was cut short by a user stop - the partial response is kept
+  // and marked rather than replaced by a separate interruption turn.
+  const interrupted = (contentBlock as TextBlock | undefined)?.interrupted === true;
+
   // Display mode state - formatted (default) or raw JSON
   const [displayMode, setDisplayMode] = useState<DisplayMode>('formatted');
 
@@ -110,8 +114,9 @@ export const TextCard = React.memo(function TextCard({ turn }: TextCardProps) {
         assistant: { icon: '🤖', label: 'Assistant', className: 'assistant' },
       }[role] || { icon: '📄', label: role, className: 'other' };
 
-  // Show "done" indicator for completed assistant turns
-  const showDoneIndicator = isAssistant && !streaming && content;
+  // Show "done" indicator for completed assistant turns (not interrupted ones)
+  const showDoneIndicator = isAssistant && !streaming && content && !interrupted;
+  const showInterruptedIndicator = interrupted && !streaming;
 
   // Render body content based on display mode
   const renderBody = () => {
@@ -168,7 +173,7 @@ export const TextCard = React.memo(function TextCard({ turn }: TextCardProps) {
 
   return (
     <div
-      className={`turn-card text-card ${roleConfig.className} ${streaming ? 'streaming' : ''} ${showDoneIndicator ? 'done' : ''} ${displayMode === 'raw' ? 'raw-mode' : ''}`}
+      className={`turn-card text-card ${roleConfig.className} ${streaming ? 'streaming' : ''} ${showDoneIndicator ? 'done' : ''} ${showInterruptedIndicator ? 'interrupted' : ''} ${displayMode === 'raw' ? 'raw-mode' : ''}`}
       data-minimap-jump-block={isAssistant ? 'true' : undefined}
       data-minimap-kind={isAssistant ? 'assistant' : undefined}
       data-minimap-label={isAssistant ? 'Assistant' : undefined}
@@ -181,6 +186,11 @@ export const TextCard = React.memo(function TextCard({ turn }: TextCardProps) {
         <span className="turn-label">{roleConfig.label}</span>
         {timestamp && <span className="turn-timestamp">{formatTimestamp(timestamp)}</span>}
         {showDoneIndicator && <span className="done-indicator">✓</span>}
+        {showInterruptedIndicator && (
+          <span className="interrupted-indicator" title="Response was interrupted before it finished">
+            ⚠ interrupted
+          </span>
+        )}
         {!streaming && tokens > 0 && (
           <span className="turn-tokens">{tokens} tokens</span>
         )}

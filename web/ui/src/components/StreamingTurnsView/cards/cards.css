@@ -104,6 +104,23 @@
   opacity: 0.7;
 }
 
+/* Interrupted (partial) response - generation was cut short by a user stop.
+   The partial content is kept on the turn itself rather than in a separate turn. */
+.interrupted-indicator {
+  color: var(--error, #ff6b6b);
+  font-size: 11px;
+  text-transform: lowercase;
+  opacity: 0.85;
+}
+
+.turn-card.interrupted {
+  border-style: dashed;
+}
+
+.turn-card.interrupted .turn-card-body {
+  opacity: 0.85;
+}
+
 /* ============================================================================
  * Raw View Toggle (for all card types)
  * ============================================================================ */

@@ -242,6 +242,8 @@ export function useSoundNotifications(
     // Stream error event
     unsubscribers.push(
       client.sessionData.sessionDataStreamError((event: SessionStreamErrorEvent) => {
+        // A user-initiated stop is not an error - don't play the error sound.
+        if (event.errorType === 'cancelled') return;
         if (event.sessionId === sessionId && streamErrorSound) {
           playSound(streamErrorSound);
         }

@@ -650,16 +650,18 @@ class AsyncStorage:
         This matches the JSON structure expected by Rust's serde_json::Value.
         """
         from models import (
-            TextBlock, MarkdownBlock, ToolUseBlock, ToolResultBlock, InterruptionBlock,
+            TextBlock, MarkdownBlock, ThinkingBlock, ToolUseBlock, ToolResultBlock, InterruptionBlock,
             ErrorBlock, LinkBlock, ForkBlock, MergeBlock, MergedToBlock,
             ArchiveBlock, SlideBlock, ReviewBlock, ForkProposalBlock, MergeProposalBlock,
             WatchStartBlock, WatchStopBlock, WatchSummaryBlock,
         )
 
         if isinstance(block, TextBlock):
-            return {"type": "text", "text": block.text}
+            return {"type": "text", "text": block.text, "interrupted": block.interrupted}
         elif isinstance(block, MarkdownBlock):
             return {"type": "markdown", "text": block.text}
+        elif isinstance(block, ThinkingBlock):
+            return {"type": "thinking", "text": block.text, "interrupted": block.interrupted}
         elif isinstance(block, ToolUseBlock):
             return {"type": "tool_use", "id": block.id, "name": block.name, "input": block.input}
         elif isinstance(block, ToolResultBlock):
@@ -915,7 +917,7 @@ class AsyncStorage:
     def _deserialize_content_block(self, data: dict) -> ContentBlock:
         """Deserialize a content block from a dict."""
         from models import (
-            TextBlock, MarkdownBlock, ToolUseBlock, ToolResultBlock, InterruptionBlock,
+            TextBlock, MarkdownBlock, ThinkingBlock, ToolUseBlock, ToolResultBlock, InterruptionBlock,
             ErrorBlock, LinkBlock, ForkBlock, MergeBlock, ArchiveBlock, SlideBlock,
             ReviewBlock, ArchiveSummary, ForkProposalBlock, MergeProposalBlock,
             ContextAssignmentData, ForkBindingData, ExchangeInfo
@@ -924,9 +926,11 @@ class AsyncStorage:
         block_type = data.get("type", "text")
 
         if block_type == "text":
-            return TextBlock(text=data.get("text", ""))
+            return TextBlock(text=data.get("text", ""), interrupted=data.get("interrupted", False))
         elif block_type == "markdown":
             return MarkdownBlock(text=data.get("text", ""))
+        elif block_type == "thinking":
+            return ThinkingBlock(text=data.get("text", ""), interrupted=data.get("interrupted", False))
         elif block_type == "tool_use":
             return ToolUseBlock(
                 id=data.get("id", ""),

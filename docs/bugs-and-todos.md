@@ -4,6 +4,7 @@
 - [done] openai runner to use contextbuilder (shared select_turns + render_* in core.context; gemini runner removed)
 - system memory?
 - judge
+- browser->os notifications (configurable)
 - remove ssl? issue with websocket security
 - session naming query option? like on first message? tool?
 - now that we have traffic capture, do an audit of messages for different session types
@@ -15,7 +16,12 @@
 	- memory use of the chat seems high
 - long-slow pause when forking, TONS of ws messages
 - hitting stop on a stream is janky, hides turns etc
+
+
+# questions and ideas
 - what about token back-pressure? if a user likes to be able to read the reasoning, then ux could benefit from setting a max tps
+- process monitoring enhanced + ui
+	- "layered ui" perhaps dove-tailed with mermaid/plantuml rendering
 
 ## bigger features
 - scheduling/watching

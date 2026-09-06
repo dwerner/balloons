@@ -190,6 +190,10 @@ class SessionRunner:
         self._event_queue: asyncio.Queue[StreamEvent] = asyncio.Queue()
         self._background_task: Optional[asyncio.Task] = None
         self._result: Optional[StreamResult] = None
+        # Guard against emitting the "cancelled" event twice: cancel() queues one
+        # directly (the task may never reach its except handler), and the task's
+        # CancelledError handler queues another when it does unwind.
+        self._cancel_event_emitted: bool = False
 
         # Accumulation state during streaming
         self._raw_events: list[dict] = []
@@ -556,7 +560,11 @@ class SessionRunner:
 
         except asyncio.CancelledError:
             self._status = RunnerStatus.CANCELLED
-            await self._event_queue.put(self._make_event("cancelled", None))
+            # cancel() already queued the cancelled event for the pump; don't
+            # duplicate it (double events = duplicate interruption turns).
+            if not self._cancel_event_emitted:
+                self._cancel_event_emitted = True
+                await self._event_queue.put(self._make_event("cancelled", None))
         except RateLimitError as e:
             self._status = RunnerStatus.ERROR
             debug_log.warning(f"Rate limit: {e}", session_id=self.session.id, category=Category.RUNNER)
@@ -689,14 +697,19 @@ class SessionRunner:
             self._background_task.cancel()
         self._runner.terminate()
         self._status = RunnerStatus.CANCELLED
-        # Put cancelled event directly - the async task may not complete to emit it
-        self._event_queue.put_nowait(self._make_event("cancelled", None))
+        # Put cancelled event directly - the async task may not complete to emit it.
+        # The flag prevents the task's CancelledError handler from emitting a second
+        # one (which would add a duplicate interruption turn to the session).
+        if not self._cancel_event_emitted:
+            self._cancel_event_emitted = True
+            self._event_queue.put_nowait(self._make_event("cancelled", None))
 
     def _reset_state(self) -> None:
         """Reset accumulation state for a new stream."""
         self._raw_events = []
         self._content_blocks = []
         self._text_buffer = ""
+        self._cancel_event_emitted = False
         self._current_tool_use_id = ""
         self._tool_index = 0
         self._last_tool_index_for_text = 0  # Reset post-tool tracking
@@ -1389,6 +1402,8 @@ class HelperRunner:
         self._background_task: Optional[asyncio.Task] = None
         self._text_buffer: str = ""
         self._result: Optional[str] = None  # Just the text result
+        # See SessionRunner._cancel_event_emitted: emit "cancelled" only once.
+        self._cancel_event_emitted: bool = False
 
     @property
     def status(self) -> RunnerStatus:
@@ -1439,7 +1454,10 @@ class HelperRunner:
 
         except asyncio.CancelledError:
             self._status = RunnerStatus.CANCELLED
-            await self._event_queue.put(self._make_event("cancelled", None))
+            # cancel() already queued the cancelled event; don't duplicate it.
+            if not self._cancel_event_emitted:
+                self._cancel_event_emitted = True
+                await self._event_queue.put(self._make_event("cancelled", None))
         except Exception as e:
             self._status = RunnerStatus.ERROR
             debug_log.error(f"Helper stream error: {e}", category=Category.RUNNER)
@@ -1473,5 +1491,8 @@ class HelperRunner:
             self._background_task.cancel()
         self._runner.terminate()
         self._status = RunnerStatus.CANCELLED
-        # Put cancelled event directly - the async task may not complete to emit it
-        self._event_queue.put_nowait(self._make_event("cancelled", None))
+        # Put cancelled event directly - the async task may not complete to emit it.
+        # The flag prevents the task's CancelledError handler from emitting a second.
+        if not self._cancel_event_emitted:
+            self._cancel_event_emitted = True
+            self._event_queue.put_nowait(self._make_event("cancelled", None))

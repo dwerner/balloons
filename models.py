@@ -39,6 +39,7 @@ class TextBlock:
     """Plain text content."""
     type: str = "text"
     text: str = ""
+    interrupted: bool = False  # True if generation was cut short (user stop)
 
 
 @ws_type
@@ -63,6 +64,7 @@ class ThinkingBlock:
     """Model reasoning / thinking text shown separately from final answer text."""
     type: str = "thinking"
     text: str = ""
+    interrupted: bool = False  # True if generation was cut short (user stop)
 
 
 @ws_type
@@ -486,6 +488,7 @@ class ThinkingBlock:
     """Model reasoning / thinking text shown separately from final answer text."""
     type: str = "thinking"
     text: str = ""
+    interrupted: bool = False  # True if generation was cut short (user stop)
 
 
 @dataclass

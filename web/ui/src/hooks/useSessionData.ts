@@ -194,6 +194,8 @@ export interface UseSessionDataReturn extends UseSessionDataState {
   getTurn: (turnId: string) => SessionDataTurn | undefined;
   /** Clear all state */
   clear: () => void;
+  /** Dismiss the non-destructive stream error banner */
+  clearStreamError: () => void;
   /** Load a range of history turns (for lazy loading) */
   loadHistoryRange: (startOrder: number, endOrder: number) => Promise<void>;
 }
@@ -437,6 +439,28 @@ export function useSessionData(
       bumpPendingAssistantTurnsVersion();
     }
   }, [bumpPendingAssistantTurnsVersion]);
+
+  // Mark turns that are still streaming as finished.
+  // A stream can end (user cancel, or a dropped turnFinished) without every turn being
+  // finalized. Without this, those turns keep a streaming spinner forever.
+  const finalizeStreamingTurns = useCallback(() => {
+    setTurnsById((prev) => {
+      let hasChanges = false;
+      const next = new Map(prev);
+      for (const [turnId, turn] of next.entries()) {
+        if (turn.streaming) {
+          next.set(turnId, { ...turn, streaming: false });
+          hasChanges = true;
+        }
+      }
+      return hasChanges ? next : prev;
+    });
+  }, []);
+
+  // Dismiss the non-destructive stream error banner
+  const clearStreamError = useCallback(() => {
+    setStreamError(null);
+  }, []);
 
   // Clear all state
   const clear = useCallback(() => {
@@ -835,6 +859,9 @@ export function useSessionData(
             setIsStreaming(false);
             pendingAssistantTurnsRef.current.clear();
             bumpPendingAssistantTurnsVersion();
+            // Any turn still marked streaming will never receive a turnFinished -
+            // finalize it so the UI doesn't show a permanent spinner.
+            finalizeStreamingTurns();
             // Clear progress when stream ends
             setStreamingProgress(null);
           })
@@ -863,12 +890,23 @@ export function useSessionData(
             setIsStreaming(false);
             pendingAssistantTurnsRef.current.clear();
             bumpPendingAssistantTurnsVersion();
+            setStreamingProgress(null);
+
+            // The stream is over - no turnFinished will arrive for whatever was
+            // mid-flight, so finalize those turns instead of leaving a spinner.
+            finalizeStreamingTurns();
+
+            // A user-initiated stop is a normal stream termination, NOT a failure.
+            // Keep the transcript visible: never trip the fatal `error` state, which
+            // replaces the whole view (all turns) with a single error message.
+            if (event.errorType === 'cancelled') return;
+
+            // Genuine stream failure: surface it as a non-destructive banner
+            // (`streamError`) so already-received turns stay visible.
             const errorWithDump = event.dumpFile
               ? `${event.error}\n\nDebug dump: ${event.dumpFile}`
               : event.error;
             setStreamError(errorWithDump);
-            setError(errorWithDump);
-            setStreamingProgress(null);
           })
         );
 
@@ -1251,7 +1289,7 @@ export function useSessionData(
         currentSessionRef.current = null;
       }
     },
-    [client, isSubscribed, unsubscribe, historyLoadMode, removePendingAssistantTurn, upsertPendingAssistantTurn, bumpPendingAssistantTurnsVersion]
+    [client, isSubscribed, unsubscribe, historyLoadMode, removePendingAssistantTurn, upsertPendingAssistantTurn, bumpPendingAssistantTurnsVersion, finalizeStreamingTurns]
   );
 
   // Auto-subscribe when autoSubscribe changes and client is ready
@@ -1420,6 +1458,7 @@ export function useSessionData(
     unsubscribe,
     getTurn,
     clear,
+    clearStreamError,
     loadHistoryRange,
   };
 }

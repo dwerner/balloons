@@ -1187,11 +1187,11 @@ class Session:
     def _serialize_content_block(self, block: ContentBlock) -> dict:
         """Serialize a content block to a dict."""
         if isinstance(block, TextBlock):
-            return {"type": "text", "text": block.text}
+            return {"type": "text", "text": block.text, "interrupted": block.interrupted}
         elif isinstance(block, MarkdownBlock):
             return {"type": "markdown", "text": block.text}
         elif isinstance(block, ThinkingBlock):
-            return {"type": "thinking", "text": block.text}
+            return {"type": "thinking", "text": block.text, "interrupted": block.interrupted}
         elif isinstance(block, ImageBlock):
             # Store only file_path reference - actual image data stays on disk
             return {
@@ -1450,11 +1450,11 @@ class Session:
         """Deserialize a content block from a dict."""
         block_type = data.get("type", "text")
         if block_type == "text":
-            return TextBlock(text=data.get("text", ""))
+            return TextBlock(text=data.get("text", ""), interrupted=data.get("interrupted", False))
         elif block_type == "markdown":
             return MarkdownBlock(text=data.get("text", ""))
         elif block_type == "thinking":
-            return ThinkingBlock(text=data.get("text", ""))
+            return ThinkingBlock(text=data.get("text", ""), interrupted=data.get("interrupted", False))
         elif block_type == "image":
             # Image data stays on disk - we only store the file_path reference
             return ImageBlock(

@@ -40,6 +40,7 @@ from models import (
     ArchiveBlock,
     ArchiveSummary,
     TextBlock,
+    ThinkingBlock,
     ToolUseBlock,
     ToolResultBlock,
     InterruptionBlock,
@@ -168,7 +169,9 @@ class Archiver:
         """Deserialize a content block from a dict."""
         block_type = data.get("type", "text")
         if block_type == "text":
-            return TextBlock(text=data.get("text", ""))
+            return TextBlock(text=data.get("text", ""), interrupted=data.get("interrupted", False))
+        elif block_type == "thinking":
+            return ThinkingBlock(text=data.get("text", ""), interrupted=data.get("interrupted", False))
         elif block_type == "tool_use":
             return ToolUseBlock(
                 id=data.get("id", ""),
