@@ -361,20 +361,6 @@ export function LLMTab({ tasksClient, onJumpToSession }: LLMTabProps) {
       })
     );
 
-    // Task updated - update in active list
-    unsubs.push(
-      tasksClient.onTaskUpdated((event: TaskEventData) => {
-        debugLog('taskUpdated event:', event);
-        tasksClient.getTask(event.taskId).then((task) => {
-          if (task) {
-            setActiveTasks((prev) =>
-              prev.map((t) => (t.taskId === event.taskId ? task : t))
-            );
-          }
-        });
-      })
-    );
-
     // Task completed - move from active to recent
     unsubs.push(
       tasksClient.onTaskCompleted((event: TaskEventData) => {

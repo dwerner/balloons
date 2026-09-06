@@ -17,7 +17,8 @@
 - long-slow pause when forking, TONS of ws messages
 - hitting stop on a stream is janky, hides turns etc
 
-
+# issues
+- pytest run seems to have a memory leak
 # questions and ideas
 - what about token back-pressure? if a user likes to be able to read the reasoning, then ux could benefit from setting a max tps
 - process monitoring enhanced + ui

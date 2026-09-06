@@ -613,35 +613,6 @@ export interface BackendSummary {
   activeCount: number;
 }
 
-export interface ContentDeltaEvent {
-  sessionId: string;
-  exchangeId: string;
-  turnIndex: number;
-  turnId: string;
-  delta: string;
-  accumulated: string;
-}
-
-export interface TurnStartedEvent {
-  sessionId: string;
-  exchangeId: string;
-  turnIndex: number;
-  turnId: string;
-  role: string;
-  turnType?: string | null;
-  parallelGroupId?: string | null;
-}
-
-export interface TurnFinishedEvent {
-  sessionId: string;
-  exchangeId: string;
-  turnIndex: number;
-  turnId: string;
-  role: string;
-  content: string;
-  parallelGroupId?: string | null;
-}
-
 export interface ToolUseStartedEvent {
   sessionId: string;
   exchangeId: string;
@@ -651,14 +622,6 @@ export interface ToolUseStartedEvent {
   toolName: string;
   toolIndex: number;
   parallelGroupId?: string | null;
-}
-
-export interface ToolInputDeltaEvent {
-  sessionId: string;
-  exchangeId: string;
-  turnId: string;
-  toolUseId: string;
-  partialJson: string;
 }
 
 export interface ToolUseEvent {
@@ -671,29 +634,6 @@ export interface ToolUseEvent {
   toolInput: Record<string, unknown>;
   toolIndex: number;
   parallelGroupId?: string | null;
-}
-
-export interface ToolResultEvent {
-  sessionId: string;
-  exchangeId: string;
-  turnIndex: number;
-  turnId: string;
-  toolUseId: string;
-  toolName: string;
-  result: string;
-  isError: boolean;
-  toolIndex: number;
-  parallelGroupId?: string | null;
-}
-
-export interface ToolResultDeltaEvent {
-  sessionId: string;
-  exchangeId: string;
-  turnId: string;
-  toolUseId: string;
-  toolName: string;
-  delta: string;
-  stream: string;
 }
 
 export interface TurnDelta {

@@ -634,61 +634,6 @@ class TestSubmitMessage:
         assert call_args[1]["session_id"] == mock_session.id
         assert call_args[1]["exchange_id"] == result.exchange_id
 
-    @pytest.mark.asyncio
-    async def test_submit_message_emits_user_turn_events(self, mock_manager, mock_session, mock_runner, stream_state):
-        """Test that submit_message emits turnStarted and turnFinished for user turn.
-
-        This is critical for web clients that rely on TaskStateService events
-        to render turns. Without these events, the user message won't appear.
-        """
-        from service.task_state_service import TaskStateService
-
-        mock_session.turns = []
-        mock_session.add_message = MagicMock()
-        mock_session.save = AsyncMock()
-        mock_runner.is_streaming = False
-        mock_runner.start_background = MagicMock()
-
-        # Set up task service with event handler
-        task_service = TaskStateService(stream_state)
-        events = []
-
-        def event_handler(event_name: str, data: dict):
-            events.append((event_name, data))
-
-        task_service.add_event_handler(event_handler)
-
-        # Create service with task service wired up
-        service = SessionManagerService(mock_manager, stream_state, task_state_service=task_service)
-
-        result = await service.submit_message(
-            session_id=mock_session.id,
-            content="Hello from user",
-        )
-
-        # Verify user turn events were emitted
-        turn_started_events = [e for e in events if e[0] == "turnStarted"]
-        turn_finished_events = [e for e in events if e[0] == "turnFinished"]
-
-        assert len(turn_started_events) == 1, "Should emit exactly one turnStarted event for user turn"
-        assert len(turn_finished_events) == 1, "Should emit exactly one turnFinished event for user turn"
-
-        # Verify turnStarted event data
-        started_data = turn_started_events[0][1]
-        assert started_data["session_id"] == mock_session.id
-        assert started_data["exchange_id"] == result.exchange_id
-        assert started_data["turn_index"] == 0
-        assert started_data["role"] == "user"
-
-        # Verify turnFinished event data
-        finished_data = turn_finished_events[0][1]
-        assert finished_data["session_id"] == mock_session.id
-        assert finished_data["exchange_id"] == result.exchange_id
-        assert finished_data["turn_index"] == 0
-        assert finished_data["role"] == "user"
-        assert finished_data["content"] == "Hello from user"
-
-
 class TestEventPump:
     """Tests for the event pump functionality."""
 
@@ -890,60 +835,6 @@ class TestEventDispatch:
         return MockEvent
 
     @pytest.mark.asyncio
-    async def test_dispatch_text_event(self, service_with_task, task_service, ctx, mock_event):
-        """Test dispatching a text event."""
-        handler = MagicMock()
-        task_service.add_event_handler(handler)
-
-        event = mock_event("text", "Hello")
-        await service_with_task._dispatch_event("test-123", event, ctx)
-
-        # Verify content was accumulated
-        assert ctx.content == "Hello"
-
-        # Verify event was emitted
-        handler.assert_called_once()
-        args = handler.call_args[0]
-        assert args[0] == "contentDelta"
-        assert args[1]["delta"] == "Hello"
-        assert args[1]["accumulated"] == "Hello"
-
-    @pytest.mark.asyncio
-    async def test_dispatch_text_accumulates(self, service_with_task, task_service, ctx, mock_event):
-        """Test that text events accumulate content."""
-        handler = MagicMock()
-        task_service.add_event_handler(handler)
-
-        await service_with_task._dispatch_event("test-123", mock_event("text", "Hello"), ctx)
-        await service_with_task._dispatch_event("test-123", mock_event("text", " World"), ctx)
-
-        assert ctx.content == "Hello World"
-
-        # Check last emit
-        args = handler.call_args[0]
-        assert args[1]["delta"] == " World"
-        assert args[1]["accumulated"] == "Hello World"
-
-    @pytest.mark.asyncio
-    async def test_dispatch_turn_started(self, service_with_task, task_service, ctx, mock_event):
-        """Test dispatching turn_started event."""
-        handler = MagicMock()
-        task_service.add_event_handler(handler)
-
-        event = mock_event("turn_started", {"turn_index": 5})
-        await service_with_task._dispatch_event("test-123", event, ctx)
-
-        # Verify turn index was updated
-        assert ctx.assistant_turn_idx == 5
-
-        # Verify event was emitted
-        handler.assert_called_once()
-        args = handler.call_args[0]
-        assert args[0] == "turnStarted"
-        assert args[1]["turn_index"] == 5
-        assert args[1]["role"] == "assistant"
-
-    @pytest.mark.asyncio
     async def test_dispatch_tool_use_start(self, service_with_task, task_service, ctx, mock_event):
         """Test dispatching tool_use_start event."""
         handler = MagicMock()
@@ -967,30 +858,6 @@ class TestEventDispatch:
         assert args[1]["tool_name"] == "Bash"
 
     @pytest.mark.asyncio
-    async def test_dispatch_tool_result(self, service_with_task, task_service, ctx, mock_event):
-        """Test dispatching tool_result event."""
-        # Add tool to context
-        ctx.tool_names["tool-123"] = "Bash"
-
-        handler = MagicMock()
-        task_service.add_event_handler(handler)
-
-        event = mock_event("tool_result", {
-            "tool_use_id": "tool-123",
-            "result": "command output",
-            "tool_index": 0,
-            "turn_index": 2,
-        })
-        await service_with_task._dispatch_event("test-123", event, ctx)
-
-        # Verify event was emitted
-        handler.assert_called_once()
-        args = handler.call_args[0]
-        assert args[0] == "toolResult"
-        assert args[1]["tool_name"] == "Bash"
-        assert args[1]["result"] == "command output"
-
-    @pytest.mark.asyncio
     async def test_dispatch_done_cleans_up(self, service_with_task, task_service, ctx, mock_event):
         """Test that done event cleans up streaming context."""
         ctx.content = "Final content"
@@ -1005,11 +872,10 @@ class TestEventDispatch:
         # Verify context was cleaned up
         assert "test-123" not in service_with_task._streaming_contexts
 
-        # Verify turn finished was emitted
-        handler.assert_called()
-        # Find the turnFinished call
+        # The task bus no longer emits turnFinished (retired legacy event);
+        # completion is signalled via taskCompleted from the stream observer.
         calls = [c[0] for c in handler.call_args_list]
-        assert any(c[0] == "turnFinished" for c in calls)
+        assert "turnFinished" not in calls
 
     @pytest.mark.asyncio
     async def test_dispatch_error_cleans_up(self, service_with_task, ctx, mock_event, stream_state):
@@ -1208,48 +1074,6 @@ class TestSessionDataServiceIntegration:
         assert turn_finished[0][1]["session_id"] == "test-123"
         # Observer pattern uses content field, not final_content
         assert turn_finished[0][1]["content_block"]["text"] == "Final response"
-
-    @pytest.mark.asyncio
-    async def test_dispatch_with_both_services(
-        self, mock_manager, stream_state, session_data_service, ctx, mock_event
-    ):
-        """Test that events are dispatched to both TaskStateService and SessionDataService."""
-        from service.task_state_service import TaskStateService
-
-        task_service = TaskStateService(stream_state)
-        service = SessionManagerService(
-            mock_manager,
-            stream_state,
-            task_state_service=task_service,
-            session_data_service=session_data_service,
-        )
-        service.add_observer(session_data_service)
-
-        # Subscribe to both services
-        await session_data_service.subscribe_add("test-123", "client-1", ["header", "delta", "body"])
-
-        task_events = []
-        def task_handler(event_name: str, data: dict):
-            task_events.append((event_name, data))
-        task_service.add_event_handler(task_handler)
-
-        data_events = []
-        def data_handler(event_name: str, data: dict, target_clients):
-            data_events.append((event_name, data, target_clients))
-        session_data_service.add_event_handler(data_handler)
-
-        # Dispatch a text event
-        ctx.last_progress_emit = 0.0
-        event = mock_event("text", "Hello")
-        await service._dispatch_event("test-123", event, ctx)
-
-        # Verify both services received events
-        assert len(task_events) == 1
-        assert task_events[0][0] == "contentDelta"
-
-        # SessionDataService receives events via observer pattern
-        assert len(data_events) == 1
-        assert data_events[0][0] == "sessionDataTurnDelta"
 
     @pytest.mark.asyncio
     async def test_dispatch_only_session_data_service(

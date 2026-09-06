@@ -102,56 +102,6 @@ class BackendSummary:
 
 @ws_type
 @dataclass
-class ContentDeltaEvent:
-    """Event payload for streaming text content.
-
-    Emitted as text tokens arrive from the LLM.
-    """
-
-    session_id: str
-    exchange_id: str
-    turn_index: int
-    turn_id: str  # Stable UUID for this turn
-    delta: str  # The new text chunk
-    accumulated: str  # All text so far in this turn (for late-joining clients)
-
-
-@ws_type
-@dataclass
-class TurnStartedEvent:
-    """Event payload when a new turn begins in a session.
-
-    Emitted at the start of user, assistant, or tool turns.
-    """
-
-    session_id: str
-    exchange_id: str
-    turn_index: int
-    turn_id: str  # Stable UUID for this turn
-    role: str  # "user", "assistant", or "tool"
-    turn_type: str | None = None  # "text_turn", "tool_use", "tool_result", or None
-    parallel_group_id: str | None = None  # Groups parallel tool calls
-
-
-@ws_type
-@dataclass
-class TurnFinishedEvent:
-    """Event payload when a turn completes.
-
-    Emitted when an assistant response or tool result finishes.
-    """
-
-    session_id: str
-    exchange_id: str
-    turn_index: int
-    turn_id: str  # Stable UUID for this turn
-    role: str
-    content: str  # Final content of the turn
-    parallel_group_id: str | None = None  # Groups parallel tool calls
-
-
-@ws_type
-@dataclass
 class ToolUseStartedEvent:
     """Event payload when a tool execution begins.
 
@@ -166,21 +116,6 @@ class ToolUseStartedEvent:
     tool_name: str
     tool_index: int  # Order of this tool in the current exchange
     parallel_group_id: str | None = None  # Groups parallel tool calls
-
-
-@ws_type
-@dataclass
-class ToolInputDeltaEvent:
-    """Event payload for streaming tool input JSON.
-
-    Emitted as tool input JSON streams from the LLM.
-    """
-
-    session_id: str
-    exchange_id: str
-    turn_id: str  # Stable UUID for this turn
-    tool_use_id: str
-    partial_json: str  # The new JSON chunk
 
 
 @ws_type
@@ -200,43 +135,6 @@ class ToolUseEvent:
     tool_input: dict  # Complete parsed tool input
     tool_index: int
     parallel_group_id: str | None = None  # Groups parallel tool calls
-
-
-@ws_type
-@dataclass
-class ToolResultEvent:
-    """Event payload when a tool execution completes.
-
-    Emitted after the tool runs with its result.
-    """
-
-    session_id: str
-    exchange_id: str
-    turn_index: int
-    turn_id: str  # Stable UUID for this turn
-    tool_use_id: str
-    tool_name: str
-    result: str  # Tool output as string
-    is_error: bool
-    tool_index: int
-    parallel_group_id: str | None = None  # Groups parallel tool calls
-
-
-@ws_type
-@dataclass
-class ToolResultDeltaEvent:
-    """Event payload for incremental output from a running tool.
-
-    Emitted while a tool is still executing so the UI can show live progress.
-    """
-
-    session_id: str
-    exchange_id: str
-    turn_id: str  # Stable UUID for the eventual tool_result turn if known
-    tool_use_id: str
-    tool_name: str
-    delta: str
-    stream: str  # "stdout" or "stderr"
 
 
 def _task_to_info(task: Task) -> TaskInfo:
@@ -298,9 +196,6 @@ class TaskStateService:
         """
         self._state = task_state
         self._event_handlers: list[Callable[[str, dict], None]] = []
-        # Track finished turns to prevent duplicate turn_finished events
-        # Key: (session_id, turn_index), Value: content length (for debugging)
-        self._finished_turns: dict[tuple[str, int], int] = {}
 
         # Wire up TaskState observer to emit WebSocket events
         # Note: TaskState uses async observers, so we create an async wrapper
@@ -320,6 +215,13 @@ class TaskStateService:
 
     async def _on_task_event(self, event: TaskEvent, task: Task) -> None:
         """Convert TaskState events to WebSocket events."""
+        # stream_updated -> taskUpdated is intentionally not broadcast. Its only
+        # consumer (the web UI's onTaskUpdated -> getTask -> setStreamingTask
+        # refresh) has been removed; see tools/wslog analysis. The remaining
+        # lifecycle events (taskStarted/Completed/Error/Cancelled) still emit.
+        if event == TaskEvent.STREAM_UPDATED:
+            return
+
         # Map TaskEvent enum to camelCase wire name
         event_name = self._task_event_to_wire_name(event)
 
@@ -703,133 +605,6 @@ class TaskStateService:
     # --- Streaming Content Event Emission ---
     # These methods are called by the event pump to relay SessionRunner events.
 
-    def emit_content_delta(
-        self,
-        session_id: str,
-        exchange_id: str,
-        turn_index: int,
-        turn_id: str,
-        delta: str,
-        accumulated: str,
-    ) -> None:
-        """Emit a content delta event for streaming text.
-
-        Called by the event pump when SessionRunner emits a "text" event.
-
-        Args:
-            session_id: Session the content belongs to
-            exchange_id: Exchange ID for this prompt/response
-            turn_index: Index of the current turn
-            turn_id: Stable UUID for this turn
-            delta: New text chunk
-            accumulated: All text accumulated so far
-        """
-        event_data = ContentDeltaEvent(
-            session_id=session_id,
-            exchange_id=exchange_id,
-            turn_index=turn_index,
-            turn_id=turn_id,
-            delta=delta,
-            accumulated=accumulated,
-        )
-        for handler in self._event_handlers:
-            handler("contentDelta", event_data.__dict__)
-
-    def emit_turn_started(
-        self,
-        session_id: str,
-        exchange_id: str,
-        turn_index: int,
-        turn_id: str,
-        role: str,
-        turn_type: str | None = None,
-        parallel_group_id: str | None = None,
-    ) -> None:
-        """Emit a turn started event.
-
-        Called when a new turn begins (user message added, assistant starts, tool starts).
-
-        Args:
-            session_id: Session ID
-            exchange_id: Exchange ID
-            turn_index: Index of the new turn
-            turn_id: Stable UUID for this turn
-            role: Turn role ("user", "assistant", or "tool")
-            turn_type: Content block type ("text_turn", "tool_use", "tool_result", or None)
-            parallel_group_id: Groups parallel tool calls from same LLM response
-        """
-        # Clear finished turns tracking for this session when a new user turn starts
-        # This prevents memory leak and ensures fresh tracking for each exchange
-        if role == "user":
-            keys_to_remove = [k for k in self._finished_turns if k[0] == session_id]
-            for k in keys_to_remove:
-                del self._finished_turns[k]
-
-        event_data = TurnStartedEvent(
-            session_id=session_id,
-            exchange_id=exchange_id,
-            turn_index=turn_index,
-            turn_id=turn_id,
-            role=role,
-            turn_type=turn_type,
-            parallel_group_id=parallel_group_id,
-        )
-        for handler in self._event_handlers:
-            handler("turnStarted", event_data.__dict__)
-
-    def emit_turn_finished(
-        self,
-        session_id: str,
-        exchange_id: str,
-        turn_index: int,
-        turn_id: str,
-        role: str,
-        content: str,
-        parallel_group_id: str | None = None,
-    ) -> None:
-        """Emit a turn finished event.
-
-        Called when a turn completes (assistant response done, tool result received).
-
-        Args:
-            session_id: Session ID
-            exchange_id: Exchange ID
-            turn_index: Index of the completed turn
-            turn_id: Stable UUID for this turn
-            role: Turn role
-            content: Final content of the turn
-            parallel_group_id: Groups parallel tool calls from same LLM response
-        """
-        content_len = len(content) if content else 0
-        turn_key = (session_id, turn_index)
-
-        # Check for duplicate turn_finished events (race condition between SessionManagerService and TUI)
-        if turn_key in self._finished_turns:
-            prev_len = self._finished_turns[turn_key]
-            # Allow re-emit if new content is longer (incremental update)
-            if content_len <= prev_len:
-                debug_log.debug(
-                    f"emit_turn_finished: SKIP duplicate idx={turn_index}, prev_len={prev_len}, new_len={content_len}",
-                    category=Category.API,
-                    session_id=session_id,
-                )
-                return
-
-        # Track this turn as finished
-        self._finished_turns[turn_key] = content_len
-
-        event_data = TurnFinishedEvent(
-            session_id=session_id,
-            exchange_id=exchange_id,
-            turn_index=turn_index,
-            turn_id=turn_id,
-            role=role,
-            content=content,
-            parallel_group_id=parallel_group_id,
-        )
-        for handler in self._event_handlers:
-            handler("turnFinished", event_data.__dict__)
-
     def emit_tool_use_started(
         self,
         session_id: str,
@@ -867,35 +642,6 @@ class TaskStateService:
         )
         for handler in self._event_handlers:
             handler("toolUseStarted", event_data.__dict__)
-
-    def emit_tool_input_delta(
-        self,
-        session_id: str,
-        exchange_id: str,
-        turn_id: str,
-        tool_use_id: str,
-        partial_json: str,
-    ) -> None:
-        """Emit a tool input delta event.
-
-        Called as tool input JSON streams from the LLM.
-
-        Args:
-            session_id: Session ID
-            exchange_id: Exchange ID
-            turn_id: Stable UUID for this turn
-            tool_use_id: Tool invocation ID
-            partial_json: New JSON chunk
-        """
-        event_data = ToolInputDeltaEvent(
-            session_id=session_id,
-            exchange_id=exchange_id,
-            turn_id=turn_id,
-            tool_use_id=tool_use_id,
-            partial_json=partial_json,
-        )
-        for handler in self._event_handlers:
-            handler("toolInputDelta", event_data.__dict__)
 
     def emit_tool_use(
         self,
@@ -938,76 +684,6 @@ class TaskStateService:
         for handler in self._event_handlers:
             handler("toolUse", event_data.__dict__)
 
-    def emit_tool_result(
-        self,
-        session_id: str,
-        exchange_id: str,
-        turn_index: int,
-        turn_id: str,
-        tool_use_id: str,
-        tool_name: str,
-        result: str,
-        is_error: bool,
-        tool_index: int,
-        parallel_group_id: str | None = None,
-    ) -> None:
-        """Emit a tool result event.
-
-        Called when a tool execution completes.
-
-        Args:
-            session_id: Session ID
-            exchange_id: Exchange ID
-            turn_index: Index of the tool_result turn
-            turn_id: Stable UUID for this turn
-            tool_use_id: Tool invocation ID
-            tool_name: Name of the tool
-            result: Tool output as string
-            is_error: Whether the tool errored
-            tool_index: Order of this tool in the exchange
-            parallel_group_id: Groups parallel tool calls from same LLM response
-        """
-        event_data = ToolResultEvent(
-            session_id=session_id,
-            exchange_id=exchange_id,
-            turn_index=turn_index,
-            turn_id=turn_id,
-            tool_use_id=tool_use_id,
-            tool_name=tool_name,
-            result=result,
-            is_error=is_error,
-            tool_index=tool_index,
-            parallel_group_id=parallel_group_id,
-        )
-        for handler in self._event_handlers:
-            handler("toolResult", event_data.__dict__)
-
-    def emit_tool_result_delta(
-        self,
-        session_id: str,
-        exchange_id: str,
-        turn_id: str,
-        tool_use_id: str,
-        tool_name: str,
-        delta: str,
-        stream: str,
-    ) -> None:
-        """Emit an incremental tool output event.
-
-        Called while a tool is executing so the UI can render live stdout/stderr.
-        """
-        event_data = ToolResultDeltaEvent(
-            session_id=session_id,
-            exchange_id=exchange_id,
-            turn_id=turn_id,
-            tool_use_id=tool_use_id,
-            tool_name=tool_name,
-            delta=delta,
-            stream=stream,
-        )
-        for handler in self._event_handlers:
-            handler("toolResultDelta", event_data.__dict__)
-
     # --- Cleanup Operations ---
 
     @ws_expose
@@ -1030,11 +706,6 @@ class TaskStateService:
         ...
 
     @ws_event
-    async def on_task_updated(self) -> TaskEventData:
-        """Emitted when a task's status or progress changes."""
-        ...
-
-    @ws_event
     async def on_task_completed(self) -> TaskEventData:
         """Emitted when a task completes successfully."""
         ...
@@ -1053,31 +724,6 @@ class TaskStateService:
     # These provide fine-grained updates for rendering streaming responses.
 
     @ws_event
-    async def on_content_delta(self) -> ContentDeltaEvent:
-        """Emitted when new text content streams from the LLM.
-
-        Subscribe to this event to render streaming text in real-time.
-        The `accumulated` field allows late-joining clients to catch up.
-        """
-        ...
-
-    @ws_event
-    async def on_turn_started(self) -> TurnStartedEvent:
-        """Emitted when a new turn begins (user, assistant, or tool).
-
-        Use this to create UI elements for the new turn.
-        """
-        ...
-
-    @ws_event
-    async def on_turn_finished(self) -> TurnFinishedEvent:
-        """Emitted when a turn completes.
-
-        Use this to finalize UI rendering for the turn.
-        """
-        ...
-
-    @ws_event
     async def on_tool_use_started(self) -> ToolUseStartedEvent:
         """Emitted when the LLM begins a tool call.
 
@@ -1086,25 +732,9 @@ class TaskStateService:
         ...
 
     @ws_event
-    async def on_tool_input_delta(self) -> ToolInputDeltaEvent:
-        """Emitted when tool input JSON streams from the LLM.
-
-        Use this to show tool input as it's being generated.
-        """
-        ...
-
-    @ws_event
     async def on_tool_use(self) -> ToolUseEvent:
         """Emitted when tool input is complete and execution begins.
 
         The full tool input is now available.
-        """
-        ...
-
-    @ws_event
-    async def on_tool_result(self) -> ToolResultEvent:
-        """Emitted when a tool execution completes.
-
-        Contains the tool's output or error.
         """
         ...

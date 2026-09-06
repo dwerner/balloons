@@ -62,15 +62,48 @@ def timeline(log: WsLog) -> None:
 
 
 def reassemble(log: WsLog) -> None:
-    """Rebuild streamed assistant text and tool output from delta events."""
+    """Rebuild streamed assistant text and tool output from delta events.
+
+    Reassembles from `sessionDataTurnDelta`, NOT `contentDelta`: only the
+    sessionData channel carries `contentBlockType`, and a single turn can
+    stream both a `thinking` block and a `text` block. Keying on turnId alone
+    (as the legacy channel forces you to) silently concatenates reasoning
+    with the visible reply.
+
+    `turnIndex` is not on the delta events; it is recovered from `turnStarted`.
+    """
     print("\n=== reassembled stream content ===")
+    src = log.events("sessionDataTurnDelta") or log.events("contentDelta")
+
+    # turnIndex is not on the delta events. Legacy captures carry it on
+    # `turnStarted`; that event was removed from the wire (2026-09-06 legacy
+    # event cleanup), so newer captures have it nowhere -- fall back to
+    # sequential labels by first-delta order.
+    turn_index = {f.data.get("turnId"): f.data.get("turnIndex")
+                  for f in log.events("turnStarted")}
+    if not turn_index:
+        seen: list = []
+        for f in src:
+            tid = f.data.get("turnId")
+            if tid not in seen:
+                seen.append(tid)
+        turn_index = {tid: i for i, tid in enumerate(seen, 1)}
+
+    typed = any("contentBlockType" in f.data for f in src)
+    if not typed:
+        print("  !! no contentBlockType available -- thinking and text will be "
+              "merged; cannot separate reasoning from visible reply")
+
     text: dict = defaultdict(str)
-    for f in log.events("contentDelta"):
-        key = (f.data.get("turnIndex"), f.data.get("turnId"))
+    for f in src:
+        key = (turn_index.get(f.data.get("turnId")), f.data.get("turnId"),
+               f.data.get("contentBlockType", "?"))
         text[key] += f.data.get("delta", "")
-    for (turn_index, turn_id), body in sorted(text.items(),
-                                              key=lambda kv: str(kv[0][0])):
-        print(f"\n--- assistant turn {turn_index} "
+    for (idx, turn_id, block), body in sorted(
+            text.items(),
+            key=lambda kv: (kv[0][0] if kv[0][0] is not None else -1,
+                            str(kv[0][1]))):
+        print(f"\n--- turn {idx} [{block}] "
               f"({turn_id[:8] if turn_id else '?'}, {len(body)} chars) ---")
         print(body)
 

@@ -1888,17 +1888,6 @@ class SessionManagerService:
                 ),
             )
 
-            # TaskStateService calls (doesn't use observer pattern)
-            if self._task_service:
-                self._task_service.emit_turn_started(
-                    session_id=session_id,
-                    exchange_id=ctx.exchange_id,
-                    turn_index=ctx.assistant_turn_idx,
-                    turn_id=ctx.assistant_turn_id,
-                    role="assistant",
-                    turn_type="text_turn",
-                )
-
         elif event_type in {"text", "thinking"}:
             # Streamed assistant content delta.
             text = data if isinstance(data, str) else str(data)
@@ -1924,17 +1913,6 @@ class SessionManagerService:
                     content_block_type="thinking" if event_type == "thinking" else "text",
                 ),
             )
-
-            # TaskStateService calls (doesn't use observer pattern)
-            if self._task_service:
-                self._task_service.emit_content_delta(
-                    session_id=session_id,
-                    exchange_id=ctx.exchange_id,
-                    turn_index=ctx.assistant_turn_idx,
-                    turn_id=ctx.assistant_turn_id,
-                    delta=text,
-                    accumulated=ctx.content,
-                )
 
             # Emit throttled progress event (every 500ms)
             import time
@@ -2014,17 +1992,6 @@ class SessionManagerService:
                 ),
             )
 
-            # TaskStateService calls (doesn't use observer pattern)
-            if self._task_service:
-                self._task_service.emit_turn_finished(
-                    session_id=session_id,
-                    exchange_id=ctx.exchange_id,
-                    turn_index=turn_idx,
-                    turn_id=turn_id,
-                    role="assistant",
-                    content=text,
-                )
-
         elif event_type == "text_turn_started":
             # Text turn started - update context and emit turn_started
             turn_idx = data.get("turn_index", ctx.assistant_turn_idx) if isinstance(data, dict) else ctx.assistant_turn_idx
@@ -2049,17 +2016,6 @@ class SessionManagerService:
                     content_block_type=ctx.content_block_type,
                 ),
             )
-
-            # TaskStateService calls (doesn't use observer pattern)
-            if self._task_service:
-                self._task_service.emit_turn_started(
-                    session_id=session_id,
-                    exchange_id=ctx.exchange_id,
-                    turn_index=turn_idx,
-                    turn_id=turn_id,
-                    role="assistant",
-                    turn_type="text_turn",
-                )
 
         elif event_type == "tool_use_start":
             # Tool use started - update context and emit
@@ -2142,18 +2098,6 @@ class SessionManagerService:
                 ),
             )
 
-            # TaskStateService calls (doesn't use observer pattern)
-            # Get turn_id if available (may not be set yet during streaming)
-            turn_id = ctx.tool_turn_ids.get((tool_use_id, "tool_use"), "")
-            if self._task_service:
-                self._task_service.emit_tool_input_delta(
-                    session_id=session_id,
-                    exchange_id=ctx.exchange_id,
-                    turn_id=turn_id,
-                    tool_use_id=tool_use_id,
-                    partial_json=partial_json,
-                )
-
         elif event_type == "tool_use_turn_started":
             # Tool use turn started - track turn index and ID
             turn_idx = data.get("turn_index", ctx.assistant_turn_idx) if isinstance(data, dict) else ctx.assistant_turn_idx
@@ -2187,18 +2131,6 @@ class SessionManagerService:
                     parallel_group_id=ctx.parallel_group_id,
                 ),
             )
-
-            # TaskStateService calls (doesn't use observer pattern)
-            if self._task_service:
-                self._task_service.emit_turn_started(
-                    session_id=session_id,
-                    exchange_id=ctx.exchange_id,
-                    turn_index=turn_idx,
-                    turn_id=turn_id,
-                    role="assistant",
-                    turn_type="tool_use",
-                    parallel_group_id=ctx.parallel_group_id,
-                )
 
         elif event_type == "tool_use":
             # Tool input complete - emit tool_use event
@@ -2316,7 +2248,6 @@ class SessionManagerService:
             tool_name = data.get("tool_name", ctx.tool_names.get(tool_use_id, ""))
             delta = data.get("delta", "")
             stream_name = data.get("stream", "stdout")
-            turn_id = ctx.tool_turn_ids.get((tool_use_id, "tool_result"), "")
 
             await self._notify_observers(
                 "on_tool_result_delta",
@@ -2329,17 +2260,6 @@ class SessionManagerService:
                     stream=stream_name,
                 ),
             )
-
-            if self._task_service and delta:
-                self._task_service.emit_tool_result_delta(
-                    session_id=session_id,
-                    exchange_id=ctx.exchange_id,
-                    turn_id=turn_id,
-                    tool_use_id=tool_use_id,
-                    tool_name=tool_name,
-                    delta=delta,
-                    stream=stream_name,
-                )
 
         elif event_type == "tool_result_turn_started":
             # Tool result turn started - track turn index and ID
@@ -2375,18 +2295,6 @@ class SessionManagerService:
                 ),
             )
 
-            # TaskStateService calls (doesn't use observer pattern)
-            if self._task_service:
-                self._task_service.emit_turn_started(
-                    session_id=session_id,
-                    exchange_id=ctx.exchange_id,
-                    turn_index=turn_idx,
-                    turn_id=turn_id,
-                    role="tool",
-                    turn_type="tool_result",
-                    parallel_group_id=ctx.parallel_group_id,
-                )
-
         elif event_type == "tool_result":
             # Tool execution complete
             tool_use_id = data.get("tool_use_id", "")
@@ -2399,7 +2307,6 @@ class SessionManagerService:
             # Track parallel batch completion
             # Decrement pending count and clear group when all results received
             ctx.pending_tool_count = max(0, ctx.pending_tool_count - 1)
-            current_parallel_group = ctx.parallel_group_id  # Save for this result's emit
             if ctx.pending_tool_count == 0:
                 # All results received - reset for next potential parallel batch
                 ctx.parallel_group_id = None
@@ -2471,21 +2378,6 @@ class SessionManagerService:
                     output_tokens_total=output_tokens_total,
                 ),
             )
-
-            # TaskStateService calls (doesn't use observer pattern)
-            if self._task_service:
-                self._task_service.emit_tool_result(
-                    session_id=session_id,
-                    exchange_id=ctx.exchange_id,
-                    turn_index=turn_idx,
-                    turn_id=turn_id,
-                    tool_use_id=tool_use_id,
-                    tool_name=tool_name,
-                    result=result,
-                    is_error=False,
-                    tool_index=tool_idx,
-                    parallel_group_id=current_parallel_group,
-                )
 
             # Emit progress event after tool completion (state change)
             stream = self._stream_state.get_stream(ctx.exchange_id)
@@ -2693,16 +2585,6 @@ class SessionManagerService:
                 ),
             )
 
-            # TaskStateService calls (doesn't use observer pattern)
-            if self._task_service and ctx.content:
-                self._task_service.emit_turn_finished(
-                    session_id=session_id,
-                    exchange_id=ctx.exchange_id,
-                    turn_index=ctx.assistant_turn_idx,
-                    turn_id=ctx.assistant_turn_id,
-                    role="assistant",
-                    content=ctx.content,
-                )
             # Complete the stream
             self._stream_state.complete_stream(ctx.exchange_id)
             # Emit session updated so React frontend hides stop button
@@ -3005,16 +2887,6 @@ class SessionManagerService:
                 ),
             )
 
-            # Legacy service calls (to be removed after migration)
-            if ctx.content and self._task_service:
-                self._task_service.emit_turn_finished(
-                    session_id=session_id,
-                    exchange_id=ctx.exchange_id,
-                    turn_index=ctx.assistant_turn_idx,
-                    turn_id=ctx.assistant_turn_id,
-                    role="assistant",
-                    content=ctx.content,
-                )
             self._stream_state.complete_stream(ctx.exchange_id)
             # Emit session updated so React frontend hides stop button
             session = self._manager.get_session(session_id)
@@ -6755,25 +6627,6 @@ Summary:""")
             ),
         )
 
-        # TaskStateService calls (doesn't use observer pattern)
-        if self._task_service:
-            self._task_service.emit_turn_started(
-                session_id=session_id,
-                exchange_id=exchange_id,
-                turn_index=turn_index,
-                turn_id=user_turn.id,
-                role="user",
-                turn_type="text_turn",
-            )
-            self._task_service.emit_turn_finished(
-                session_id=session_id,
-                exchange_id=exchange_id,
-                turn_index=turn_index,
-                turn_id=user_turn.id,
-                role="user",
-                content=content,
-            )
-
         # Generate assistant turn ID for tracking streaming events
         assistant_turn_id = str(uuid.uuid4())
         assistant_turn_idx = turn_index + 1
@@ -6962,25 +6815,6 @@ Summary:""")
             ),
         )
 
-        # TaskStateService calls (doesn't use observer pattern)
-        if self._task_service:
-            self._task_service.emit_turn_started(
-                session_id=session_id,
-                exchange_id=exchange_id,
-                turn_index=turn_index,
-                turn_id=user_turn.id,
-                role="user",
-                turn_type="text_turn",
-            )
-            self._task_service.emit_turn_finished(
-                session_id=session_id,
-                exchange_id=exchange_id,
-                turn_index=turn_index,
-                turn_id=user_turn.id,
-                role="user",
-                content=display_content,
-            )
-
         # Generate assistant turn ID for tracking streaming events
         assistant_turn_id = str(uuid.uuid4())
         assistant_turn_idx = turn_index + 1
@@ -7167,25 +7001,6 @@ Summary:""")
                 content_block=MarkdownBlock(type="markdown", text=content),  # Key difference
             ),
         )
-
-        # TaskStateService calls
-        if self._task_service:
-            self._task_service.emit_turn_started(
-                session_id=session_id,
-                exchange_id=exchange_id,
-                turn_index=turn_index,
-                turn_id=user_turn.id,
-                role="user",
-                turn_type="markdown_turn",  # Different turn type for tracking
-            )
-            self._task_service.emit_turn_finished(
-                session_id=session_id,
-                exchange_id=exchange_id,
-                turn_index=turn_index,
-                turn_id=user_turn.id,
-                role="user",
-                content=content,
-            )
 
         # Generate assistant turn ID for tracking streaming events
         assistant_turn_id = str(uuid.uuid4())

@@ -1888,14 +1888,6 @@ export interface TaskStateService {
 
 export interface TaskStateEvents {
   /**
-   * Emitted when new text content streams from the LLM.
-   * 
-   * Subscribe to this event to render streaming text in real-time.
-   * The `accumulated` field allows late-joining clients to catch up.
-   */
-  onContentDelta(callback: (data: Types.ContentDeltaEvent) => void): Unsubscribe;
-
-  /**
    * Emitted when a task is cancelled by the user.
    */
   onTaskCancelled(callback: (data: Types.TaskEventData) => void): Unsubscribe;
@@ -1916,25 +1908,6 @@ export interface TaskStateEvents {
   onTaskStarted(callback: (data: Types.TaskEventData) => void): Unsubscribe;
 
   /**
-   * Emitted when a task's status or progress changes.
-   */
-  onTaskUpdated(callback: (data: Types.TaskEventData) => void): Unsubscribe;
-
-  /**
-   * Emitted when tool input JSON streams from the LLM.
-   * 
-   * Use this to show tool input as it's being generated.
-   */
-  onToolInputDelta(callback: (data: Types.ToolInputDeltaEvent) => void): Unsubscribe;
-
-  /**
-   * Emitted when a tool execution completes.
-   * 
-   * Contains the tool's output or error.
-   */
-  onToolResult(callback: (data: Types.ToolResultEvent) => void): Unsubscribe;
-
-  /**
    * Emitted when tool input is complete and execution begins.
    * 
    * The full tool input is now available.
@@ -1947,20 +1920,6 @@ export interface TaskStateEvents {
    * The tool input may still be streaming at this point.
    */
   onToolUseStarted(callback: (data: Types.ToolUseStartedEvent) => void): Unsubscribe;
-
-  /**
-   * Emitted when a turn completes.
-   * 
-   * Use this to finalize UI rendering for the turn.
-   */
-  onTurnFinished(callback: (data: Types.TurnFinishedEvent) => void): Unsubscribe;
-
-  /**
-   * Emitted when a new turn begins (user, assistant, or tool).
-   * 
-   * Use this to create UI elements for the new turn.
-   */
-  onTurnStarted(callback: (data: Types.TurnStartedEvent) => void): Unsubscribe;
 
 }
 
@@ -2105,10 +2064,6 @@ export class TaskStateServiceClient implements TaskStateService {
     return this.call('TaskStateService.updateTaskProgress', { taskId: taskId, tokensStreamed: tokensStreamed, toolName: toolName, toolCount: toolCount, inputTokens: inputTokens, outputTokens: outputTokens, contextWindow: contextWindow, model: model });
   }
 
-  onContentDelta(callback: (data: Types.ContentDeltaEvent) => void): Unsubscribe {
-    return this.subscribe('contentDelta', callback);
-  }
-
   onTaskCancelled(callback: (data: Types.TaskEventData) => void): Unsubscribe {
     return this.subscribe('taskCancelled', callback);
   }
@@ -2125,32 +2080,12 @@ export class TaskStateServiceClient implements TaskStateService {
     return this.subscribe('taskStarted', callback);
   }
 
-  onTaskUpdated(callback: (data: Types.TaskEventData) => void): Unsubscribe {
-    return this.subscribe('taskUpdated', callback);
-  }
-
-  onToolInputDelta(callback: (data: Types.ToolInputDeltaEvent) => void): Unsubscribe {
-    return this.subscribe('toolInputDelta', callback);
-  }
-
-  onToolResult(callback: (data: Types.ToolResultEvent) => void): Unsubscribe {
-    return this.subscribe('toolResult', callback);
-  }
-
   onToolUse(callback: (data: Types.ToolUseEvent) => void): Unsubscribe {
     return this.subscribe('toolUse', callback);
   }
 
   onToolUseStarted(callback: (data: Types.ToolUseStartedEvent) => void): Unsubscribe {
     return this.subscribe('toolUseStarted', callback);
-  }
-
-  onTurnFinished(callback: (data: Types.TurnFinishedEvent) => void): Unsubscribe {
-    return this.subscribe('turnFinished', callback);
-  }
-
-  onTurnStarted(callback: (data: Types.TurnStartedEvent) => void): Unsubscribe {
-    return this.subscribe('turnStarted', callback);
   }
 
 }

@@ -598,16 +598,10 @@ function AppContent() {
         })
       );
 
-      unsubscribers.push(
-        client.tasks.onTaskUpdated(async (data) => {
-          if (data.sessionId === selectedSessionId) {
-            const task = await client.tasks.getTask(data.taskId);
-            if (task) {
-              setStreamingTask(task);
-            }
-          }
-        })
-      );
+      // NOTE: there is intentionally no onTaskUpdated subscription. taskUpdated was
+      // a legacy task-bus heartbeat and has been retired; streamingTask is seeded
+      // by onTaskStarted and cleared on completion. Mid-stream token/progress
+      // refresh would need rewiring onto sessionDataStreamProgress.
 
       // Helper to clean up state after task ends (completion, cancel, error)
       // Note: Turn updates are handled by useSessionData via events
