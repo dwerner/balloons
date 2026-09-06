@@ -56,6 +56,7 @@ class ExampleService:
 
     def __init__(self):
         self._items = {}
+        self._notes: list[str] = []
         self._event_handlers: list[Callable[[str, dict], None]] = []
 
     def add_event_handler(self, handler: Callable[[str, dict], None]) -> None:
@@ -99,6 +100,17 @@ class ExampleService:
     def sync_method(self) -> str:
         """A synchronous method."""
         return "sync result"
+
+    @ws_expose(fire_and_forget=True)
+    async def record(self, note: str) -> str:
+        """A fire-and-forget method: side effect happens, no reply expected."""
+        self._notes.append(note)
+        return "ignored-on-wire"
+
+    @ws_expose
+    async def boom(self) -> str:
+        """Always raises - used to test error paths."""
+        raise RuntimeError("boom")
 
     @ws_event
     async def on_item_created(self) -> ItemFixture:
@@ -402,6 +414,107 @@ class TestMessageHandling:
         response = await server._handle_message(message, mock_client)
 
         assert "result" in response
+
+
+class TestFireAndForget:
+    """A frame with no "id" is a fire-and-forget call (JSON-RPC notification):
+    the server dispatches it but must never send any response - not even an
+    error response."""
+
+    @pytest.fixture
+    def server(self):
+        server = WsServer()
+        server.register_service(ExampleService())
+        return server
+
+    @pytest.fixture
+    def mock_client(self):
+        from service.ws_server import ConnectedClient
+
+        websocket = MagicMock()
+        return ConnectedClient(websocket=websocket)
+
+    @pytest.mark.asyncio
+    async def test_fire_and_forget_dispatches_but_no_response(self, server, mock_client):
+        message = json.dumps({"method": "record", "params": {"note": "hello"}})
+
+        response = await server._handle_message(message, mock_client)
+
+        # No response frame at all...
+        assert response is None
+        # ...but the side effect still happened.
+        svc = server._services["ExampleService"].instance
+        assert svc._notes == ["hello"]
+
+    @pytest.mark.asyncio
+    async def test_same_method_with_id_still_gets_response(self, server, mock_client):
+        # The no-reply behavior is driven by the absence of "id", not by the
+        # method's fire_and_forget flag. A client that still sends an id gets
+        # a normal response (back-compat with any pre-existing caller).
+        message = json.dumps({"id": "req-1", "method": "record", "params": {"note": "x"}})
+
+        response = await server._handle_message(message, mock_client)
+
+        assert response["id"] == "req-1"
+        assert response["result"] == "ignored-on-wire"
+
+    @pytest.mark.asyncio
+    async def test_fire_and_forget_unknown_method_no_error(self, server, mock_client):
+        message = json.dumps({"method": "doesNotExist", "params": {}})
+
+        response = await server._handle_message(message, mock_client)
+
+        # Errors are swallowed for fire-and-forget; never reply.
+        assert response is None
+
+    @pytest.mark.asyncio
+    async def test_fire_and_forget_invalid_params_no_error(self, server, mock_client):
+        # 'record' requires 'note'; omitting it is an invalid-params error,
+        # but a fire-and-forget frame must not produce an error response.
+        message = json.dumps({"method": "record", "params": {}})
+
+        response = await server._handle_message(message, mock_client)
+
+        assert response is None
+
+    @pytest.mark.asyncio
+    async def test_fire_and_forget_raising_method_no_error(self, server, mock_client):
+        # boom() always raises; the exception must be swallowed, not turned
+        # into a response and not propagated out of _handle_message.
+        message = json.dumps({"method": "boom", "params": {}})
+
+        response = await server._handle_message(message, mock_client)
+
+        assert response is None
+
+    @pytest.mark.asyncio
+    async def test_fire_and_forget_ping_no_response(self, server, mock_client):
+        message = json.dumps({"method": "ping", "params": {}})
+
+        response = await server._handle_message(message, mock_client)
+
+        assert response is None
+
+    @pytest.mark.asyncio
+    async def test_fire_and_forget_missing_method_no_response(self, server, mock_client):
+        message = json.dumps({"params": {}})
+
+        response = await server._handle_message(message, mock_client)
+
+        assert response is None
+
+    def test_debug_log_levels_registered_fire_and_forget(self):
+        # Integration sanity: the per-entry log levels are fire-and-forget,
+        # while log_batch stays request/response (it is the low-frequency
+        # flush-and-confirm path a future client-side batcher would use).
+        from codegen.ws_expose import WsExposeRegistry
+        import service.debug_log_service  # noqa: F401  (registers the service)
+
+        spec = WsExposeRegistry.get_services()["DebugLogService"]
+        flags = {m.wire_name: m.is_fire_and_forget for m in spec.methods}
+        for name in ("log", "info", "warning", "error", "debug"):
+            assert flags[name] is True, f"{name} should be fire-and-forget"
+        assert flags["logBatch"] is False, "logBatch must stay request/response"
 
 
 class TestResponseBuilding:

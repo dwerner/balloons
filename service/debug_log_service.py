@@ -107,7 +107,7 @@ class DebugLogService:
         """Initialize the debug log service."""
         pass
 
-    @ws_expose
+    @ws_expose(fire_and_forget=True)
     def log(self, entry: LogEntryInput) -> LogResult:
         """Log a message from a web client.
 
@@ -115,11 +115,18 @@ class DebugLogService:
         level, message, and category. Category defaults to "web" for web
         client logs.
 
+        Exposed as a fire-and-forget call (a JSON-RPC notification): the client
+        sends it without an "id" and the server never replies. The returned
+        LogResult is discarded on the wire; the entry is still recorded in the
+        shared debug log exactly as before. (log_batch, which loops over this
+        method, is unaffected - it calls self.log() directly in Python.)
+
         Args:
             entry: The log entry to add
 
         Returns:
-            LogResult with success status and sequence number
+            LogResult with success status and sequence number (discarded on
+            the wire for fire-and-forget callers)
         """
         # Map string level to LogLevel enum
         level_map = {
@@ -168,7 +175,7 @@ class DebugLogService:
 
         return LogResult(success=True, seq=last_seq)
 
-    @ws_expose
+    @ws_expose(fire_and_forget=True)
     def error(
         self,
         message: str,
@@ -176,7 +183,12 @@ class DebugLogService:
         session_id: str = "",
         details: dict | None = None,
     ) -> LogResult:
-        """Convenience method to log an error."""
+        """Convenience method to log an error.
+
+        Fire-and-forget (see log): no response, return value discarded on the
+        wire. This also means an error log can never reject the caller's
+        promise the way the old request/response form could.
+        """
         return self.log(
             LogEntryInput(
                 level="error",
@@ -187,7 +199,7 @@ class DebugLogService:
             )
         )
 
-    @ws_expose
+    @ws_expose(fire_and_forget=True)
     def warning(
         self,
         message: str,
@@ -195,7 +207,11 @@ class DebugLogService:
         session_id: str = "",
         details: dict | None = None,
     ) -> LogResult:
-        """Convenience method to log a warning."""
+        """Convenience method to log a warning.
+
+        Fire-and-forget (see log): no response, return value discarded on the
+        wire.
+        """
         return self.log(
             LogEntryInput(
                 level="warning",
@@ -206,7 +222,7 @@ class DebugLogService:
             )
         )
 
-    @ws_expose
+    @ws_expose(fire_and_forget=True)
     def info(
         self,
         message: str,
@@ -214,7 +230,15 @@ class DebugLogService:
         session_id: str = "",
         details: dict | None = None,
     ) -> LogResult:
-        """Convenience method to log an info message."""
+        """Convenience method to log an info message.
+
+        Exposed as a fire-and-forget call (a JSON-RPC notification): the
+        client sends it without an "id" and the server never replies. This is
+        intentional — info logs are high-volume and best-effort, and a
+        request/response round-trip per log line dominated UI traffic (see
+        tools/wslog analysis). The returned LogResult is discarded on the wire;
+        the entry is still recorded in the shared debug log exactly as before.
+        """
         return self.log(
             LogEntryInput(
                 level="info",
@@ -225,7 +249,7 @@ class DebugLogService:
             )
         )
 
-    @ws_expose
+    @ws_expose(fire_and_forget=True)
     def debug(
         self,
         message: str,
@@ -233,7 +257,11 @@ class DebugLogService:
         session_id: str = "",
         details: dict | None = None,
     ) -> LogResult:
-        """Convenience method to log a debug message."""
+        """Convenience method to log a debug message.
+
+        Fire-and-forget (see log): no response, return value discarded on the
+        wire.
+        """
         return self.log(
             LogEntryInput(
                 level="debug",

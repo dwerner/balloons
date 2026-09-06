@@ -47,6 +47,9 @@ def bandwidth(log: WsLog, top: int) -> None:
     for f in log.frames:
         if f.is_event:
             key = f"event:{f.event}"
+        elif f.is_fire_and_forget:
+            # method present, no id -> notification, never answered
+            key = f"faf:{f.method}"
         elif f.is_request:
             key = f"req:{f.method}"
         elif f.is_response:
@@ -67,7 +70,9 @@ def bandwidth(log: WsLog, top: int) -> None:
 
     # group into overhead vs payload-ish for a headline number
     overhead = sum(byt for k, byt in sizes.items()
-                   if k.startswith("req:DebugLogService") or k.startswith("resp:"))
+                   if k.startswith("req:DebugLogService")
+                   or k.startswith("faf:DebugLogService")
+                   or k.startswith("resp:"))
     print(f"\n  debug-log + RPC-response overhead: {overhead}B "
           f"({pct(overhead,total):.1f}% of capture)")
 
@@ -103,7 +108,8 @@ def latency(log: WsLog) -> None:
 def cadence(log: WsLog) -> None:
     print("\n=== 3. Polling cadence ===")
     by_method: dict = defaultdict(list)
-    for f in log.requests():
+    for f in log.calls():   # calls() = requests + notifications; requests() alone
+                            # would hide fire-and-forget traffic entirely
         by_method[f.method].append(log.sec(f))
 
     rows = []
@@ -214,7 +220,7 @@ def redundancy(log: WsLog) -> None:
               f"is the second copy of the same information")
 
     # 4c. client logging receipt of events it just received
-    logs = log.requests("DebugLogService.info")
+    logs = log.calls("DebugLogService.info")   # now notifications, not requests
     if logs:
         lb = sum(f.size for f in logs)
         total = sum(f.size for f in log.frames)
@@ -225,14 +231,25 @@ def redundancy(log: WsLog) -> None:
                 if name in msg:
                     echoed[name] += 1
                     break
-        print("\n  c) DebugLogService.info: "
-              f"{len(logs)} calls, {lb}B ({pct(lb,total):.1f}% of capture)")
+        n_req = sum(1 for f in logs if f.is_request)
+        n_faf = sum(1 for f in logs if f.is_fire_and_forget)
+        kind = ("fire-and-forget notifications (no response)" if n_req == 0
+                else "RPC requests (each expects a response)" if n_faf == 0
+                else f"{n_faf} notifications + {n_req} requests")
+        print(f"\n  c) DebugLogService.info: "
+              f"{len(logs)} calls, {lb}B ({pct(lb,total):.1f}% of capture) "
+              f"-- {kind}")
         if echoed:
             tot_echo = sum(echoed.values())
             print(f"     {tot_echo} of these log receipt of an event that was "
                   f"just pushed on the socket")
             print(f"     top echoes: {dict(echoed.most_common(5))}")
-        print("     each is a full client->server RPC + response for a UI-internal log line")
+        if n_req:
+            print(f"     !! {n_req} still pay a full RPC + response; "
+                  f"convert to notifications")
+        else:
+            print("     fire-and-forget: no response envelope (good). "
+                  "Remaining cost is the log bytes themselves -- batch/gate to trim.")
 
 
 def as_json(log: WsLog) -> str:
@@ -248,7 +265,9 @@ def as_json(log: WsLog) -> str:
         "duration_s": round(log.duration_s, 3),
         "bytes": sum(f.size for f in log.frames),
         "malformed": len(log.malformed),
-        "client_methods": dict(Counter(f.method for f in log.requests())),
+        "client_methods": dict(Counter(f.method for f in log.calls())),
+        "client_notifications": dict(
+            Counter(f.method for f in log.notifications())),
         "server_events": dict(Counter(f.event for f in ev)),
         "latency": lat,
         "duplicate_event_frames": sum(v - 1 for v in seen.values() if v > 1),

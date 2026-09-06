@@ -86,6 +86,25 @@ class Frame:
         return isinstance(self.obj, dict) and "method" in self.obj and "id" in self.obj
 
     @property
+    def is_fire_and_forget(self) -> bool:
+        """A client frame with a method but no id: a JSON-RPC notification
+        (fire-and-forget). The server dispatches it and sends no reply, so
+        there is never a matching response frame. e.g. DebugLogService.info.
+
+        These carry no response, so they are invisible to any analysis that
+        only looks for request/response pairs. Count them explicitly or you
+        will silently under-report client traffic.
+        """
+        return (
+            isinstance(self.obj, dict)
+            and "method" in self.obj
+            and "id" not in self.obj
+        )
+
+    # Alias: JSON-RPC calls these "notifications".
+    is_notification = is_fire_and_forget
+
+    @property
     def is_response(self) -> bool:
         return (
             isinstance(self.obj, dict)
@@ -182,8 +201,19 @@ class WsLog:
                 if f.is_event and (name is None or f.event == name)]
 
     def requests(self, method: Optional[str] = None) -> list:
+        """Client requests that expect a response (have an id)."""
         return [f for f in self.client()
                 if f.is_request and (method is None or f.method == method)]
+
+    def notifications(self, method: Optional[str] = None) -> list:
+        """Client fire-and-forget calls (no id, never answered)."""
+        return [f for f in self.client()
+                if f.is_notification and (method is None or f.method == method)]
+
+    def calls(self, method: Optional[str] = None) -> list:
+        """All client-initiated method calls, request or notification."""
+        return [f for f in self.client()
+                if f.method and (method is None or f.method == method)]
 
     # ---- request/response pairing ----
     def pairs(self) -> list:
@@ -226,11 +256,20 @@ class WsLog:
         bad_json = sum(1 for f in self.frames if f.obj is None)
         if bad_json:
             lines.append(f"non-JSON frames: {bad_json}")
-        cm = Counter(f.method for f in self.requests())
+        # Count ALL client calls, not just those with an id: notifications have no
+# response and would otherwise vanish from the report entirely.
+        cm = Counter(f.method for f in self.calls())
+        nreq = Counter(f.method for f in self.requests())
+        nnot = Counter(f.method for f in self.notifications())
         ev = Counter(f.event for f in self.events())
-        lines.append(f"client methods ({sum(cm.values())}):")
+        lines.append(f"client calls ({sum(cm.values())}):")
         for k, v in cm.most_common():
-            lines.append(f"    {v:5d}  {k}")
+            kind = []
+            if nreq.get(k):
+                kind.append(f"{nreq[k]} request")
+            if nnot.get(k):
+                kind.append(f"{nnot[k]} notification")
+            lines.append(f"    {v:5d}  {k}  [{', '.join(kind)}]")
         lines.append(f"server events ({sum(ev.values())}):")
         for k, v in ev.most_common():
             lines.append(f"    {v:5d}  {k}")

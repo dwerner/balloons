@@ -698,23 +698,40 @@ class WsServer:
             return self._error_response(None, INVALID_REQUEST, "Request must be object")
 
         request_id = request.get("id")
+        # JSON-RPC 2.0: a request that omits "id" is a *notification* (we call
+        # these fire-and-forget calls). The server must not send any response
+        # to one, not even an error response. Clients use this for
+        # fire-and-forget calls such as DebugLogService.info (see
+        # codegen.ws_expose fire_and_forget=True).
+        is_fire_and_forget = "id" not in request
         method = request.get("method")
         params = request.get("params", {})
 
         # Handle built-in ping method for client heartbeat
         if method == "ping":
+            if is_fire_and_forget:
+                return None
             import time
             return self._success_response(request_id, {"pong": True, "timestamp": time.time()})
 
         if not method:
+            if is_fire_and_forget:
+                logger.warning("Ignoring fire-and-forget frame with no method")
+                return None
             return self._error_response(request_id, INVALID_REQUEST, "Missing 'method'")
 
         if not isinstance(method, str):
+            if is_fire_and_forget:
+                logger.warning("Ignoring fire-and-forget frame with non-string method")
+                return None
             return self._error_response(
                 request_id, INVALID_REQUEST, "'method' must be string"
             )
 
         if params is not None and not isinstance(params, dict):
+            if is_fire_and_forget:
+                logger.warning("Ignoring fire-and-forget frame with non-object params")
+                return None
             return self._error_response(
                 request_id, INVALID_REQUEST, "'params' must be object or null"
             )
@@ -722,12 +739,26 @@ class WsServer:
         # Dispatch to service
         try:
             result = await self._dispatch_method(method, params or {}, client)
+            if is_fire_and_forget:
+                # Fire-and-forget: dispatch happened, but never reply.
+                return None
             return self._success_response(request_id, result)
         except MethodNotFoundError as e:
+            if is_fire_and_forget:
+                logger.warning(f"Fire-and-forget method not found: {method}")
+                return None
             return self._error_response(request_id, METHOD_NOT_FOUND, str(e))
         except InvalidParamsError as e:
+            if is_fire_and_forget:
+                logger.warning(f"Fire-and-forget invalid params for {method}: {e}")
+                return None
             return self._error_response(request_id, INVALID_PARAMS, str(e))
         except Exception as e:
+            if is_fire_and_forget:
+                # Never answer a fire-and-forget call; log so the failure is
+                # still visible server-side.
+                logger.exception(f"Error handling fire-and-forget call {method}")
+                return None
             logger.exception(f"Error dispatching method {method}")
             return self._error_response(request_id, INTERNAL_ERROR, str(e))
 

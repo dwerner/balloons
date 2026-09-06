@@ -71,6 +71,12 @@ class MethodSpec:
     return_type: Any  # Return type annotation
     docstring: str  # Method docstring
     is_async: bool = True  # Whether method is async
+    # When True the method is a fire-and-forget call (a JSON-RPC
+    # *notification*): clients send it without an "id" and the server never
+    # replies. The return type is then meaningless on the wire (the server
+    # discards it), so generated clients expose the call as fire-and-forget.
+    # Used for high-volume, best-effort calls such as DebugLogService.info.
+    is_fire_and_forget: bool = False
 
 
 @dataclass
@@ -186,7 +192,7 @@ def _extract_params(fn: Callable) -> list[ParamSpec]:
     return params
 
 
-def ws_expose(method: Callable = None, *, name: str = None):
+def ws_expose(method: Callable = None, *, name: str = None, fire_and_forget: bool = False):
     """Mark a method as WebSocket-exposed for RPC.
 
     Can be used as:
@@ -196,9 +202,17 @@ def ws_expose(method: Callable = None, *, name: str = None):
         @ws_expose(name="fetchSession")
         async def get_session(self, session_id: str) -> SessionData: ...
 
+        @ws_expose(fire_and_forget=True)
+        def info(self, message: str) -> LogResult: ...
+
     Args:
         method: The method to expose (when used without parentheses)
         name: Override the wire name (defaults to camelCase of method name)
+        fire_and_forget: When True, the method is a fire-and-forget call (a
+            JSON-RPC notification). Generated clients send it without an "id"
+            and do not await a response; the server dispatches it but never
+            replies. The return value is discarded on the wire, so expose this
+            only for fire-and-forget calls (e.g. debug logging).
     """
 
     def decorator(fn: Callable) -> Callable:
@@ -218,6 +232,7 @@ def ws_expose(method: Callable = None, *, name: str = None):
             return_type=hints.get("return"),
             docstring=fn.__doc__ or "",
             is_async=inspect.iscoroutinefunction(fn),
+            is_fire_and_forget=fire_and_forget,
         )
 
         # Store spec on function for later retrieval during class registration

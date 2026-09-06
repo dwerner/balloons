@@ -255,6 +255,17 @@ export class QueueStateServiceClient implements QueueStateService {
     });
   }
 
+  private fireAndForget(method: string, params: Record<string, unknown>): void {
+    try {
+      if (this.ws.readyState !== 1 /* WebSocket.OPEN */) {
+        return;
+      }
+      this.ws.send(JSON.stringify({ method, params }));
+    } catch (err) {
+      console.warn(`fireAndForget(${method}) failed:`, err);
+    }
+  }
+
   private subscribe(event: string, callback: (data: any) => void): Unsubscribe {
     if (!this.eventHandlers.has(event)) {
       this.eventHandlers.set(event, new Set());
@@ -1317,6 +1328,17 @@ export class SessionManagerServiceClient implements SessionManagerService {
     });
   }
 
+  private fireAndForget(method: string, params: Record<string, unknown>): void {
+    try {
+      if (this.ws.readyState !== 1 /* WebSocket.OPEN */) {
+        return;
+      }
+      this.ws.send(JSON.stringify({ method, params }));
+    } catch (err) {
+      console.warn(`fireAndForget(${method}) failed:`, err);
+    }
+  }
+
   private subscribe(event: string, callback: (data: any) => void): Unsubscribe {
     if (!this.eventHandlers.has(event)) {
       this.eventHandlers.set(event, new Set());
@@ -1978,6 +2000,17 @@ export class TaskStateServiceClient implements TaskStateService {
     });
   }
 
+  private fireAndForget(method: string, params: Record<string, unknown>): void {
+    try {
+      if (this.ws.readyState !== 1 /* WebSocket.OPEN */) {
+        return;
+      }
+      this.ws.send(JSON.stringify({ method, params }));
+    } catch (err) {
+      console.warn(`fireAndForget(${method}) failed:`, err);
+    }
+  }
+
   private subscribe(event: string, callback: (data: any) => void): Unsubscribe {
     if (!this.eventHandlers.has(event)) {
       this.eventHandlers.set(event, new Set());
@@ -2597,6 +2630,17 @@ export class SessionDataServiceClient implements SessionDataService {
     });
   }
 
+  private fireAndForget(method: string, params: Record<string, unknown>): void {
+    try {
+      if (this.ws.readyState !== 1 /* WebSocket.OPEN */) {
+        return;
+      }
+      this.ws.send(JSON.stringify({ method, params }));
+    } catch (err) {
+      console.warn(`fireAndForget(${method}) failed:`, err);
+    }
+  }
+
   private subscribe(event: string, callback: (data: any) => void): Unsubscribe {
     if (!this.eventHandlers.has(event)) {
       this.eventHandlers.set(event, new Set());
@@ -2895,6 +2939,17 @@ export class ImageServiceClient implements ImageService {
       this.pending.set(id, { resolve, reject });
       this.ws.send(JSON.stringify({ id, method, params }));
     });
+  }
+
+  private fireAndForget(method: string, params: Record<string, unknown>): void {
+    try {
+      if (this.ws.readyState !== 1 /* WebSocket.OPEN */) {
+        return;
+      }
+      this.ws.send(JSON.stringify({ method, params }));
+    } catch (err) {
+      console.warn(`fireAndForget(${method}) failed:`, err);
+    }
   }
 
   private subscribe(event: string, callback: (data: any) => void): Unsubscribe {
@@ -3254,6 +3309,17 @@ export class FileStateServiceClient implements FileStateService {
     });
   }
 
+  private fireAndForget(method: string, params: Record<string, unknown>): void {
+    try {
+      if (this.ws.readyState !== 1 /* WebSocket.OPEN */) {
+        return;
+      }
+      this.ws.send(JSON.stringify({ method, params }));
+    } catch (err) {
+      console.warn(`fireAndForget(${method}) failed:`, err);
+    }
+  }
+
   private subscribe(event: string, callback: (data: any) => void): Unsubscribe {
     if (!this.eventHandlers.has(event)) {
       this.eventHandlers.set(event, new Set());
@@ -3386,8 +3452,11 @@ export interface DebugLogService {
 
   /**
    * Convenience method to log a debug message.
+   * 
+   * Fire-and-forget (see log): no response, return value discarded on the
+   * wire.
    */
-  debug(message: string, category?: string, sessionId?: string, details?: Record<string, unknown> | null): Promise<Types.LogResult>;
+  debug(message: string, category?: string, sessionId?: string, details?: Record<string, unknown> | null): void;
 
   /**
    * Disable logging for a specific category.
@@ -3422,8 +3491,12 @@ export interface DebugLogService {
 
   /**
    * Convenience method to log an error.
+   * 
+   * Fire-and-forget (see log): no response, return value discarded on the
+   * wire. This also means an error log can never reject the caller's
+   * promise the way the old request/response form could.
    */
-  error(message: string, category?: string, sessionId?: string, details?: Record<string, unknown> | null): Promise<Types.LogResult>;
+  error(message: string, category?: string, sessionId?: string, details?: Record<string, unknown> | null): void;
 
   /**
    * Get all valid category names.
@@ -3471,8 +3544,15 @@ export interface DebugLogService {
 
   /**
    * Convenience method to log an info message.
+   * 
+   * Exposed as a fire-and-forget call (a JSON-RPC notification): the
+   * client sends it without an "id" and the server never replies. This is
+   * intentional — info logs are high-volume and best-effort, and a
+   * request/response round-trip per log line dominated UI traffic (see
+   * tools/wslog analysis). The returned LogResult is discarded on the wire;
+   * the entry is still recorded in the shared debug log exactly as before.
    */
-  info(message: string, category?: string, sessionId?: string, details?: Record<string, unknown> | null): Promise<Types.LogResult>;
+  info(message: string, category?: string, sessionId?: string, details?: Record<string, unknown> | null): void;
 
   /**
    * Check if debug logging is enabled.
@@ -3489,13 +3569,20 @@ export interface DebugLogService {
    * level, message, and category. Category defaults to "web" for web
    * client logs.
    * 
+   * Exposed as a fire-and-forget call (a JSON-RPC notification): the client
+   * sends it without an "id" and the server never replies. The returned
+   * LogResult is discarded on the wire; the entry is still recorded in the
+   * shared debug log exactly as before. (log_batch, which loops over this
+   * method, is unaffected - it calls self.log() directly in Python.)
+   * 
    * Args:
    * entry: The log entry to add
    * 
    * Returns:
-   * LogResult with success status and sequence number
+   * LogResult with success status and sequence number (discarded on
+   * the wire for fire-and-forget callers)
    */
-  log(entry: Types.LogEntryInput): Promise<Types.LogResult>;
+  log(entry: Types.LogEntryInput): void;
 
   /**
    * Log multiple messages at once.
@@ -3583,8 +3670,11 @@ export interface DebugLogService {
 
   /**
    * Convenience method to log a warning.
+   * 
+   * Fire-and-forget (see log): no response, return value discarded on the
+   * wire.
    */
-  warning(message: string, category?: string, sessionId?: string, details?: Record<string, unknown> | null): Promise<Types.LogResult>;
+  warning(message: string, category?: string, sessionId?: string, details?: Record<string, unknown> | null): void;
 
 }
 
@@ -3624,6 +3714,17 @@ export class DebugLogServiceClient implements DebugLogService {
     });
   }
 
+  private fireAndForget(method: string, params: Record<string, unknown>): void {
+    try {
+      if (this.ws.readyState !== 1 /* WebSocket.OPEN */) {
+        return;
+      }
+      this.ws.send(JSON.stringify({ method, params }));
+    } catch (err) {
+      console.warn(`fireAndForget(${method}) failed:`, err);
+    }
+  }
+
   private subscribe(event: string, callback: (data: any) => void): Unsubscribe {
     if (!this.eventHandlers.has(event)) {
       this.eventHandlers.set(event, new Set());
@@ -3642,8 +3743,8 @@ export class DebugLogServiceClient implements DebugLogService {
     return this.call('DebugLogService.clearCategories', {  });
   }
 
-  async debug(message: string, category?: string, sessionId?: string, details?: Record<string, unknown> | null): Promise<Types.LogResult> {
-    return this.call('DebugLogService.debug', { message: message, category: category, sessionId: sessionId, details: details });
+  debug(message: string, category?: string, sessionId?: string, details?: Record<string, unknown> | null): void {
+    this.fireAndForget('DebugLogService.debug', { message: message, category: category, sessionId: sessionId, details: details });
   }
 
   async disableCategory(category: string): Promise<Types.LogResult> {
@@ -3654,8 +3755,8 @@ export class DebugLogServiceClient implements DebugLogService {
     return this.call('DebugLogService.enableCategory', { category: category });
   }
 
-  async error(message: string, category?: string, sessionId?: string, details?: Record<string, unknown> | null): Promise<Types.LogResult> {
-    return this.call('DebugLogService.error', { message: message, category: category, sessionId: sessionId, details: details });
+  error(message: string, category?: string, sessionId?: string, details?: Record<string, unknown> | null): void {
+    this.fireAndForget('DebugLogService.error', { message: message, category: category, sessionId: sessionId, details: details });
   }
 
   async getAllCategories(): Promise<string[]> {
@@ -3678,16 +3779,16 @@ export class DebugLogServiceClient implements DebugLogService {
     return this.call('DebugLogService.getServerIdentity', {  });
   }
 
-  async info(message: string, category?: string, sessionId?: string, details?: Record<string, unknown> | null): Promise<Types.LogResult> {
-    return this.call('DebugLogService.info', { message: message, category: category, sessionId: sessionId, details: details });
+  info(message: string, category?: string, sessionId?: string, details?: Record<string, unknown> | null): void {
+    this.fireAndForget('DebugLogService.info', { message: message, category: category, sessionId: sessionId, details: details });
   }
 
   async isEnabled(): Promise<boolean> {
     return this.call('DebugLogService.isEnabled', {  });
   }
 
-  async log(entry: Types.LogEntryInput): Promise<Types.LogResult> {
-    return this.call('DebugLogService.log', { entry: entry });
+  log(entry: Types.LogEntryInput): void {
+    this.fireAndForget('DebugLogService.log', { entry: entry });
   }
 
   async logBatch(entries: Types.LogEntryInput[]): Promise<Types.LogResult> {
@@ -3714,8 +3815,8 @@ export class DebugLogServiceClient implements DebugLogService {
     return this.call('DebugLogService.setLevel', { level: level });
   }
 
-  async warning(message: string, category?: string, sessionId?: string, details?: Record<string, unknown> | null): Promise<Types.LogResult> {
-    return this.call('DebugLogService.warning', { message: message, category: category, sessionId: sessionId, details: details });
+  warning(message: string, category?: string, sessionId?: string, details?: Record<string, unknown> | null): void {
+    this.fireAndForget('DebugLogService.warning', { message: message, category: category, sessionId: sessionId, details: details });
   }
 
 }
@@ -3802,6 +3903,17 @@ export class TrafficCaptureServiceClient implements TrafficCaptureService {
       this.pending.set(id, { resolve, reject });
       this.ws.send(JSON.stringify({ id, method, params }));
     });
+  }
+
+  private fireAndForget(method: string, params: Record<string, unknown>): void {
+    try {
+      if (this.ws.readyState !== 1 /* WebSocket.OPEN */) {
+        return;
+      }
+      this.ws.send(JSON.stringify({ method, params }));
+    } catch (err) {
+      console.warn(`fireAndForget(${method}) failed:`, err);
+    }
   }
 
   private subscribe(event: string, callback: (data: any) => void): Unsubscribe {
@@ -3935,6 +4047,17 @@ export class SoundServiceClient implements SoundService {
       this.pending.set(id, { resolve, reject });
       this.ws.send(JSON.stringify({ id, method, params }));
     });
+  }
+
+  private fireAndForget(method: string, params: Record<string, unknown>): void {
+    try {
+      if (this.ws.readyState !== 1 /* WebSocket.OPEN */) {
+        return;
+      }
+      this.ws.send(JSON.stringify({ method, params }));
+    } catch (err) {
+      console.warn(`fireAndForget(${method}) failed:`, err);
+    }
   }
 
   private subscribe(event: string, callback: (data: any) => void): Unsubscribe {
@@ -4230,6 +4353,17 @@ export class SupervisorStateServiceClient implements SupervisorStateService {
       this.pending.set(id, { resolve, reject });
       this.ws.send(JSON.stringify({ id, method, params }));
     });
+  }
+
+  private fireAndForget(method: string, params: Record<string, unknown>): void {
+    try {
+      if (this.ws.readyState !== 1 /* WebSocket.OPEN */) {
+        return;
+      }
+      this.ws.send(JSON.stringify({ method, params }));
+    } catch (err) {
+      console.warn(`fireAndForget(${method}) failed:`, err);
+    }
   }
 
   private subscribe(event: string, callback: (data: any) => void): Unsubscribe {
@@ -4702,6 +4836,17 @@ export class BrowserStateServiceClient implements BrowserStateService {
     });
   }
 
+  private fireAndForget(method: string, params: Record<string, unknown>): void {
+    try {
+      if (this.ws.readyState !== 1 /* WebSocket.OPEN */) {
+        return;
+      }
+      this.ws.send(JSON.stringify({ method, params }));
+    } catch (err) {
+      console.warn(`fireAndForget(${method}) failed:`, err);
+    }
+  }
+
   private subscribe(event: string, callback: (data: any) => void): Unsubscribe {
     if (!this.eventHandlers.has(event)) {
       this.eventHandlers.set(event, new Set());
@@ -4963,6 +5108,17 @@ export class LSPServiceClient implements LSPService {
     });
   }
 
+  private fireAndForget(method: string, params: Record<string, unknown>): void {
+    try {
+      if (this.ws.readyState !== 1 /* WebSocket.OPEN */) {
+        return;
+      }
+      this.ws.send(JSON.stringify({ method, params }));
+    } catch (err) {
+      console.warn(`fireAndForget(${method}) failed:`, err);
+    }
+  }
+
   private subscribe(event: string, callback: (data: any) => void): Unsubscribe {
     if (!this.eventHandlers.has(event)) {
       this.eventHandlers.set(event, new Set());
@@ -5070,6 +5226,17 @@ export class DomainRpcServiceClient implements DomainRpcService {
       this.pending.set(id, { resolve, reject });
       this.ws.send(JSON.stringify({ id, method, params }));
     });
+  }
+
+  private fireAndForget(method: string, params: Record<string, unknown>): void {
+    try {
+      if (this.ws.readyState !== 1 /* WebSocket.OPEN */) {
+        return;
+      }
+      this.ws.send(JSON.stringify({ method, params }));
+    } catch (err) {
+      console.warn(`fireAndForget(${method}) failed:`, err);
+    }
   }
 
   private subscribe(event: string, callback: (data: any) => void): Unsubscribe {

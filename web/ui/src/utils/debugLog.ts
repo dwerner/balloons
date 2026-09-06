@@ -68,11 +68,15 @@ export function debugLog(
 
   // Always send to server if connected (for server-side debugging)
   // Send to 'client' category (which has a dedicated buffer on the server)
-  // Include the component category in the details for filtering
+  // Include the component category in the details for filtering.
+  //
+  // debugLog.info is a fire-and-forget call (JSON-RPC notification): it sends
+  // with no "id", the server never replies, and it returns void. The client
+  // helper already swallows send errors, so there is nothing to await or catch
+  // here. This removes a full request/response round-trip per log line, which
+  // previously dominated UI traffic (see tools/wslog analysis).
   if (_client?.isConnected) {
-    _client.debugLog.info(message, 'client', '', { ...(data ?? {}), source: 'web', component: category }).catch(() => {
-      // Silently ignore WebSocket errors
-    });
+    _client.debugLog.info(message, 'client', '', { ...(data ?? {}), source: 'web', component: category });
   }
 }
 

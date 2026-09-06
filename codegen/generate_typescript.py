@@ -149,6 +149,11 @@ def generate_method_signature(method: MethodSpec, registered_types: set[str] = N
     return_type = _prefix_custom_types(return_type, registered_types)
     params_str = ", ".join(params)
 
+    # Fire-and-forget methods (JSON-RPC notifications) get no response, so
+    # they return void rather than a Promise the caller could await.
+    if method.is_fire_and_forget:
+        return f"{method.wire_name}({params_str}): void"
+
     return f"{method.wire_name}({params_str}): Promise<{return_type}>"
 
 
@@ -274,6 +279,24 @@ def generate_client_class(service: ServiceSpec, registered_types: set[str] = Non
     lines.append("  }")
     lines.append("")
 
+    # Fire-and-forget helper: sends a JSON-RPC notification (no "id"), so the
+    # server never replies. Best-effort by design - a send failure is logged
+    # and swallowed so it can never reject a caller's promise or break the
+    # caller's flow. Used for high-volume calls like DebugLogService.info.
+    # readyState 1 === WebSocket.OPEN; compared numerically so this helper
+    # does not depend on a global WebSocket being defined in every context.
+    lines.append("  private fireAndForget(method: string, params: Record<string, unknown>): void {")
+    lines.append("    try {")
+    lines.append("      if (this.ws.readyState !== 1 /* WebSocket.OPEN */) {")
+    lines.append("        return;")
+    lines.append("      }")
+    lines.append("      this.ws.send(JSON.stringify({ method, params }));")
+    lines.append("    } catch (err) {")
+    lines.append("      console.warn(`fireAndForget(${method}) failed:`, err);")
+    lines.append("    }")
+    lines.append("  }")
+    lines.append("")
+
     # Subscribe helper
     lines.append("  private subscribe(event: string, callback: (data: any) => void): Unsubscribe {")
     lines.append("    if (!this.eventHandlers.has(event)) {")
@@ -302,11 +325,16 @@ def generate_client_class(service: ServiceSpec, registered_types: set[str] = Non
         params_str = ", ".join(params)
         call_params_str = ", ".join(f"{p}: {p}" for p in call_params)
 
-        lines.append(f"  async {method.wire_name}({params_str}): Promise<{return_type}> {{")
         # Call the qualified method name ("<ServiceName>.<method>") so dispatch
         # is unambiguous even when multiple services expose a same-named method
         # (see ws_server._qualified_dispatch). Fixes BUGS.md #11.
-        lines.append(f"    return this.call('{service.name}.{method.wire_name}', {{ {call_params_str} }});")
+        qualified = f"{service.name}.{method.wire_name}"
+        if method.is_fire_and_forget:
+            lines.append(f"  {method.wire_name}({params_str}): void {{")
+            lines.append(f"    this.fireAndForget('{qualified}', {{ {call_params_str} }});")
+        else:
+            lines.append(f"  async {method.wire_name}({params_str}): Promise<{return_type}> {{")
+            lines.append(f"    return this.call('{qualified}', {{ {call_params_str} }});")
         lines.append("  }")
         lines.append("")
 
